@@ -75,6 +75,17 @@ export interface AccountMember {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  department_ids?: string[];
+}
+
+export interface Department {
+  id: string;
+  account_id: string;
+  name: string;
+  color: string;
+  created_at: string;
+  updated_at: string;
+  member_user_ids?: string[];
 }
 
 /**
@@ -160,7 +171,10 @@ export type ConversationStatus = 'open' | 'pending' | 'closed';
 export interface Conversation {
   id: string;
   user_id: string;
+  account_id?: string;
   contact_id: string;
+  whatsapp_config_id?: string | null;
+  department_id?: string | null;
   status: ConversationStatus;
   assigned_agent_id?: string;
   last_message_text?: string;
@@ -169,6 +183,9 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  whatsapp_config?: Pick<WhatsAppConfig, 'id' | 'label' | 'phone_number_id'> | null;
+  department?: Pick<Department, 'id' | 'name' | 'color'> | null;
+  assigned_agent?: Pick<Profile, 'user_id' | 'full_name' | 'email' | 'avatar_url'> | null;
   /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took
@@ -251,6 +268,7 @@ export interface Message {
    * which all share `sender_type='bot'`/`'agent'`). Drives the "AI"
    * badge in the inbox. Migration 033.
    */
+  is_starred?: boolean;
   ai_generated?: boolean;
 }
 
@@ -269,6 +287,9 @@ export interface MessageReaction {
 export interface WhatsAppConfig {
   id: string;
   user_id: string;
+  account_id: string;
+  department_id?: string | null;
+  label?: string | null;
   phone_number_id: string;
   waba_id?: string;
   access_token: string;
@@ -285,6 +306,7 @@ export interface WhatsAppConfig {
   subscribed_apps_at?: string;
   /** Last error from /register; cleared on success. */
   last_registration_error?: string;
+  is_default?: boolean;
 }
 
 // Raw Meta status enum. We persist this verbatim from Meta (sync + webhook)

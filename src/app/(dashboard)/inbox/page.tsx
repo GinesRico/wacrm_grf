@@ -6,13 +6,15 @@ import { useTranslations } from "next-intl";
 import { createClient } from "@/lib/supabase/client";
 import {
   CONVERSATION_SELECT,
+  hydrateAssignedAgents,
   normalizeConversation,
 } from "@/lib/inbox/conversations";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import type { Conversation, Message, Contact } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
+import { StartConversationButton } from "@/components/inbox/start-conversation-button";
 import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -139,7 +141,12 @@ export default function InboxPage() {
         return;
       }
       if (!data) return;
-      const fetched = normalizeConversation(data);
+      const normalized = normalizeConversation(data);
+      const [fetched] = normalized.account_id
+        ? await hydrateAssignedAgents(supabase, normalized.account_id, [
+            normalized,
+          ])
+        : [normalized];
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetched.id);
         if (existing) {
@@ -193,6 +200,7 @@ export default function InboxPage() {
         .from("whatsapp_config")
         .select("status")
         .eq("account_id", accountId)
+        .limit(1)
         .maybeSingle();
 
       setWhatsappConnected(data?.status === "connected");
@@ -477,6 +485,59 @@ export default function InboxPage() {
     [activeConversation?.id, router]
   );
 
+  const handleStartedConversation = useCallback(
+    async (conversationId: string) => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("conversations")
+        .select(CONVERSATION_SELECT)
+        .eq("id", conversationId)
+        .maybeSingle();
+
+      if (error || !data) {
+        console.error("Failed to open started conversation:", error);
+        toast.error(t("startConversationFailed"));
+        return;
+      }
+
+      const normalized = normalizeConversation(data);
+      const [conversation] = normalized.account_id
+        ? await hydrateAssignedAgents(supabase, normalized.account_id, [
+            normalized,
+          ])
+        : [normalized];
+      setConversations((prev) => {
+        const withoutExisting = prev.filter((c) => c.id !== conversation.id);
+        return [conversation, ...withoutExisting];
+      });
+      setActiveConversation(conversation);
+      setActiveContact(conversation.contact ?? null);
+      setMessages([]);
+      autoSelectedForDeepLinkRef.current = conversation.id;
+      router.replace(`/inbox?c=${conversation.id}`, { scroll: false });
+    },
+    [router, t],
+  );
+
+  const handleConversationUpdated = useCallback((conversation: Conversation) => {
+    setConversations((prev) => {
+      const withoutExisting = prev.filter((c) => c.id !== conversation.id);
+      return [conversation, ...withoutExisting].sort((a, b) => {
+        const aTime = a.last_message_at ?? a.updated_at ?? "";
+        const bTime = b.last_message_at ?? b.updated_at ?? "";
+        return bTime.localeCompare(aTime);
+      });
+    });
+    setActiveConversation((prev) =>
+      prev?.id === conversation.id ? { ...prev, ...conversation } : prev,
+    );
+    if (conversation.contact) {
+      setActiveContact((prev) =>
+        activeConversation?.id === conversation.id ? conversation.contact ?? prev : prev,
+      );
+    }
+  }, [activeConversation?.id]);
+
   // Mobile "back" — deselect the conversation so the list pane comes
   // back. Also clears the ?c= param so a refresh lands on the list
   // instead of re-opening the thread the user just backed out of.
@@ -490,6 +551,15 @@ export default function InboxPage() {
     router.replace("/inbox", { scroll: false });
   }, [router]);
 
+  const handleConversationDeleted = useCallback(
+    (conversationId: string) => {
+      setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+      if (activeConversation?.id === conversationId) {
+        handleCloseConversation();
+      }
+    },
+    [activeConversation?.id, handleCloseConversation],
+  );
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
@@ -509,18 +579,6 @@ export default function InboxPage() {
       );
     },
     []
-  );
-
-  const handleStatusChange = useCallback(
-    (conversationId: string, status: ConversationStatus) => {
-      setConversations((prev) =>
-        prev.map((c) => (c.id === conversationId ? { ...c, status } : c))
-      );
-      if (activeConversation?.id === conversationId) {
-        setActiveConversation((prev) => (prev ? { ...prev, status } : prev));
-      }
-    },
-    [activeConversation]
   );
 
   const handleAssignChange = useCallback(
@@ -569,7 +627,7 @@ export default function InboxPage() {
             thread can occupy the full width. Always visible on lg+. */}
         <div
           className={cn(
-            "flex h-full flex-1 lg:flex-none",
+            "relative flex h-full flex-1 lg:flex-none",
             hasActiveConv ? "hidden lg:flex" : "flex",
           )}
         >
@@ -578,7 +636,12 @@ export default function InboxPage() {
             onSelect={handleSelectConversation}
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
+            onConversationUpdated={handleConversationUpdated}
             resyncToken={resyncToken}
+          />
+          <StartConversationButton
+            disabled={whatsappConnected === false}
+            onStarted={handleStartedConversation}
           />
         </div>
 
@@ -605,8 +668,9 @@ export default function InboxPage() {
             onMessagesLoaded={handleMessagesLoaded}
             onNewMessage={handleNewMessage}
             onUpdateMessage={handleUpdateMessage}
-            onStatusChange={handleStatusChange}
             onAssignChange={handleAssignChange}
+            onConversationUpdated={handleConversationUpdated}
+            onConversationDeleted={handleConversationDeleted}
             onBack={handleCloseConversation}
             resyncToken={resyncToken}
             onRefresh={handleManualRefresh}
@@ -621,7 +685,11 @@ export default function InboxPage() {
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
-            <ContactSidebar contact={activeContact} />
+            <ContactSidebar
+              contact={activeContact}
+              conversation={activeConversation}
+              liveStarredMessages={messages.filter((message) => message.is_starred)}
+            />
           </div>
         )}
       </div>

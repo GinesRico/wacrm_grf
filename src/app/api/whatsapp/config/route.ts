@@ -60,7 +60,7 @@ function supabaseAdmin() {
  *   { connected: false, reason: 'token_corrupted',  message: '...', needs_reset: true }
  *   { connected: false, reason: 'meta_api_error',   message: '...' }
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const supabase = await createClient()
 
@@ -85,11 +85,21 @@ export async function GET() {
       )
     }
 
-    const { data: config, error: configError } = await supabase
+    const url = new URL(request.url)
+    const id = url.searchParams.get('id')
+
+    let configQuery = supabase
       .from('whatsapp_config')
-      .select('phone_number_id, access_token, status')
+      .select('id, label, phone_number_id, access_token, status, registered_at, last_registration_error, is_default, department_id')
       .eq('account_id', accountId)
-      .maybeSingle()
+
+    if (id) {
+      configQuery = configQuery.eq('id', id)
+    }
+
+    const { data: configs, error: configError } = await configQuery
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true })
 
     if (configError) {
       console.error('Error fetching whatsapp_config:', configError)
@@ -99,7 +109,7 @@ export async function GET() {
       )
     }
 
-    if (!config) {
+    if (!configs || configs.length === 0) {
       return NextResponse.json(
         {
           connected: false,
@@ -109,6 +119,8 @@ export async function GET() {
         { status: 200 }
       )
     }
+
+    const config = configs[0]
 
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.
     // If this fails, the key changed (or was never consistent across envs).
@@ -135,7 +147,20 @@ export async function GET() {
         phoneNumberId: config.phone_number_id,
         accessToken,
       })
-      return NextResponse.json({ connected: true, phone_info: phoneInfo })
+      return NextResponse.json({
+        connected: true,
+        phone_info: phoneInfo,
+        configs: configs.map((row) => ({
+          id: row.id,
+          label: row.label,
+          phone_number_id: row.phone_number_id,
+          status: row.status,
+          registered_at: row.registered_at,
+          last_registration_error: row.last_registration_error,
+          is_default: row.is_default,
+          department_id: row.department_id,
+        })),
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown Meta API error'
       console.error('[whatsapp/config GET] Meta API verification failed:', message)
@@ -185,7 +210,17 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
+    const {
+      id,
+      label,
+      phone_number_id,
+      waba_id,
+      access_token,
+      verify_token,
+      pin,
+      is_default,
+      department_id,
+    } = body
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(
@@ -199,6 +234,32 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: 'PIN must be exactly 6 digits.' },
           { status: 400 }
+        )
+      }
+    }
+
+    const departmentId =
+      typeof department_id === 'string' && department_id.trim()
+        ? department_id.trim()
+        : null
+    if (departmentId) {
+      const { data: department, error: departmentError } = await supabase
+        .from('departments')
+        .select('id')
+        .eq('account_id', accountId)
+        .eq('id', departmentId)
+        .maybeSingle()
+      if (departmentError) {
+        console.error('Error validating department:', departmentError)
+        return NextResponse.json(
+          { error: 'Failed to validate department' },
+          { status: 500 },
+        )
+      }
+      if (!department) {
+        return NextResponse.json(
+          { error: 'Selected department was not found.' },
+          { status: 400 },
         )
       }
     }
@@ -272,11 +333,14 @@ export async function POST(request: Request) {
     // Look up any pre-existing row for this account so we know whether
     // this number is already registered with Meta — if so we can skip
     // /register when the user didn't provide a PIN this time around.
-    const { data: existing } = await supabase
+    const existingQuery = supabase
       .from('whatsapp_config')
       .select('id, registered_at, phone_number_id')
       .eq('account_id', accountId)
-      .maybeSingle()
+    const { data: existing } =
+      typeof id === 'string' && id
+        ? await existingQuery.eq('id', id).maybeSingle()
+        : await existingQuery.eq('phone_number_id', phone_number_id).maybeSingle()
 
     const sameNumber =
       existing?.phone_number_id === phone_number_id &&
@@ -363,14 +427,42 @@ export async function POST(request: Request) {
       registered_at: registrationError ? null : registeredAt,
       subscribed_apps_at: subscribedAppsAt ?? null,
       last_registration_error: registrationError,
+      label: label || phoneInfo?.verified_name || phone_number_id,
+      department_id: departmentId,
       updated_at: new Date().toISOString(),
     }
 
+    const shouldBeDefault =
+      Boolean(is_default) ||
+      !(await supabase
+        .from('whatsapp_config')
+        .select('id')
+        .eq('account_id', accountId)
+        .limit(1)
+        .maybeSingle()).data
+
     if (existing) {
+      if (shouldBeDefault) {
+        await supabase
+          .from('whatsapp_config')
+          .update({ is_default: false })
+          .eq('account_id', accountId)
+          .neq('id', existing.id)
+      }
+      const { data: existingDefault } = await supabase
+        .from('whatsapp_config')
+        .select('is_default')
+        .eq('account_id', accountId)
+        .eq('id', existing.id)
+        .maybeSingle()
       const { error: updateError } = await supabase
         .from('whatsapp_config')
-        .update(baseRow)
+        .update({
+          ...baseRow,
+          is_default: shouldBeDefault || Boolean(existingDefault?.is_default),
+        })
         .eq('account_id', accountId)
+        .eq('id', existing.id)
 
       if (updateError) {
         console.error('Error updating whatsapp_config:', updateError)
@@ -380,6 +472,12 @@ export async function POST(request: Request) {
         )
       }
     } else {
+      if (shouldBeDefault) {
+        await supabase
+          .from('whatsapp_config')
+          .update({ is_default: false })
+          .eq('account_id', accountId)
+      }
       // Insert with both columns: `account_id` is the tenancy key
       // (NOT NULL post-017, UNIQUE so duplicates trip the constraint
       // up-front), `user_id` is the audit column identifying which
@@ -389,6 +487,7 @@ export async function POST(request: Request) {
         .insert({
           account_id: accountId,
           user_id: user.id,
+          is_default: shouldBeDefault,
           ...baseRow,
         })
 
@@ -438,7 +537,7 @@ export async function POST(request: Request) {
  * Used by the "Reset Configuration" button to recover from a corrupted
  * encrypted token (mismatched ENCRYPTION_KEY across environments).
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
     const supabase = await createClient()
 
@@ -459,10 +558,17 @@ export async function DELETE() {
       )
     }
 
-    const { error: deleteError } = await supabase
+    const url = new URL(request.url)
+    const id = url.searchParams.get('id')
+
+    let deleteQuery = supabase
       .from('whatsapp_config')
       .delete()
       .eq('account_id', accountId)
+
+    if (id) deleteQuery = deleteQuery.eq('id', id)
+
+    const { error: deleteError } = await deleteQuery
 
     if (deleteError) {
       console.error('Error deleting whatsapp_config:', deleteError)
@@ -470,6 +576,23 @@ export async function DELETE() {
         { error: 'Failed to delete configuration' },
         { status: 500 }
       )
+    }
+
+    const { data: remaining } = await supabase
+      .from('whatsapp_config')
+      .select('id')
+      .eq('account_id', accountId)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (remaining?.id) {
+      await supabase
+        .from('whatsapp_config')
+        .update({ is_default: true })
+        .eq('id', remaining.id)
+        .eq('account_id', accountId)
     }
 
     return NextResponse.json({ success: true })

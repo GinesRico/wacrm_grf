@@ -23,7 +23,8 @@
 //       "params": ["A123"] | { "body": [...] }   // array = positional body; object = structured
 //     },
 //     "reply_to_message_id": "<uuid>",       // optional, must be in the same conversation
-//     "name": "Jane Doe"                     // optional, names a newly-created contact
+//     "name": "Jane Doe",                    // optional, names a newly-created contact
+//     "whatsapp_config_id": "<uuid>"         // optional, line to send from
 //   }
 //
 // Response (201):
@@ -102,7 +103,10 @@ export async function POST(request: Request) {
       ctx.supabase,
       ctx.accountId,
       to,
-      typeof body.name === 'string' ? body.name : null
+      typeof body.name === 'string' ? body.name : null,
+      typeof body.whatsapp_config_id === 'string'
+        ? body.whatsapp_config_id
+        : null
     );
 
     const result = await sendMessageToConversation(
@@ -133,6 +137,7 @@ export async function POST(request: Request) {
         whatsapp_message_id: result.whatsappMessageId,
         conversation_id: resolved.conversationId,
         contact_id: resolved.contactId,
+        whatsapp_config_id: resolved.whatsappConfigId,
         contact_created: resolved.contactCreated,
       },
       201

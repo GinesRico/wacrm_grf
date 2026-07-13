@@ -13,6 +13,8 @@ import {
   Zap,
   AlertTriangle,
   RotateCcw,
+  Plus,
+  Star,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
@@ -29,9 +31,17 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion';
-import type { WhatsAppConfig as WhatsAppConfigType } from '@/types';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from '@/components/ui/select';
+import type { Department, WhatsAppConfig as WhatsAppConfigType } from '@/types';
 
 const MASKED_TOKEN = '••••••••••••••••';
+
+const NO_DEPARTMENT_VALUE = '__no_department';
 
 type ConnectionStatus = 'connected' | 'disconnected' | 'unknown';
 type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
@@ -52,6 +62,8 @@ export function WhatsAppConfig() {
   const [resetting, setResetting] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [config, setConfig] = useState<WhatsAppConfigType | null>(null);
+  const [configs, setConfigs] = useState<WhatsAppConfigType[]>([]);
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('unknown');
   const [resetReason, setResetReason] = useState<ResetReason>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
@@ -63,6 +75,12 @@ export function WhatsAppConfig() {
   // again and overwrites whatever the user typed but hadn't saved yet.
   const loadedAccountIdRef = useRef<string | null>(null);
 
+  const [lineLabel, setLineLabel] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const selectedDepartmentLabel =
+    departments.find((department) => department.id === departmentId)?.name ??
+    t('noDepartment');
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
@@ -94,6 +112,20 @@ export function WhatsAppConfig() {
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
 
+  function hydrateForm(row: WhatsAppConfigType | null) {
+    setConfig(row);
+    setSelectedConfigId(row?.id ?? null);
+    setLineLabel(row?.label || '');
+    setDepartmentId(row?.department_id ?? '');
+    setPhoneNumberId(row?.phone_number_id || '');
+    setWabaId(row?.waba_id || '');
+    setAccessToken(row ? MASKED_TOKEN : '');
+    setVerifyToken('');
+    setPin('');
+    setTokenEdited(false);
+    setRegistrationProbe(null);
+  }
+
   const fetchConfig = useCallback(async (acctId: string) => {
     setLoading(true);
     try {
@@ -107,36 +139,41 @@ export function WhatsAppConfig() {
         .from('whatsapp_config')
         .select('*')
         .eq('account_id', acctId)
-        .maybeSingle();
+        .order('is_default', { ascending: false })
+        .order('created_at', { ascending: true });
 
       if (error) {
         console.error('Failed to load config row:', error);
       }
 
-      if (data) {
-        setConfig(data);
-        setPhoneNumberId(data.phone_number_id || '');
-        setWabaId(data.waba_id || '');
-        setAccessToken(MASKED_TOKEN);
-        setVerifyToken('');
-        setPin('');
-        setTokenEdited(false);
+      const rows = (data ?? []) as WhatsAppConfigType[];
+      setConfigs(rows);
+      try {
+        const res = await fetch('/api/departments', { cache: 'no-store' });
+        const payload = await res.json().catch(() => ({}));
+        setDepartments((payload.departments as Department[] | undefined) ?? []);
+      } catch (error) {
+        console.error('Failed to load departments:', error);
+        setDepartments([]);
+      }
+      const selected =
+        rows.find((row) => row.id === selectedConfigId) ??
+        rows.find((row) => row.is_default) ??
+        rows[0] ??
+        null;
+
+      if (selected) {
+        hydrateForm(selected);
       } else {
-        setConfig(null);
-        setPhoneNumberId('');
-        setWabaId('');
-        setAccessToken('');
-        setVerifyToken('');
-        setPin('');
-        setTokenEdited(false);
+        hydrateForm(null);
       }
       // Clear any stale probe result when reloading the row.
       setRegistrationProbe(null);
 
       // Then verify health via the API (decrypts token + pings Meta)
-      if (data) {
+      if (selected) {
         try {
-          const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+          const res = await fetch(`/api/whatsapp/config?id=${selected.id}`, { method: 'GET' });
           const payload = await res.json();
 
           if (payload.connected) {
@@ -159,11 +196,11 @@ export function WhatsAppConfig() {
       }
     } catch (err) {
       console.error('fetchConfig error:', err);
-      toast.error('Failed to load WhatsApp configuration');
+      toast.error(t('loadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, selectedConfigId]);
 
   useEffect(() => {
     // Need both the auth session (`!authLoading`) AND the profile
@@ -184,11 +221,11 @@ export function WhatsAppConfig() {
 
   async function handleSave() {
     if (!phoneNumberId.trim()) {
-      toast.error('Phone Number ID is required');
+      toast.error(t('phoneNumberRequired'));
       return;
     }
     if (!config && (!accessToken.trim() || !tokenEdited)) {
-      toast.error('Access Token is required for initial setup');
+      toast.error(t('accessTokenRequired'));
       return;
     }
 
@@ -200,8 +237,12 @@ export function WhatsAppConfig() {
       // and writing direct to Supabase stores the token in plaintext,
       // which then fails decryption on every subsequent health check.
       const payload: Record<string, unknown> = {
+        id: config?.id,
+        label: lineLabel.trim() || null,
+        department_id: departmentId || null,
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
+        is_default: config?.is_default || configs.length === 0,
         verify_token: verifyToken.trim() || null,
         // Optional — only sent when the user filled it in. The server
         // requires it on first save or when changing numbers; for a
@@ -216,7 +257,7 @@ export function WhatsAppConfig() {
         // server. But our POST handler requires an access_token to verify
         // with Meta. If the user didn't change the token, we need to signal
         // that. Simplest: require token re-entry if they're updating.
-        toast.error('Please re-enter the Access Token to save changes');
+        toast.error(t('reenterToken'));
         setSaving(false);
         return;
       }
@@ -230,7 +271,7 @@ export function WhatsAppConfig() {
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to save configuration');
+        toast.error(data.error || t('saveFailed'));
         setSaving(false);
         return;
       }
@@ -243,7 +284,7 @@ export function WhatsAppConfig() {
       //                         is human-readable from Meta.
       if (data.registered === false && data.registration_error) {
         toast.error(
-          `Saved, but Meta couldn't register the number: ${data.registration_error}`,
+          t('savedButRegisterFailed', { error: data.registration_error }),
           { duration: 12000 },
         );
       } else if (data.registration_skipped) {
@@ -252,15 +293,15 @@ export function WhatsAppConfig() {
         // Don't claim the number is "Live" — point at the
         // Registration status banner instead.
         toast.success(
-          'Credentials saved and verified. Inbound registration was skipped (no PIN) — see Registration status below.',
+          t('savedRegistrationSkipped'),
           { duration: 10000 },
         );
         setPin('');
       } else {
         toast.success(
           data.phone_info?.verified_name
-            ? `Live — ${data.phone_info.verified_name} can now receive events.`
-            : 'WhatsApp connected. Events will start flowing within a minute.',
+            ? t('liveWithName', { name: data.phone_info.verified_name })
+            : t('connectedEventsSoon'),
         );
         // Clear the PIN so subsequent saves don't accidentally
         // re-register (which would void the active subscription if
@@ -271,7 +312,7 @@ export function WhatsAppConfig() {
       if (accountId) await fetchConfig(accountId);
     } catch (err) {
       console.error('Save error:', err);
-      toast.error('Failed to save configuration');
+      toast.error(t('saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -280,7 +321,10 @@ export function WhatsAppConfig() {
   async function handleTestConnection() {
     try {
       setTesting(true);
-      const res = await fetch('/api/whatsapp/config', { method: 'GET' });
+      const res = await fetch(
+        `/api/whatsapp/config${config?.id ? `?id=${config.id}` : ''}`,
+        { method: 'GET' },
+      );
       const payload = await res.json();
 
       if (payload.connected) {
@@ -289,19 +333,19 @@ export function WhatsAppConfig() {
         setStatusMessage('');
         toast.success(
           payload.phone_info?.verified_name
-            ? `Connected to ${payload.phone_info.verified_name}`
-            : 'API connection successful'
+            ? t('connectedTo', { name: payload.phone_info.verified_name })
+            : t('apiConnectionSuccessful')
         );
       } else {
         setConnectionStatus('disconnected');
         setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
         setStatusMessage(payload.message || '');
-        toast.error(payload.message || 'API connection failed');
+        toast.error(payload.message || t('apiConnectionFailed'));
       }
     } catch (err) {
       console.error('Test connection error:', err);
       setConnectionStatus('disconnected');
-      toast.error('Connection test failed. Check network and try again.');
+      toast.error(t('connectionTestFailed'));
     } finally {
       setTesting(false);
     }
@@ -311,45 +355,49 @@ export function WhatsAppConfig() {
     setVerifyingRegistration(true);
     setRegistrationProbe(null);
     try {
-      const res = await fetch('/api/whatsapp/config/verify-registration', {
+      const res = await fetch(`/api/whatsapp/config/verify-registration${config?.id ? `?id=${config.id}` : ''}`, {
         method: 'GET',
       });
       const data = (await res.json()) as RegistrationProbe;
       setRegistrationProbe(data);
       if (data.live) {
-        toast.success('Number is fully wired — Meta is delivering events.');
+        toast.success(t('numberFullyWired'));
       } else {
         toast.error(
-          'Number is not fully registered. See the checks below for which step failed.',
+          t('numberNotRegistered'),
           { duration: 8000 },
         );
       }
       if (accountId) await fetchConfig(accountId);
     } catch (err) {
       console.error('verify-registration failed:', err);
-      toast.error('Could not reach the verification endpoint.');
+      toast.error(t('verificationEndpointFailed'));
     } finally {
       setVerifyingRegistration(false);
     }
   }
 
   async function handleReset() {
-    if (!confirm('This will delete the current WhatsApp config so you can re-enter it. Continue?')) {
+    if (!confirm(t('resetConfirm'))) {
       return;
     }
 
     try {
       setResetting(true);
-      const res = await fetch('/api/whatsapp/config', { method: 'DELETE' });
+      const res = await fetch(`/api/whatsapp/config${config?.id ? `?id=${config.id}` : ''}`, { method: 'DELETE' });
       const data = await res.json();
 
       if (!res.ok) {
-        toast.error(data.error || 'Failed to reset configuration');
+        toast.error(data.error || t('resetFailed'));
         return;
       }
 
-      toast.success('Configuration cleared. You can now re-enter your credentials.');
+      toast.success(t('configCleared'));
       setConfig(null);
+      setConfigs([]);
+      setSelectedConfigId(null);
+      setLineLabel('');
+      setDepartmentId('');
       setPhoneNumberId('');
       setWabaId('');
       setAccessToken('');
@@ -360,15 +408,63 @@ export function WhatsAppConfig() {
       setStatusMessage('');
     } catch (err) {
       console.error('Reset error:', err);
-      toast.error('Failed to reset configuration');
+      toast.error(t('resetFailed'));
     } finally {
       setResetting(false);
     }
   }
 
+  function handleNewLine() {
+    hydrateForm(null);
+    setConnectionStatus('disconnected');
+    setResetReason(null);
+    setStatusMessage('');
+  }
+
+  async function handleSelectLine(row: WhatsAppConfigType) {
+    hydrateForm(row);
+    setConnectionStatus(row.status === 'connected' ? 'connected' : 'disconnected');
+    setResetReason(null);
+    setStatusMessage('');
+    try {
+      const res = await fetch(`/api/whatsapp/config?id=${row.id}`, { method: 'GET' });
+      const payload = await res.json();
+      if (payload.connected) {
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('disconnected');
+        setResetReason(payload.needs_reset ? 'token_corrupted' : payload.reason === 'meta_api_error' ? 'meta_api_error' : null);
+        setStatusMessage(payload.message || '');
+      }
+    } catch {
+      setConnectionStatus(row.status === 'connected' ? 'connected' : 'disconnected');
+    }
+  }
+
+  async function handleMakeDefault(row: WhatsAppConfigType) {
+    if (!accountId) return;
+    try {
+      await supabase
+        .from('whatsapp_config')
+        .update({ is_default: false })
+        .eq('account_id', accountId);
+      const { error } = await supabase
+        .from('whatsapp_config')
+        .update({ is_default: true })
+        .eq('account_id', accountId)
+        .eq('id', row.id);
+      if (error) throw error;
+      toast.success(t('defaultLineUpdated'));
+      await fetchConfig(accountId);
+    } catch (error) {
+      console.error('make default failed:', error);
+      toast.error(t('defaultLineFailed'));
+    }
+  }
+
   function handleCopyWebhookUrl() {
     navigator.clipboard.writeText(webhookUrl);
-    toast.success('Webhook URL copied to clipboard');
+    toast.success(t('webhookCopied'));
   }
 
   if (loading) {
@@ -393,6 +489,69 @@ export function WhatsAppConfig() {
         title={t("title")}
         description={t("description")}
       />
+      <Card className="mb-6">
+        <CardHeader className="flex-row items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-foreground">{t('lineListTitle')}</CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {t('lineListDesc')}
+            </CardDescription>
+          </div>
+          <Button onClick={handleNewLine} size="sm">
+            <Plus className="size-4" />
+            {t('addLine')}
+          </Button>
+        </CardHeader>
+        {configs.length > 0 && (
+          <CardContent className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {configs.map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                onClick={() => void handleSelectLine(row)}
+                className={
+                  'rounded-lg border p-3 text-left transition-colors ' +
+                  (selectedConfigId === row.id
+                    ? 'border-primary bg-primary/10'
+                    : 'border-border bg-card hover:bg-muted')
+                }
+              >
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                    {row.label || row.phone_number_id}
+                  </span>
+                  {row.is_default && <Star className="size-3.5 fill-primary text-primary" />}
+                </div>
+                <div className="mt-1 truncate text-xs text-muted-foreground">
+                  {row.phone_number_id}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className={row.status === 'connected' ? 'text-xs text-primary' : 'text-xs text-red-400'}>
+                    {row.status}
+                  </span>
+                  {row.department_id && (
+                    <span className="truncate text-xs text-muted-foreground">
+                      {departments.find((d) => d.id === row.department_id)?.name ?? t('department')}
+                    </span>
+                  )}
+                  {!row.is_default && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleMakeDefault(row);
+                      }}
+                    >
+                      {t('makeDefault')}
+                    </button>
+                  )}
+                </div>
+              </button>
+            ))}
+          </CardContent>
+        )}
+      </Card>
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
       {/* Main config form */}
       <div className="space-y-6">
@@ -403,7 +562,7 @@ export function WhatsAppConfig() {
               <AlertTriangle className="size-5 text-amber-400 mt-0.5 shrink-0" />
               <div className="flex-1">
                 <AlertTitle className="text-amber-200 mb-1">
-                  Stored token can&apos;t be decrypted
+                  {t('tokenCorrupted')}
                 </AlertTitle>
                 <AlertDescription className="text-amber-100/80 text-sm">
                   {statusMessage}
@@ -498,15 +657,13 @@ export function WhatsAppConfig() {
             </div>
             <AlertDescription className="text-muted-foreground mt-2 text-xs leading-relaxed">
               {isRegistered ? (
-                <span
-                  dangerouslySetInnerHTML={{
-                    __html: t('subscribedSince', {
-                      date: config.registered_at
-                        ? new Date(config.registered_at).toLocaleString()
-                        : t('unknownDate'),
-                    }),
-                  }}
-                />
+                <span>
+                  {t('subscribedSince', {
+                    date: config.registered_at
+                      ? new Date(config.registered_at).toLocaleString()
+                      : t('unknownDate'),
+                  })}
+                </span>
               ) : lastRegistrationError ? (
                 <>
                   {t('lastAttemptFailed')}
@@ -564,9 +721,52 @@ export function WhatsAppConfig() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
+              <Label className="text-muted-foreground">{t('lineName')}</Label>
+              <Input
+                placeholder={t('lineNamePlaceholder')}
+                value={lineLabel}
+                onChange={(e) => setLineLabel(e.target.value)}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">{t('department')}</Label>
+              <Select
+                value={departmentId || NO_DEPARTMENT_VALUE}
+                onValueChange={(value) => {
+                  const nextValue = value ?? NO_DEPARTMENT_VALUE;
+                  setDepartmentId(nextValue === NO_DEPARTMENT_VALUE ? '' : nextValue);
+                }}
+              >
+                <SelectTrigger className="bg-muted border-border text-foreground">
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {selectedDepartmentLabel}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_DEPARTMENT_VALUE}>
+                    {t('noDepartment')}
+                  </SelectItem>
+                  {departments.map((department) => (
+                    <SelectItem key={department.id} value={department.id}>
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: department.color }}
+                        />
+                        <span className="truncate">{department.name}</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
               <Label className="text-muted-foreground">{t('phoneNumberId')}</Label>
               <Input
-                placeholder="e.g. 100234567890123"
+                placeholder={t('phoneNumberIdPlaceholder')}
                 value={phoneNumberId}
                 onChange={(e) => setPhoneNumberId(e.target.value)}
                 className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
@@ -576,7 +776,7 @@ export function WhatsAppConfig() {
             <div className="space-y-2">
               <Label className="text-muted-foreground">{t('wabaId')}</Label>
               <Input
-                placeholder="e.g. 100234567890456"
+                placeholder={t('wabaIdPlaceholder')}
                 value={wabaId}
                 onChange={(e) => setWabaId(e.target.value)}
                 className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
@@ -647,7 +847,7 @@ export function WhatsAppConfig() {
                 className="bg-muted border-border text-foreground placeholder:text-muted-foreground tracking-widest"
               />
               <p className="text-xs text-muted-foreground leading-relaxed">
-                <span dangerouslySetInnerHTML={{ __html: t('pinHint') }} />
+                <span>{t('pinHint')}</span>
               </p>
             </div>
           </CardContent>
@@ -760,7 +960,7 @@ export function WhatsAppConfig() {
                 </AccordionTrigger>
                 <AccordionContent className="text-muted-foreground">
                   <ol className="list-decimal list-inside space-y-1 text-sm">
-                    <li dangerouslySetInnerHTML={{ __html: t('step1_1') }} />
+                    <li>{t('step1_1')}</li>
                     <li>{t('step1_2')}</li>
                     <li>{t('step1_3')}</li>
                     <li>{t('step1_4')}</li>
@@ -794,9 +994,9 @@ export function WhatsAppConfig() {
                 <AccordionContent className="text-muted-foreground">
                   <ol className="list-decimal list-inside space-y-1 text-sm">
                     <li>{t('step3_1')}</li>
-                    <li dangerouslySetInnerHTML={{ __html: t('step3_2') }} />
-                    <li dangerouslySetInnerHTML={{ __html: t('step3_3') }} />
-                    <li dangerouslySetInnerHTML={{ __html: t('step3_4') }} />
+                    <li>{t('step3_2')}</li>
+                    <li>{t('step3_3')}</li>
+                    <li>{t('step3_4')}</li>
                   </ol>
                 </AccordionContent>
               </AccordionItem>
@@ -812,8 +1012,8 @@ export function WhatsAppConfig() {
                   <ol className="list-decimal list-inside space-y-1 text-sm">
                     <li>{t('step4_1')}</li>
                     <li>{t('step4_2')}</li>
-                    <li dangerouslySetInnerHTML={{ __html: t('step4_3') }} />
-                    <li dangerouslySetInnerHTML={{ __html: t('step4_4') }} />
+                    <li>{t('step4_3')}</li>
+                    <li>{t('step4_4')}</li>
                     <li>{t('step4_5')}</li>
                   </ol>
                 </AccordionContent>

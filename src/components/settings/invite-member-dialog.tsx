@@ -140,7 +140,7 @@ export function InviteMemberDialog({
       onCreated();
     } catch (err) {
       console.error('[InviteMemberDialog] create error:', err);
-      toast.error('Could not reach the server. Try again?');
+      toast.error(t('serverError'));
     } finally {
       setSubmitting(false);
     }

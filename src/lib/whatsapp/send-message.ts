@@ -35,6 +35,7 @@ import {
   type InteractiveMessagePayload,
 } from '@/lib/whatsapp/interactive';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
+import { getWhatsAppConfigForConversation } from '@/lib/whatsapp/config';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
   sanitizePhoneForMeta,
@@ -91,6 +92,23 @@ export interface SendMessageResult {
   messageId: string;
   /** Meta's `wamid` for the delivered message. */
   whatsappMessageId: string;
+}
+
+function templatePreviewPayload(
+  template: MessageTemplate | null,
+  body: string | null | undefined,
+): InteractiveMessagePayload | null {
+  if (!template?.buttons?.length) return null;
+
+  return {
+    kind: 'buttons',
+    body: body ?? template.body_text ?? '',
+    footer: template.footer_text || undefined,
+    buttons: template.buttons.map((button, index) => ({
+      id: `template-${index}`,
+      title: button.text,
+    })),
+  };
 }
 
 /**
@@ -247,19 +265,28 @@ export async function sendMessageToConversation(
     );
   }
 
-  // WhatsApp config, account-scoped.
-  const { data: config, error: configError } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .single();
+  // WhatsApp config, conversation-scoped. Multi-line accounts attach each
+  // conversation to the line that should send replies.
+  const config = await getWhatsAppConfigForConversation(
+    db,
+    accountId,
+    conversationId,
+  );
 
-  if (configError || !config) {
+  if (!config) {
     throw new SendMessageError(
       'whatsapp_not_configured',
       'WhatsApp not configured. Please set up your WhatsApp integration first.',
       400
     );
+  }
+
+  if (!conversation.whatsapp_config_id) {
+    void db
+      .from('conversations')
+      .update({ whatsapp_config_id: config.id })
+      .eq('id', conversationId)
+      .eq('account_id', accountId);
   }
 
   const accessToken = decrypt(config.access_token);
@@ -447,6 +474,10 @@ export async function sendMessageToConversation(
   // payload so the thread can re-render the buttons / rows.
   const interactiveBody =
     messageType === 'interactive' ? interactivePayload!.body : null;
+  const templateButtonsPayload =
+    messageType === 'template'
+      ? templatePreviewPayload(templateRow, contentText)
+      : null;
 
   const { data: messageRecord, error: msgError } = await db
     .from('messages')
@@ -458,7 +489,9 @@ export async function sendMessageToConversation(
       media_url: mediaUrl || null,
       template_name: templateName || null,
       interactive_payload:
-        messageType === 'interactive' ? interactivePayload : null,
+        messageType === 'interactive'
+          ? interactivePayload
+          : templateButtonsPayload,
       message_id: waMessageId,
       status: 'sent',
       reply_to_message_id: replyToMessageId || null,

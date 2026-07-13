@@ -1,7 +1,9 @@
 "use client";
 
 import { List, Reply } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { cn } from "@/lib/utils";
+import { WhatsAppText } from "@/components/inbox/whatsapp-text";
 import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
 
 /**
@@ -17,10 +19,13 @@ import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
 export function InteractivePreview({
   payload,
   className,
+  hideEmptyBody = false,
 }: {
   payload: InteractiveMessagePayload;
   className?: string;
+  hideEmptyBody?: boolean;
 }) {
+  const t = useTranslations("InteractiveBuilder");
   return (
     <div
       className={cn(
@@ -31,17 +36,21 @@ export function InteractivePreview({
       <div className="px-3 py-2">
         {payload.header ? (
           <p className="mb-1 break-words text-sm font-semibold">
-            {payload.header}
+            <WhatsAppText text={payload.header} />
           </p>
         ) : null}
-        <p className="whitespace-pre-wrap break-words text-sm">
-          {payload.body || (
-            <span className="text-muted-foreground">Message body…</span>
-          )}
-        </p>
+        {payload.body || !hideEmptyBody ? (
+          <p className="whitespace-pre-wrap break-words text-sm">
+            {payload.body ? (
+              <WhatsAppText text={payload.body} />
+            ) : (
+              <span className="text-muted-foreground">{t("messageBodyFallback")}</span>
+            )}
+          </p>
+        ) : null}
         {payload.footer ? (
           <p className="mt-1 break-words text-[11px] text-muted-foreground">
-            {payload.footer}
+            <WhatsAppText text={payload.footer} />
           </p>
         ) : null}
       </div>
@@ -56,7 +65,9 @@ export function InteractivePreview({
               className="flex items-center justify-center gap-1.5 border-t border-border py-2 text-sm font-medium text-primary first:border-t-0"
             >
               <Reply className="h-3.5 w-3.5" />
-              <span className="truncate">{b.title || "Button"}</span>
+              <span className="truncate">
+                <WhatsAppText text={b.title || t("buttonFallback")} />
+              </span>
             </button>
           ))}
         </div>
@@ -67,7 +78,7 @@ export function InteractivePreview({
           className="flex w-full items-center justify-center gap-1.5 border-t border-border py-2 text-sm font-medium text-primary"
         >
           <List className="h-3.5 w-3.5" />
-          <span className="truncate">{payload.button_label || "Menu"}</span>
+          <span className="truncate">{payload.button_label || t("menuFallback")}</span>
         </button>
       )}
     </div>

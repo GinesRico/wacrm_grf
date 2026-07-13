@@ -12,25 +12,39 @@ import type {
   Message,
   MessageReaction,
   Contact,
-  ConversationStatus,
   MessageTemplate,
-  Profile,
+  AccountMember,
+  Department,
+  WhatsAppConfig,
   InteractiveMessagePayload,
 } from "@/types";
 import {
   MessageSquare,
-  ChevronDown,
-  UserPlus,
   Check,
   Clock,
   ArrowLeft,
   RefreshCw,
-  PanelRightOpen,
-  PanelRightClose,
+  MoreVertical,
+  Trash2,
+  Forward,
+  X,
+  Copy,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
-import { useTranslations } from "next-intl";
+import { es } from "date-fns/locale";
+import { useLocale, useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,7 +52,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -72,11 +85,12 @@ interface MessageThreadProps {
   onMessagesLoaded: (messages: Message[]) => void;
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
-  onStatusChange: (conversationId: string, status: ConversationStatus) => void;
   onAssignChange: (
     conversationId: string,
     assignedAgentId: string | null,
   ) => void;
+  onConversationUpdated: (conversation: Conversation) => void;
+  onConversationDeleted?: (conversationId: string) => void;
   /**
    * On mobile, the thread is shown full-screen with the conversation list
    * hidden. This callback lets the page deselect the active conversation
@@ -111,11 +125,225 @@ interface MessageThreadProps {
   onToggleContactPanel?: () => void;
 }
 
-function formatDateSeparator(dateStr: string, t: ReturnType<typeof useTranslations>): string {
+type TransferLine = Pick<
+  WhatsAppConfig,
+  "id" | "label" | "phone_number_id" | "is_default" | "status" | "department_id"
+>;
+
+const NO_LINE_VALUE = "__none";
+const NO_AGENT_VALUE = "__queue";
+const NO_DEPARTMENT_VALUE = "__no_department";
+
+function TransferDialog({
+  open,
+  onOpenChange,
+  members,
+  departments,
+  lines,
+  selectedAgentId,
+  onSelectedAgentIdChange,
+  selectedDepartmentId,
+  onSelectedDepartmentIdChange,
+  selectedLineId,
+  onSelectedLineIdChange,
+  onSubmit,
+  getPresence,
+  getRow,
+  now,
+  currentUserId,
+  t,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  members: AccountMember[];
+  departments: Department[];
+  lines: TransferLine[];
+  selectedAgentId: string;
+  onSelectedAgentIdChange: (value: string) => void;
+  selectedDepartmentId: string;
+  onSelectedDepartmentIdChange: (value: string) => void;
+  selectedLineId: string;
+  onSelectedLineIdChange: (value: string) => void;
+  onSubmit: () => void;
+  getPresence: ReturnType<typeof usePresence>["getPresence"];
+  getRow: ReturnType<typeof usePresence>["getRow"];
+  now: number;
+  currentUserId?: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const teammates = members.filter((member) => member.user_id !== currentUserId);
+  const selectedLineValue =
+    selectedLineId && lines.some((line) => line.id === selectedLineId)
+      ? selectedLineId
+      : NO_LINE_VALUE;
+  const selectedAgentValue = selectedAgentId || NO_AGENT_VALUE;
+  const selectedDepartmentValue =
+    selectedDepartmentId &&
+    departments.some((department) => department.id === selectedDepartmentId)
+      ? selectedDepartmentId
+      : NO_DEPARTMENT_VALUE;
+  const selectedDepartmentLabel =
+    departments.find((department) => department.id === selectedDepartmentId)
+      ?.name ?? t("transferDepartment");
+  const selectedLine = lines.find((line) => line.id === selectedLineId);
+  const selectedLineLabel = selectedLine
+    ? selectedLine.label?.trim() || selectedLine.phone_number_id
+    : t("transferLine");
+  const selectedAgentLabel =
+    teammates.find((member) => member.user_id === selectedAgentId)?.full_name ??
+    t("unassign");
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-sm">
+        <div className="border-b border-border px-5 py-4">
+          <DialogTitle className="text-base font-semibold">
+            {t("transferChat")}
+          </DialogTitle>
+        </div>
+        <div className="space-y-4 px-5 py-5">
+          <Select
+            value={selectedDepartmentValue}
+            onValueChange={(value) => {
+              if (!value || value === NO_DEPARTMENT_VALUE) return;
+              onSelectedDepartmentIdChange(value);
+            }}
+          >
+            <SelectTrigger className="h-12 w-full">
+              <span className="min-w-0 flex-1 truncate text-left">
+                {selectedDepartmentLabel}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              {departments.length === 0 ? (
+                <SelectItem value={NO_DEPARTMENT_VALUE} disabled>
+                  {t("noDepartmentsAvailable")}
+                </SelectItem>
+              ) : (
+                departments.map((department) => (
+                  <SelectItem key={department.id} value={department.id}>
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ backgroundColor: department.color }}
+                      />
+                      <span className="truncate">{department.name}</span>
+                    </span>
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={selectedLineValue}
+            onValueChange={(value) => {
+              const nextValue = value ?? "";
+              if (nextValue !== NO_LINE_VALUE) {
+                onSelectedLineIdChange(nextValue);
+                const line = lines.find((item) => item.id === nextValue);
+                if (line?.department_id) {
+                  onSelectedDepartmentIdChange(line.department_id);
+                }
+              }
+            }}
+          >
+            <SelectTrigger className="h-12 w-full">
+              <span className="min-w-0 flex-1 truncate text-left">
+                {selectedLineLabel}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              {lines.length === 0 ? (
+                <SelectItem value={NO_LINE_VALUE} disabled>
+                  {t("noLinesAvailable")}
+                </SelectItem>
+              ) : (
+                lines.map((line) => (
+                  <SelectItem key={line.id} value={line.id}>
+                    {(line.label?.trim() || line.phone_number_id) +
+                      (line.is_default ? ` · ${t("defaultLine")}` : "")}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={selectedAgentValue}
+            onValueChange={(value) => {
+              const nextValue = value ?? "";
+              onSelectedAgentIdChange(
+                nextValue === NO_AGENT_VALUE ? "" : nextValue,
+              );
+            }}
+          >
+            <SelectTrigger className="h-12 w-full">
+              <span className="min-w-0 flex-1 truncate text-left">
+                {selectedAgentLabel}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_AGENT_VALUE}>{t("unassign")}</SelectItem>
+              {teammates.length === 0 ? (
+                <SelectItem value="__no_teammates" disabled>
+                  {t("noTeammates")}
+                </SelectItem>
+              ) : (
+                teammates.map((member) => {
+                  const presence = getPresence(member.user_id);
+                  return (
+                    <SelectItem key={member.user_id} value={member.user_id}>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <PresenceDot
+                          status={presence}
+                          label={presenceLabel(
+                            presence,
+                            getRow(member.user_id)?.last_seen_at ?? null,
+                            now,
+                          )}
+                        />
+                        <span className="truncate">{member.full_name}</span>
+                      </span>
+                    </SelectItem>
+                  );
+                })
+              )}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex justify-end gap-3 border-t border-border bg-muted/30 px-5 py-4">
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="h-10 rounded-md border border-border bg-background px-4 text-sm font-medium text-destructive hover:bg-muted"
+          >
+            {t("cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+          >
+            {t("transfer")}
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function formatDateSeparator(
+  dateStr: string,
+  t: ReturnType<typeof useTranslations>,
+  locale: string,
+): string {
   const date = new Date(dateStr);
   if (isToday(date)) return t("today");
   if (isYesterday(date)) return t("yesterday");
-  return format(date, "MMMM d, yyyy");
+  return format(date, locale.startsWith("es") ? "d MMMM yyyy" : "MMMM d, yyyy", {
+    locale: locale.startsWith("es") ? es : undefined,
+  });
 }
 
 function groupMessagesByDate(messages: Message[]) {
@@ -134,12 +362,6 @@ function groupMessagesByDate(messages: Message[]) {
 
   return groups;
 }
-
-const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
-  { label: "Open", value: "open", color: "text-primary" },
-  { label: "Pending", value: "pending", color: "text-amber-400" },
-  { label: "Closed", value: "closed", color: "text-muted-foreground" },
-];
 
 /**
  * WhatsApp-style doodle background applied to the chat area (both the
@@ -160,8 +382,9 @@ export function MessageThread({
   onMessagesLoaded,
   onNewMessage,
   onUpdateMessage,
-  onStatusChange,
   onAssignChange,
+  onConversationUpdated,
+  onConversationDeleted,
   onBack,
   resyncToken = 0,
   onRefresh,
@@ -169,16 +392,35 @@ export function MessageThread({
   onToggleContactPanel,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
+  const tActions = useTranslations("Inbox.actions");
   const tTimer = useTranslations("Inbox.sessionTimer");
   const tQuote = useTranslations("Inbox.replyQuote");
+  const locale = useLocale();
+  const dateLocale = locale.startsWith("es") ? es : undefined;
 
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [members, setMembers] = useState<AccountMember[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [forwardDialogOpen, setForwardDialogOpen] = useState(false);
+  const [forwardContactId, setForwardContactId] = useState("");
+  const [forwardLineId, setForwardLineId] = useState("");
+  const [forwardContacts, setForwardContacts] = useState<Contact[]>([]);
+  const [aiDraftSeed, setAiDraftSeed] = useState<string | null>(null);
+  const [lines, setLines] = useState<TransferLine[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+  const [ticketAction, setTicketAction] = useState<string | null>(null);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferAgentId, setTransferAgentId] = useState<string>("");
+  const [transferDepartmentId, setTransferDepartmentId] = useState<string>("");
+  const [transferLineId, setTransferLineId] = useState<string>("");
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -208,19 +450,20 @@ export function MessageThread({
   // shape ready for shared-team workspaces without a refactor.
   useEffect(() => {
     let cancelled = false;
-    const supabase = createClient();
-    supabase
-      .from("profiles")
-      .select("*")
-      .order("full_name")
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (error) {
-          console.error("Failed to fetch profiles:", error);
-          return;
-        }
-        setProfiles((data as Profile[]) ?? []);
+    (async () => {
+      const res = await fetch("/api/inbox/transfer-options", {
+        cache: "no-store",
       });
+      const payload = await res.json().catch(() => ({}));
+      if (cancelled) return;
+      if (!res.ok) {
+        console.error("Failed to fetch transfer options:", payload);
+        return;
+      }
+      setMembers((payload.members as AccountMember[] | undefined) ?? []);
+      setDepartments((payload.departments as Department[] | undefined) ?? []);
+      setLines((payload.lines as TransferLine[] | undefined) ?? []);
+    })();
     return () => {
       cancelled = true;
     };
@@ -228,20 +471,34 @@ export function MessageThread({
 
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
-    if (!messages.length) return { expired: false, remaining: "" };
+    if (!messages.length) {
+      return { expired: false, remaining: "", availableUntil: "" };
+    }
 
     // Find last customer message
     const lastCustomerMsg = [...messages]
       .reverse()
       .find((m) => m.sender_type === "customer");
 
-    if (!lastCustomerMsg) return { expired: true, remaining: "No customer messages" };
+    if (!lastCustomerMsg) {
+      return {
+        expired: true,
+        remaining: t("noCustomerMessages"),
+        availableUntil: "",
+      };
+    }
 
-    const hoursSince = differenceInHours(new Date(), new Date(lastCustomerMsg.created_at));
+    const lastCustomerDate = new Date(lastCustomerMsg.created_at);
+    const hoursSince = differenceInHours(new Date(), lastCustomerDate);
     const expired = hoursSince >= 24;
+    const availableUntil = format(
+      new Date(lastCustomerDate.getTime() + 24 * 60 * 60 * 1000),
+      "dd/MM HH:mm",
+      { locale: dateLocale },
+    );
 
     if (expired) {
-      return { expired: true, remaining: tTimer("expired") };
+      return { expired: true, remaining: tTimer("expired"), availableUntil };
     }
 
     const hoursLeft = 24 - hoursSince;
@@ -250,8 +507,8 @@ export function MessageThread({
         ? tTimer("xhRemaining", { hours: Math.floor(hoursLeft) })
         : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
 
-    return { expired, remaining };
-  }, [messages, tTimer]);
+    return { expired, remaining, availableUntil };
+  }, [dateLocale, messages, t, tTimer]);
 
   // Store latest callback in a ref so fetchMessages doesn't need to
   // depend on `onMessagesLoaded` — otherwise parent re-renders cause
@@ -621,24 +878,58 @@ export function MessageThread({
     [conversation, onNewMessage, onUpdateMessage],
   );
 
-  const handleStatusChange = useCallback(
-    async (status: ConversationStatus) => {
+  const patchConversation = useCallback(
+    async (body: Record<string, unknown>) => {
       if (!conversation) return;
 
-      const supabase = createClient();
-      await supabase
-        .from("conversations")
-        .update({ status })
-        .eq("id", conversation.id);
-
-      onStatusChange(conversation.id, status);
+      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.conversation) {
+        throw new Error(payload?.error || `HTTP ${res.status}`);
+      }
+      onConversationUpdated(payload.conversation);
+      if ("assigned_agent_id" in payload.conversation) {
+        onAssignChange(
+          conversation.id,
+          payload.conversation.assigned_agent_id ?? null,
+        );
+      }
     },
-    [conversation, onStatusChange]
+    [conversation, onAssignChange, onConversationUpdated],
   );
 
+  const handleTicketAction = useCallback(
+    async (action: "accept" | "resolve" | "return_to_pending" | "reopen") => {
+      if (!conversation || ticketAction) return;
+      setTicketAction(action);
+      try {
+        await patchConversation({ action });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : "network error";
+        toast.error(t("ticketActionFailed", { reason }));
+      } finally {
+        setTicketAction(null);
+      }
+    },
+    [conversation, patchConversation, ticketAction, t],
+  );
+
+  const conversationLocked = conversation?.status !== "open";
+  const lockedReason =
+    conversation?.status === "pending"
+      ? t("acceptBeforeReply")
+      : conversation?.status === "closed"
+        ? t("reopenBeforeReply")
+        : undefined;
+
   const handleOpenTemplates = useCallback(() => {
+    if (conversationLocked) return;
     setTemplateModalOpen(true);
-  }, []);
+  }, [conversationLocked]);
 
   const handleSendTemplate = useCallback(
     async (
@@ -750,8 +1041,233 @@ export function MessageThread({
         preview: buildReplyPreview(msg, tQuote),
       });
     },
-    [authorLabelFor],
+    [authorLabelFor, tQuote],
   );
+
+  const handleAiReplyToMessage = useCallback(
+    (msg: Message) => {
+      handleStartReply(msg);
+      setAiDraftSeed(`${msg.id}:${Date.now()}`);
+    },
+    [handleStartReply],
+  );
+
+  const handleDeleteMessage = useCallback(
+    async (messageId: string) => {
+      if (!conversation) return;
+      if (messageId.startsWith("temp-")) {
+        toast.error(t("waitForMessage"));
+        return;
+      }
+
+      const snapshot = messages;
+      const nextMessages = messages.filter((message) => message.id !== messageId);
+      onMessagesLoaded(nextMessages);
+      if (replyTo?.id === messageId) {
+        setReplyTo(null);
+      }
+
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("id", messageId)
+        .eq("conversation_id", conversation.id);
+
+      if (error) {
+        onMessagesLoaded(snapshot);
+        toast.error(t("messageDeleteFailed"));
+      }
+    },
+    [conversation, messages, onMessagesLoaded, replyTo?.id, t],
+  );
+
+  const handleToggleMessageStar = useCallback(
+    async (message: Message) => {
+      const nextStarred = !message.is_starred;
+      onUpdateMessage(message.id, { is_starred: nextStarred });
+
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("messages")
+        .update({ is_starred: nextStarred })
+        .eq("id", message.id)
+        .eq("conversation_id", message.conversation_id);
+
+      if (error) {
+        onUpdateMessage(message.id, { is_starred: message.is_starred });
+        toast.error(t("messageStarFailed"));
+      }
+    },
+    [onUpdateMessage, t],
+  );
+
+  const beginMessageSelection = useCallback((messageId: string) => {
+    setSelectionMode(true);
+    setSelectedMessageIds(new Set([messageId]));
+  }, []);
+
+  const toggleSelectedMessage = useCallback((messageId: string) => {
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      if (next.size === 0) {
+        setSelectionMode(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearMessageSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedMessageIds(new Set());
+    setForwardDialogOpen(false);
+    setForwardContactId("");
+  }, []);
+
+  const selectedMessages = useMemo(() => {
+    if (selectedMessageIds.size === 0) return [];
+    return messages.filter((message) => selectedMessageIds.has(message.id));
+  }, [messages, selectedMessageIds]);
+
+  const handleDeleteSelectedMessages = useCallback(async () => {
+    if (!conversation || selectedMessageIds.size === 0) return;
+    const ok = window.confirm(t("deleteSelectedConfirm", { count: selectedMessageIds.size }));
+    if (!ok) return;
+
+    const ids = Array.from(selectedMessageIds);
+    const snapshot = messages;
+    onMessagesLoaded(messages.filter((message) => !selectedMessageIds.has(message.id)));
+    clearMessageSelection();
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("messages")
+      .delete()
+      .eq("conversation_id", conversation.id)
+      .in("id", ids);
+
+    if (error) {
+      onMessagesLoaded(snapshot);
+      toast.error(t("messageDeleteFailed"));
+    }
+  }, [
+    clearMessageSelection,
+    conversation,
+    messages,
+    onMessagesLoaded,
+    selectedMessageIds,
+    t,
+  ]);
+
+  const handleCopySelectedMessages = useCallback(async () => {
+    if (selectedMessages.length === 0) return;
+
+    const text = selectedMessages
+      .map((message) => buildReplyPreview(message, tQuote).trim())
+      .filter(Boolean)
+      .join("\n");
+
+    if (!text) {
+      toast.error(tActions("nothingToCopy"));
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(tActions("copied"));
+    } catch {
+      toast.error(tActions("copyFailed"));
+    }
+  }, [selectedMessages, tActions, tQuote]);
+
+  const openForwardDialog = useCallback(() => {
+    if (selectedMessageIds.size === 0) return;
+    setForwardContactId("");
+    setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+    setForwardDialogOpen(true);
+  }, [conversation?.whatsapp_config_id, lines, selectedMessageIds.size]);
+
+  const openForwardDialogForMessage = useCallback(
+    (messageId: string) => {
+      setSelectionMode(true);
+      setSelectedMessageIds(new Set([messageId]));
+      setForwardContactId("");
+      setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+      setForwardDialogOpen(true);
+    },
+    [conversation?.whatsapp_config_id, lines],
+  );
+
+  useEffect(() => {
+    if (!forwardDialogOpen) return;
+
+    let cancelled = false;
+    const supabase = createClient();
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("contacts")
+        .select("*")
+        .order("name", { ascending: true });
+      if (cancelled) return;
+      if (!error) {
+        setForwardContacts((data as Contact[]) ?? []);
+      }
+      setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation?.whatsapp_config_id, forwardDialogOpen, lines]);
+
+  const handleForwardSelectedMessages = useCallback(async () => {
+    if (!forwardContactId || !forwardLineId || selectedMessages.length === 0) return;
+
+    try {
+      const openRes = await fetch("/api/inbox/start-conversation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contact_id: forwardContactId,
+          whatsapp_config_id: forwardLineId,
+        }),
+      });
+      const openPayload = await openRes.json().catch(() => ({}));
+      if (!openRes.ok || typeof openPayload?.conversation_id !== "string") {
+        throw new Error(openPayload?.error || `HTTP ${openRes.status}`);
+      }
+      const targetConversationId = openPayload.conversation_id as string;
+
+      for (const message of selectedMessages) {
+        const body = {
+          conversation_id: targetConversationId,
+          message_type: message.content_type === "text" ? "text" : message.content_type,
+          content_text: message.content_text ?? "",
+          media_url: message.media_url,
+        };
+        const res = await fetch("/api/whatsapp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          throw new Error(payload?.error || `HTTP ${res.status}`);
+        }
+      }
+      toast.success(t("forwarded"));
+      clearMessageSelection();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "network error";
+      toast.error(t("forwardFailed", { reason }));
+    }
+  }, [clearMessageSelection, forwardContactId, forwardLineId, selectedMessages, t]);
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
   // The "toggle" semantic (pill click) is computed at the call site where the
@@ -764,7 +1280,7 @@ export function MessageThread({
         return;
       }
       if (messageId.startsWith("temp-")) {
-        toast.error("Wait for the message to finish sending");
+        toast.error(t("waitForMessage"));
         return;
       }
 
@@ -810,33 +1326,48 @@ export function MessageThread({
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : "network error";
-        toast.error(`Reaction failed: ${reason}`);
+        toast.error(t("reactionFailed", { reason }));
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, user?.id, t],
   );
 
-  const handleAssignChange = useCallback(
-    async (agentId: string | null) => {
-      if (!conversation) return;
+  const handleDeleteConversation = useCallback(async () => {
+    if (!conversation) return;
+    const ok = window.confirm(t("deleteConfirm"));
+    if (!ok) return;
 
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("conversations")
-        .update({ assigned_agent_id: agentId })
-        .eq("id", conversation.id);
-
-      if (error) {
-        console.error("Failed to update assignment:", error);
-        toast.error("Failed to update assignment");
-        return;
+    try {
+      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+        method: "DELETE",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.error ?? "delete failed");
       }
+      onConversationDeleted?.(conversation.id);
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+      toast.error(t("deleteFailed"));
+    }
+  }, [conversation, onConversationDeleted, t]);
 
-      onAssignChange(conversation.id, agentId);
-    },
-    [conversation, onAssignChange],
-  );
+  const handleTransferSubmit = useCallback(async () => {
+    if (!conversation) return;
+    try {
+      await patchConversation({
+        action: "assign",
+        assigned_agent_id: transferAgentId || null,
+        department_id: transferDepartmentId || null,
+        whatsapp_config_id: transferLineId || null,
+      });
+      setTransferOpen(false);
+    } catch (err) {
+      console.error("Failed to transfer conversation:", err);
+      toast.error(t("assignmentFailed"));
+    }
+  }, [conversation, patchConversation, t, transferAgentId, transferDepartmentId, transferLineId]);
 
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
@@ -858,15 +1389,30 @@ export function MessageThread({
   }
 
   const displayName = contact.name || contact.phone;
+  const lineName =
+    conversation.whatsapp_config?.label ||
+    conversation.whatsapp_config?.phone_number_id ||
+    null;
   const messageGroups = groupMessagesByDate(messages);
-  const currentStatus = STATUS_OPTIONS.find(
-    (s) => s.value === conversation.status
-  );
+  const statusLabel =
+    conversation.status === "open"
+      ? t("statusOpen")
+      : conversation.status === "pending"
+        ? t("statusPending")
+        : t("statusClosed");
+  const statusColor =
+    conversation.status === "open"
+      ? "text-primary"
+      : conversation.status === "pending"
+        ? "text-amber-400"
+        : "text-muted-foreground";
   const assignedAgentId = conversation.assigned_agent_id ?? null;
-  const currentAssignee = profiles.find((p) => p.user_id === assignedAgentId);
+  const currentAssignee = members.find((p) => p.user_id === assignedAgentId);
   const assignLabel = assignedAgentId
     ? (currentAssignee?.full_name ?? t("assigned"))
     : t("assign");
+  const assigneeName = currentAssignee?.full_name ?? t("assigned");
+  const departmentHeaderColor = conversation.department?.color?.trim() || null;
 
   return (
     // `min-w-0` is load-bearing: the page already puts min-w-0 on the
@@ -880,7 +1426,7 @@ export function MessageThread({
     <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+      <div className="relative flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-2.5 sm:px-4">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -889,59 +1435,68 @@ export function MessageThread({
               type="button"
               onClick={onBack}
               aria-label={t("backToConversations")}
-              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+          <button
+            type="button"
+            onClick={() => {
+              onToggleContactPanel?.();
+            }}
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground transition-shadow hover:ring-2 hover:ring-primary/30"
+            title={t("showContact")}
+            aria-label={t("showContact")}
+            aria-pressed={contactPanelOpen}
+          >
             {displayName.charAt(0).toUpperCase()}
-          </div>
-          <div className="min-w-0">
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onToggleContactPanel?.();
+            }}
+            className="min-w-0 text-left leading-tight"
+            title={t("showContact")}
+            aria-pressed={contactPanelOpen}
+          >
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
-          </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              {assignedAgentId && (
+                <span className="hidden min-w-0 truncate sm:inline">
+                  {t("assignedTo")}: {assigneeName}
+                </span>
+              )}
+              {assignedAgentId && (lineName || sessionInfo.availableUntil) && (
+                <span className="hidden sm:inline">•</span>
+              )}
+              {lineName && (
+                <span
+                  className="hidden max-w-32 truncate sm:inline"
+                >
+                  {lineName}
+                </span>
+              )}
+              {sessionInfo.availableUntil && (
+                <span className="hidden truncate md:inline">
+                  {t("availableUntil", { value: sessionInfo.availableUntil })}
+                </span>
+              )}
+            </div>
+          </button>
           {/* Session timer badge — hidden on the narrowest phones so
               the name + back arrow keep their room. */}
-          <Badge
-            variant="outline"
-            className={cn(
-              "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
-              sessionInfo.expired ? "text-red-400" : "text-primary"
-            )}
-          >
-            <Clock className="h-3 w-3" />
-            {sessionInfo.remaining}
-          </Badge>
+          <span className="sr-only">{contact.phone}</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
               want to read and reply. Hidden on mobile, where the sidebar
               never renders as a permanent panel anyway. Issue #258. */}
-          {onToggleContactPanel && (
-            <button
-              type="button"
-              onClick={onToggleContactPanel}
-              aria-label={
-                contactPanelOpen ? t("hideContactPanel") : t("showContactPanel")
-              }
-              title={contactPanelOpen ? t("hideContact") : t("showContact")}
-              aria-pressed={contactPanelOpen}
-              className={cn(
-                "hidden h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground lg:inline-flex",
-                contactPanelOpen ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {contactPanelOpen ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRightOpen className="h-4 w-4" />
-              )}
-            </button>
-          )}
+          
 
           {/* Manual refresh — forces a refetch of the messages + the
               conversation list (the parent bumps its resyncToken). Useful
@@ -965,100 +1520,174 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Status dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
-                  currentStatus?.color ?? "text-muted-foreground"
-                )}>
-                {currentStatus ? t(`status${currentStatus.label}`) : t("status")}
-                <ChevronDown className="h-3 w-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="border-border bg-popover"
+          <Badge
+            variant="outline"
+            title={statusLabel}
+            className={cn(
+              "hidden h-7 gap-1 border-border text-[10px] sm:inline-flex",
+              sessionInfo.expired ? "text-red-400" : statusColor,
+            )}
+          >
+            <Clock className="h-3 w-3" />
+            {sessionInfo.remaining || statusLabel}
+          </Badge>
+
+          {conversation.status === "pending" && (
+            <button
+              type="button"
+              disabled={ticketAction !== null}
+              onClick={() => void handleTicketAction("accept")}
+              className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
             >
-              {STATUS_OPTIONS.map((opt) => (
-                <DropdownMenuItem
-                  key={opt.value}
-                  onClick={() => handleStatusChange(opt.value)}
-                  className={cn("text-sm", opt.color)}
-                >
-                  {t(`status${opt.label}`)}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+              <Check className="h-3 w-3" />
+              {t("accept")}
+            </button>
+          )}
+
+          {conversation.status === "open" && (
+            <>
+              <button
+                type="button"
+                disabled={ticketAction !== null}
+                onClick={() => void handleTicketAction("return_to_pending")}
+                className="inline-flex h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-primary hover:bg-muted disabled:opacity-60"
+              >
+                {t("returnToPending")}
+              </button>
+              <button
+                type="button"
+                disabled={ticketAction !== null}
+                onClick={() => void handleTicketAction("resolve")}
+                className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+              >
+                {t("resolve")}
+              </button>
+            </>
+          )}
+
+          {conversation.status === "closed" && (
+            <button
+              type="button"
+              disabled={ticketAction !== null}
+              onClick={() => void handleTicketAction("reopen")}
+              className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+            >
+              {t("reopen")}
+            </button>
+          )}
 
           {/* Assign dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
-                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                "inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted",
                 assignedAgentId ? "text-primary" : "text-muted-foreground"
               )}
+              title={assignLabel}
+              aria-label={assignLabel}
             >
-              <UserPlus className="h-3 w-3" />
-              <span className="hidden sm:inline">{assignLabel}</span>
-              <ChevronDown className="h-3 w-3" />
+              <MoreVertical className="h-4 w-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
               className="border-border bg-popover"
             >
-              {profiles.length === 0 ? (
-                <DropdownMenuItem disabled className="text-sm text-muted-foreground">
-                  {t("noTeammates")}
-                </DropdownMenuItem>
-              ) : (
-                profiles.map((p) => {
-                  const isSelected = p.user_id === assignedAgentId;
-                  const presence = getPresence(p.user_id);
-                  return (
-                    <DropdownMenuItem
-                      key={p.id}
-                      onClick={() => handleAssignChange(p.user_id)}
-                      className={cn(
-                        "text-sm",
-                        isSelected ? "text-primary" : "text-popover-foreground"
-                      )}
-                    >
-                      <PresenceDot
-                        status={presence}
-                        label={presenceLabel(
-                          presence,
-                          getRow(p.user_id)?.last_seen_at ?? null,
-                          now
-                        )}
-                        className="mr-2"
-                      />
-                      <span className="flex-1">
-                        {p.full_name}
-                        {p.user_id === user?.id ? t("me") : ""}
-                      </span>
-                      {isSelected && <Check className="ml-2 h-3 w-3" />}
-                    </DropdownMenuItem>
-                  );
-                })
-              )}
-              {assignedAgentId && (
-                <>
-                  <DropdownMenuSeparator className="bg-border" />
-                  <DropdownMenuItem
-                    onClick={() => handleAssignChange(null)}
-                    className="text-sm text-muted-foreground"
-                  >
-                    {t("unassign")}
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuItem
+                onClick={() => {
+                  setTransferAgentId(assignedAgentId ?? "");
+                  setTransferDepartmentId(conversation.department_id ?? "");
+                  setTransferLineId(conversation.whatsapp_config_id ?? "");
+                  setTransferOpen(true);
+                }}
+                className="text-sm"
+              >
+                {t("transferOrAssign")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-border" />
+              <DropdownMenuItem
+                onClick={() => void handleDeleteConversation()}
+                className="text-sm text-destructive"
+              >
+                {t("deleteTicket")}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        {departmentHeaderColor ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5"
+            style={{ backgroundColor: departmentHeaderColor }}
+          />
+        ) : null}
       </div>
+
+      <TransferDialog
+        open={transferOpen}
+        onOpenChange={setTransferOpen}
+        members={members}
+        departments={departments}
+        lines={lines}
+        selectedAgentId={transferAgentId}
+        onSelectedAgentIdChange={setTransferAgentId}
+        selectedDepartmentId={transferDepartmentId}
+        onSelectedDepartmentIdChange={setTransferDepartmentId}
+        selectedLineId={transferLineId}
+        onSelectedLineIdChange={setTransferLineId}
+        onSubmit={() => void handleTransferSubmit()}
+        getPresence={getPresence}
+        getRow={getRow}
+        now={now}
+        currentUserId={user?.id}
+        t={t}
+      />
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+        {selectionMode && (
+          <div className="sticky top-0 z-20 mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <button
+                type="button"
+                onClick={clearMessageSelection}
+                className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label={t("cancelSelection")}
+              >
+                <X className="size-4" />
+              </button>
+              {t("selectedMessages", { count: selectedMessageIds.size })}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void handleCopySelectedMessages()}
+                className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={tActions("copy")}
+                aria-label={tActions("copy")}
+              >
+                <Copy className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={openForwardDialog}
+                className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={t("forward")}
+                aria-label={t("forward")}
+              >
+                <Forward className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteSelectedMessages()}
+                className="flex size-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
+                title={t("delete")}
+                aria-label={t("delete")}
+              >
+                <Trash2 className="size-4" />
+              </button>
+            </div>
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -1077,7 +1706,7 @@ export function MessageThread({
                 {/* Date separator */}
                 <div className="mb-4 flex items-center justify-center">
                   <span className="rounded-full bg-muted px-3 py-1 text-[10px] font-medium text-muted-foreground">
-                    {formatDateSeparator(group.date, t)}
+                    {formatDateSeparator(group.date, t, locale)}
                   </span>
                 </div>
                 {/* Messages */}
@@ -1115,6 +1744,14 @@ export function MessageThread({
                         onReact={(emoji) => {
                           if (emoji) void postReaction(msg.id, emoji);
                         }}
+                        onDelete={() => handleDeleteMessage(msg.id)}
+                        onToggleStar={() => handleToggleMessageStar(msg)}
+                        onSelect={() => beginMessageSelection(msg.id)}
+                        onForward={() => openForwardDialogForMessage(msg.id)}
+                        onAiReply={() => handleAiReplyToMessage(msg)}
+                        onToggleSelected={() => toggleSelectedMessage(msg.id)}
+                        selected={selectedMessageIds.has(msg.id)}
+                        selectionMode={selectionMode}
                       >
                         <MessageBubble
                           message={msg}
@@ -1136,6 +1773,70 @@ export function MessageThread({
       {/* AI auto-reply banner — take over an active bot, or resume it
           after a handoff. Renders nothing unless the account has
           auto-reply configured. */}
+      <Dialog open={forwardDialogOpen} onOpenChange={setForwardDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogTitle>{t("forward")}</DialogTitle>
+          <div className="space-y-3">
+            <Select
+              value={forwardContactId}
+              onValueChange={(value) => setForwardContactId(value ?? "")}
+            >
+              <SelectTrigger className="w-full">
+                <span className="truncate">
+                  {forwardContacts.find((contact) => contact.id === forwardContactId)
+                    ?.name ??
+                    forwardContacts.find((contact) => contact.id === forwardContactId)
+                      ?.phone ??
+                    t("chooseForwardTarget")}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                {forwardContacts.map((contact) => (
+                    <SelectItem key={contact.id} value={contact.id}>
+                      {contact.name || contact.phone || t("unknown")}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={forwardLineId}
+              onValueChange={(value) => setForwardLineId(value ?? "")}
+            >
+              <SelectTrigger className="w-full">
+                <span className="truncate">
+                  {lines.find((line) => line.id === forwardLineId)?.label ??
+                    t("transferLine")}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                {lines.map((line) => (
+                  <SelectItem key={line.id} value={line.id}>
+                    {line.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setForwardDialogOpen(false)}
+                className="h-9 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
+              >
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                disabled={!forwardContactId || !forwardLineId}
+                onClick={() => void handleForwardSelectedMessages()}
+                className="h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {t("forward")}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <AiThreadBanner
         conversationId={conversation.id}
         disabled={conversation.ai_autoreply_disabled ?? false}
@@ -1153,11 +1854,14 @@ export function MessageThread({
       <MessageComposer
         conversationId={conversation.id}
         sessionExpired={sessionInfo.expired}
+        locked={conversationLocked}
+        lockedReason={lockedReason}
         onSend={handleSend}
         onSendMedia={handleSendMedia}
         onSendInteractive={handleSendInteractive}
         onOpenTemplates={handleOpenTemplates}
         replyTo={replyTo}
+        aiDraftSeed={aiDraftSeed}
         onClearReply={() => setReplyTo(null)}
       />
 

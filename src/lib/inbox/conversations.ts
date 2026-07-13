@@ -1,4 +1,6 @@
-import type { Conversation, Contact, Tag } from "@/types";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { Conversation, Contact, Department, Profile, Tag, WhatsAppConfig } from "@/types";
 
 /**
  * Conversation select that embeds the contact plus its tags, so the Inbox
@@ -7,12 +9,14 @@ import type { Conversation, Contact, Tag } from "@/types";
  * flattens them onto `contact.tags`.
  */
 export const CONVERSATION_SELECT =
-  "*, contact:contacts(*, contact_tags(tags(*)))";
+  "*, contact:contacts(*, contact_tags(tags(*))), whatsapp_config:whatsapp_config(id, label, phone_number_id), department:departments(id, name, color)";
 
 /** Raw shape returned by {@link CONVERSATION_SELECT} before flattening. */
 type RawContact = Contact & { contact_tags?: { tags: Tag | null }[] };
-type RawConversation = Omit<Conversation, "contact"> & {
+type RawConversation = Omit<Conversation, "contact" | "whatsapp_config" | "assigned_agent"> & {
   contact?: RawContact | null;
+  whatsapp_config?: Pick<WhatsAppConfig, "id" | "label" | "phone_number_id"> | null;
+  department?: Pick<Department, "id" | "name" | "color"> | null;
 };
 
 /**
@@ -40,6 +44,44 @@ export function normalizeConversations(
   rows: RawConversation[],
 ): Conversation[] {
   return rows.map(normalizeConversation);
+}
+
+export async function hydrateAssignedAgents(
+  db: SupabaseClient,
+  accountId: string,
+  conversations: Conversation[],
+): Promise<Conversation[]> {
+  const agentIds = Array.from(
+    new Set(
+      conversations
+        .map((conversation) => conversation.assigned_agent_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  if (agentIds.length === 0) return conversations;
+
+  const { data, error } = await db
+    .from("profiles")
+    .select("user_id, full_name, email, avatar_url")
+    .eq("account_id", accountId)
+    .in("user_id", agentIds);
+
+  if (error) throw error;
+
+  const profilesByUserId = new Map(
+    ((data ?? []) as Pick<
+      Profile,
+      "user_id" | "full_name" | "email" | "avatar_url"
+    >[]).map((profile) => [profile.user_id, profile]),
+  );
+
+  return conversations.map((conversation) => ({
+    ...conversation,
+    assigned_agent: conversation.assigned_agent_id
+      ? profilesByUserId.get(conversation.assigned_agent_id) ?? null
+      : null,
+  }));
 }
 
 export interface ContactFilters {

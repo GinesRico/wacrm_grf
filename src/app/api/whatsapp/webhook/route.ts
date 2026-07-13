@@ -300,6 +300,8 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           // inserts that need it for NOT NULL FK compliance. Always
           // the admin who saved the WhatsApp config.
           config.user_id,
+          config.id,
+          config.department_id ?? null,
           decryptedAccessToken
         )
       }
@@ -568,6 +570,8 @@ async function processMessage(
   // (contacts, conversations). Always the admin who saved the
   // WhatsApp config; the choice is arbitrary post-017 but stable.
   configOwnerUserId: string,
+  whatsappConfigId: string,
+  departmentId: string | null,
   accessToken: string
 ) {
   const senderPhone = normalizePhone(message.from)
@@ -587,7 +591,9 @@ async function processMessage(
   const convResult = await findOrCreateConversation(
     accountId,
     configOwnerUserId,
-    contactRecord.id
+    contactRecord.id,
+    whatsappConfigId,
+    departmentId
   )
   if (!convResult) return
   const conversation = convResult.conversation
@@ -1045,16 +1051,40 @@ async function findOrCreateConversation(
   accountId: string,
   configOwnerUserId: string,
   contactId: string,
+  whatsappConfigId: string,
+  departmentId: string | null,
 ) {
-  // Look for existing conversation in this account
+  // Look for existing conversation in this account for the inbound line.
   const { data: existing, error: findError } = await supabaseAdmin()
     .from('conversations')
     .select('*')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
+    .eq('whatsapp_config_id', whatsappConfigId)
     .single()
 
   if (!findError && existing) {
+    if (existing.status === 'closed') {
+      const { data: reopened, error: reopenError } = await supabaseAdmin()
+        .from('conversations')
+        .update({
+          status: 'pending',
+          assigned_agent_id: null,
+          department_id: departmentId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existing.id)
+        .select()
+        .single()
+
+      if (reopenError) {
+        console.error('Error reopening closed conversation:', reopenError)
+        return { conversation: existing, created: false }
+      }
+
+      return { conversation: reopened, created: false }
+    }
+
     return { conversation: existing, created: false }
   }
 
@@ -1066,6 +1096,10 @@ async function findOrCreateConversation(
       account_id: accountId,
       user_id: configOwnerUserId,
       contact_id: contactId,
+      whatsapp_config_id: whatsappConfigId,
+      department_id: departmentId,
+      status: 'pending',
+      assigned_agent_id: null,
     })
     .select()
     .single()

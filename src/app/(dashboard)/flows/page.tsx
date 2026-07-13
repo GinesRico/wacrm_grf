@@ -264,6 +264,12 @@ export default function FlowsPage() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {templates.map((template) => {
                   const Icon = TEMPLATE_ICONS[template.icon] ?? FileText;
+                  const templateName = t(
+                    `templates.${template.slug}.name` as Parameters<typeof t>[0],
+                  );
+                  const templateDescription = t(
+                    `templates.${template.slug}.description` as Parameters<typeof t>[0],
+                  );
                   return (
                     <button
                       key={template.slug}
@@ -274,10 +280,10 @@ export default function FlowsPage() {
                     >
                       <Icon className="h-5 w-5 text-primary" />
                       <span className="text-sm font-semibold text-popover-foreground">
-                        {template.name}
+                        {templateName}
                       </span>
                       <span className="text-xs leading-relaxed text-muted-foreground">
-                        {template.description}
+                        {templateDescription}
                       </span>
                       <span className="mt-auto border-t border-border pt-2 text-[11px] text-muted-foreground">
                         {t("nodeCount", { count: template.node_count })}

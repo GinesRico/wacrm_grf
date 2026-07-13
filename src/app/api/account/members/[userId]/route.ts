@@ -19,6 +19,7 @@ import type { PostgrestError } from "@supabase/supabase-js";
 
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
 import { isAccountRole } from "@/lib/auth/roles";
+import { supabaseAdmin } from "@/lib/flows/admin-client";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -42,6 +43,28 @@ function rpcErrorToResponse(err: PostgrestError): NextResponse {
   );
 }
 
+async function validDepartmentIds(accountId: string, requested: unknown): Promise<string[]> {
+  if (!Array.isArray(requested)) return [];
+  const unique = Array.from(
+    new Set(
+      requested.filter(
+        (id): id is string => typeof id === "string" && id.length > 0,
+      ),
+    ),
+  );
+  if (unique.length === 0) return [];
+
+  const { data, error } = await supabaseAdmin()
+    .from("departments")
+    .select("id")
+    .eq("account_id", accountId)
+    .in("id", unique);
+
+  if (error) throw error;
+  const allowed = new Set(((data ?? []) as { id: string }[]).map((row) => row.id));
+  return unique.filter((id) => allowed.has(id));
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ userId: string }> },
@@ -58,11 +81,20 @@ export async function PATCH(
     const { userId } = await params;
 
     const body = (await request.json().catch(() => null)) as
-      | { role?: unknown }
+      | { role?: unknown; department_ids?: unknown }
       | null;
     const role = body?.role;
+    const hasRolePatch = role !== undefined;
+    const hasDepartmentPatch = Array.isArray(body?.department_ids);
 
-    if (!isAccountRole(role)) {
+    if (!hasRolePatch && !hasDepartmentPatch) {
+      return NextResponse.json(
+        { error: "No member changes provided" },
+        { status: 400 },
+      );
+    }
+
+    if (hasRolePatch && !isAccountRole(role)) {
       return NextResponse.json(
         { error: "'role' must be one of owner, admin, agent, viewer" },
         { status: 400 },
@@ -81,12 +113,50 @@ export async function PATCH(
       );
     }
 
-    const { error } = await ctx.supabase.rpc("set_member_role", {
-      p_user_id: userId,
-      p_new_role: role,
-    });
+    const db = supabaseAdmin();
 
-    if (error) return rpcErrorToResponse(error);
+    if (hasRolePatch) {
+      const { error } = await ctx.supabase.rpc("set_member_role", {
+        p_user_id: userId,
+        p_new_role: role,
+      });
+
+      if (error) return rpcErrorToResponse(error);
+    }
+
+    if (hasDepartmentPatch) {
+      const { data: member, error: memberError } = await db
+        .from("profiles")
+        .select("user_id")
+        .eq("account_id", ctx.accountId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (memberError) throw memberError;
+      if (!member) {
+        return NextResponse.json({ error: "Member not found" }, { status: 404 });
+      }
+
+      const departmentIds = await validDepartmentIds(ctx.accountId, body?.department_ids);
+      const { error: deleteError } = await db
+        .from("department_members")
+        .delete()
+        .eq("account_id", ctx.accountId)
+        .eq("user_id", userId);
+      if (deleteError) throw deleteError;
+
+      if (departmentIds.length > 0) {
+        const { error: insertError } = await db
+          .from("department_members")
+          .insert(
+            departmentIds.map((departmentId) => ({
+              account_id: ctx.accountId,
+              department_id: departmentId,
+              user_id: userId,
+            })),
+          );
+        if (insertError) throw insertError;
+      }
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {

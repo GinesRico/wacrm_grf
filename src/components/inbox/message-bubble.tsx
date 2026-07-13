@@ -19,6 +19,7 @@ import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
+import { WhatsAppText } from "./whatsapp-text";
 import { useTranslations } from "next-intl";
 
 interface MessageBubbleProps {
@@ -110,6 +111,7 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={src ?? ""}
       alt={alt}
@@ -124,7 +126,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
     case "text":
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
+          <WhatsAppText text={message.content_text} />
         </p>
       );
 
@@ -132,15 +134,23 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage url={message.media_url} alt={t("sharedImageAlt")} />
           ) : (
             <MediaUnavailable label={t("photo")} t={t} />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <WhatsAppText text={message.content_text} />
             </p>
           )}
+          {message.interactive_payload ? (
+            <div className="mt-2">
+              <InteractivePreview
+                payload={{ ...message.interactive_payload, body: "" }}
+                hideEmptyBody
+              />
+            </div>
+          ) : null}
         </div>
       );
 
@@ -158,7 +168,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <WhatsAppText text={message.content_text} />
             </p>
           )}
         </div>
@@ -188,7 +198,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
         >
           <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
           <span className="truncate">
-            {message.content_text || t("document")}
+            <WhatsAppText text={message.content_text || t("document")} />
           </span>
         </a>
       );
@@ -202,7 +212,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
           </span>
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <WhatsAppText text={message.content_text} />
             </p>
           )}
         </div>
@@ -212,7 +222,9 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
       return (
         <div className="flex items-center gap-2 text-sm">
           <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span>{message.content_text || t("locationShared")}</span>
+          <span>
+            <WhatsAppText text={message.content_text || t("locationShared")} />
+          </span>
         </div>
       );
 
@@ -237,14 +249,14 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
               {t("buttonReply")}
             </span>
             <p className="whitespace-pre-wrap break-words text-sm">
-              {message.content_text || t("interactiveReply")}
+              <WhatsAppText text={message.content_text || t("interactiveReply")} />
             </p>
           </div>
         );
       }
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("interactiveReply")}
+          <WhatsAppText text={message.content_text || t("interactiveReply")} />
         </p>
       );
     }
@@ -252,7 +264,7 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
     default:
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || t("unsupported")}
+          <WhatsAppText text={message.content_text || t("unsupported")} />
         </p>
       );
   }

@@ -219,7 +219,7 @@ export function ProfileForm() {
           <div className="flex flex-wrap items-center gap-5">
             <Avatar size="lg" className="size-16">
               {currentAvatar ? (
-                <AvatarImage src={currentAvatar} alt={fullName || 'Avatar'} />
+                <AvatarImage src={currentAvatar} alt={fullName || t('avatarAlt')} />
               ) : null}
               <AvatarFallback className="bg-primary/10 text-base text-primary">
                 {initial}

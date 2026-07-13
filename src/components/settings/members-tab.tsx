@@ -62,6 +62,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useTranslations } from 'next-intl';
 import { RequireRole } from '@/components/auth/require-role';
 import { useAuth } from '@/hooks/use-auth';
@@ -75,6 +81,7 @@ import {
 import { InviteMemberDialog } from './invite-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
+import type { Department } from '@/types';
 
 interface Member {
   user_id: string;
@@ -83,6 +90,7 @@ interface Member {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  department_ids?: string[];
 }
 
 interface Invitation {
@@ -131,6 +139,7 @@ export function MembersTab() {
   const { getPresence, getRow, now } = usePresence();
 
   const [members, setMembers] = useState<Member[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -156,6 +165,11 @@ export function MembersTab() {
       }
       const mdata = (await mres.json()) as { members: Member[] };
       setMembers(mdata.members);
+      const departmentRes = await fetch('/api/departments', { cache: 'no-store' });
+      const departmentPayload = await departmentRes.json().catch(() => ({}));
+      if (departmentRes.ok) {
+        setDepartments((departmentPayload.departments as Department[] | undefined) ?? []);
+      }
 
       if (ires) {
         if (!ires.ok) {
@@ -170,11 +184,11 @@ export function MembersTab() {
       }
     } catch (err) {
       console.error('[MembersTab] load error:', err);
-      toast.error('Could not reach the server');
+      toast.error(t('serverError'));
     } finally {
       setLoading(false);
     }
-  }, [canManageMembers]);
+  }, [canManageMembers, t]);
 
   useEffect(() => {
     void loadEverything();
@@ -222,7 +236,55 @@ export function MembersTab() {
         ),
       );
       console.error('[MembersTab] role change error:', err);
-      toast.error('Could not reach the server');
+      toast.error(t('serverError'));
+    } finally {
+      setPendingMemberAction(null);
+    }
+  }
+
+  async function handleDepartmentChange(member: Member, departmentId: string) {
+    const current = member.department_ids ?? [];
+    const nextDepartmentIds = current.includes(departmentId)
+      ? current.filter((id) => id !== departmentId)
+      : [...current, departmentId];
+    const previous = current;
+
+    setPendingMemberAction(member.user_id);
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.user_id === member.user_id
+          ? { ...m, department_ids: nextDepartmentIds }
+          : m,
+      ),
+    );
+
+    try {
+      const res = await fetch(`/api/account/members/${member.user_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ department_ids: nextDepartmentIds }),
+      });
+      if (!res.ok) {
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.user_id === member.user_id
+              ? { ...m, department_ids: previous }
+              : m,
+          ),
+        );
+        const payload = await res.json().catch(() => ({}));
+        toast.error(payload.error || t('departmentUpdateFailed'));
+        return;
+      }
+      toast.success(t('departmentUpdatedToast', { name: member.full_name || t('unnamed') }));
+    } catch (err) {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.user_id === member.user_id ? { ...m, department_ids: previous } : m,
+        ),
+      );
+      console.error('[MembersTab] department change error:', err);
+      toast.error(t('serverError'));
     } finally {
       setPendingMemberAction(null);
     }
@@ -248,7 +310,7 @@ export function MembersTab() {
       setRemovingMember(null);
     } catch (err) {
       console.error('[MembersTab] remove error:', err);
-      toast.error('Could not reach the server');
+      toast.error(t('serverError'));
     } finally {
       setPendingMemberAction(null);
     }
@@ -268,7 +330,7 @@ export function MembersTab() {
       setInvitations((prev) => prev.filter((i) => i.id !== invite.id));
     } catch (err) {
       console.error('[MembersTab] revoke error:', err);
-      toast.error('Could not reach the server');
+      toast.error(t('serverError'));
     }
   }
 
@@ -357,7 +419,7 @@ export function MembersTab() {
                             {member.avatar_url ? (
                               <AvatarImage
                                 src={member.avatar_url}
-                                alt={member.full_name || 'Member'}
+                                alt={member.full_name || t('memberAvatarAlt')}
                               />
                             ) : null}
                             <AvatarFallback className="bg-primary/10 text-sm font-medium text-primary">
@@ -410,6 +472,48 @@ export function MembersTab() {
                       inline. Items align to the start on mobile so the
                       role dropdown lines up under the avatar. */}
                   <div className="flex items-center gap-2 sm:gap-3">
+                    {canManageMembers ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          className="inline-flex h-8 max-w-44 items-center justify-center rounded-md border border-border bg-muted px-3 text-xs text-foreground hover:bg-muted/80 disabled:opacity-60"
+                          disabled={isBusy || departments.length === 0}
+                        >
+                          <span className="truncate">
+                            {(member.department_ids?.length ?? 0) > 0
+                              ? t('departmentsCount', {
+                                  count: member.department_ids?.length ?? 0,
+                                })
+                              : t('departmentsNone')}
+                          </span>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56">
+                          {departments.length === 0 ? (
+                            <DropdownMenuCheckboxItem disabled checked={false}>
+                              {t('departmentsEmpty')}
+                            </DropdownMenuCheckboxItem>
+                          ) : (
+                            departments.map((department) => (
+                              <DropdownMenuCheckboxItem
+                                key={department.id}
+                                checked={(member.department_ids ?? []).includes(department.id)}
+                                onCheckedChange={() =>
+                                  handleDepartmentChange(member, department.id)
+                                }
+                              >
+                                <span className="inline-flex min-w-0 items-center gap-2">
+                                  <span
+                                    className="size-2 rounded-full"
+                                    style={{ backgroundColor: department.color }}
+                                  />
+                                  <span className="truncate">{department.name}</span>
+                                </span>
+                              </DropdownMenuCheckboxItem>
+                            ))
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : null}
+
                     {/* Role display / editor. Inline Select is admin+
                         only AND not allowed on the owner row (owner
                         changes go through transfer, which lands later). */}

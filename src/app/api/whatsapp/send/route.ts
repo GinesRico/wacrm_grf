@@ -77,6 +77,7 @@ export async function POST(request: Request) {
       template_message_params,
       interactive_payload,
       reply_to_message_id,
+      whatsapp_config_id,
     } = body
 
     if ((!conversationIdInput && !contact_id) || !message_type) {
@@ -116,7 +117,7 @@ export async function POST(request: Request) {
     if (conversationIdInput) {
       const { data, error: convError } = await supabase
         .from('conversations')
-        .select('id')
+        .select('id, status')
         .eq('id', conversationIdInput)
         .eq('account_id', accountId)
         .single()
@@ -125,6 +126,12 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: 'Conversation not found' },
           { status: 404 }
+        )
+      }
+      if (data.status && data.status !== 'open') {
+        return NextResponse.json(
+          { error: 'Accept or reopen this conversation before sending messages.' },
+          { status: 409 },
         )
       }
       conversationId = data.id
@@ -149,8 +156,15 @@ export async function POST(request: Request) {
         supabase,
         accountId,
         user.id,
-        contact_id
+        contact_id,
+        typeof whatsapp_config_id === 'string' ? whatsapp_config_id : null,
       )
+      if (resolved === 'not_open') {
+        return NextResponse.json(
+          { error: 'Accept or reopen this conversation before sending messages.' },
+          { status: 409 },
+        )
+      }
       if (!resolved) {
         return NextResponse.json(
           { error: 'Failed to open a conversation for this contact' },
@@ -223,15 +237,45 @@ async function findOrCreateConversation(
   accountId: string,
   userId: string,
   contactId: string,
-): Promise<string | null> {
-  const { data: existing } = await supabase
+  whatsappConfigId: string | null,
+): Promise<string | 'not_open' | null> {
+  let resolvedConfigId = whatsappConfigId
+  if (resolvedConfigId) {
+    const { data: line } = await supabase
+      .from('whatsapp_config')
+      .select('id')
+      .eq('id', resolvedConfigId)
+      .eq('account_id', accountId)
+      .maybeSingle()
+    if (!line) return null
+  } else {
+    const { data: line } = await supabase
+      .from('whatsapp_config')
+      .select('id')
+      .eq('account_id', accountId)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    resolvedConfigId = line?.id ?? null
+  }
+
+  let query = supabase
     .from('conversations')
-    .select('id')
+    .select('id, status')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
-    .maybeSingle()
 
-  if (existing) return existing.id
+  query = resolvedConfigId
+    ? query.eq('whatsapp_config_id', resolvedConfigId)
+    : query.is('whatsapp_config_id', null)
+
+  const { data: existing } = await query.maybeSingle()
+
+  if (existing) {
+    if (existing.status && existing.status !== 'open') return 'not_open'
+    return existing.id
+  }
 
   const { data: created, error } = await supabase
     .from('conversations')
@@ -239,6 +283,9 @@ async function findOrCreateConversation(
       account_id: accountId,
       user_id: userId,
       contact_id: contactId,
+      whatsapp_config_id: resolvedConfigId,
+      status: 'open',
+      assigned_agent_id: userId,
     })
     .select('id')
     .single()

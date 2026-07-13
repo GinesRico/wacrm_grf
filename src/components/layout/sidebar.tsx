@@ -6,9 +6,7 @@ import { useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
-import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import {
-  Bell,
   Bot,
   Crown,
   GitBranch,
@@ -92,7 +90,6 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
   { href: "/inbox", labelKey: "inbox", icon: MessageSquare },
-  { href: "/notifications", labelKey: "notifications", icon: Bell },
   { href: "/contacts", labelKey: "contacts", icon: Users },
   { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
@@ -109,16 +106,22 @@ interface SidebarProps {
   /** Controlled on mobile by the Header's hamburger button. Ignored on lg+. */
   open?: boolean;
   onClose?: () => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 import { useTranslations } from "next-intl";
 
-export function Sidebar({ open = false, onClose }: SidebarProps) {
+export function Sidebar({
+  open = false,
+  onClose,
+  collapsed = false,
+  onToggleCollapsed,
+}: SidebarProps) {
   const t = useTranslations("Sidebar");
   const pathname = usePathname();
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
-  const unreadNotifications = useUnreadNotifications();
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -180,21 +183,46 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           "transition-transform duration-200 ease-out will-change-transform",
           open ? "translate-x-0" : "-translate-x-full",
           // Desktop: static, always visible — reset all the mobile framing.
-          "lg:static lg:z-0 lg:w-60 lg:translate-x-0 lg:transition-none",
+          "lg:static lg:z-0 lg:translate-x-0 lg:transition-[width]",
+          collapsed ? "lg:w-16" : "lg:w-60",
         )}
-        aria-label="Primary"
+        aria-label={t("primaryNav")}
       >
         {/* Logo row. On mobile we put a close button here; on desktop the
             close button is hidden since the sidebar is always-visible. */}
-        <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+        <div
+          className={cn(
+            "flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4",
+            collapsed && "lg:justify-center lg:px-3",
+          )}
+        >
+          <div
+            className={cn(
+              "flex min-w-0 items-center gap-2",
+              collapsed && "lg:justify-center",
+            )}
+          >
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              aria-label={collapsed ? t("expandSidebar") : t("collapseSidebar")}
+              title={collapsed ? t("expandSidebar") : t("collapseSidebar")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-primary/35 focus:ring-offset-2 focus:ring-offset-card disabled:pointer-events-none"
+              disabled={!onToggleCollapsed}
+            >
               <MessageSquare className="h-4 w-4" />
-            </div>
-            <span className="text-sm font-semibold text-foreground">
+            </button>
+            <Link
+              href="/dashboard"
+              className={cn(
+                "truncate text-sm font-semibold text-foreground",
+                collapsed && "lg:hidden",
+              )}
+              title={t("title")}
+            >
               {t("title")}
-            </span>
-          </Link>
+            </Link>
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -206,7 +234,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         </div>
 
         {/* Main navigation */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4">
+        <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <ul className="flex flex-col gap-1">
             {navItems.map((item) => {
               const isActive =
@@ -216,13 +244,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               const showUnreadDot =
                 item.href === "/inbox" && totalUnread > 0 && !isActive;
 
-              // Unlike the inbox dot, the notifications count stays visible
               // even while the page is active — it reflects unread state
-              // (cleared by marking notifications read), not "currently
-              // viewing this section".
-              const showNotificationBadge =
-                item.href === "/notifications" && unreadNotifications > 0;
-
               return (
                 <li key={item.href}>
                   <Link
@@ -230,14 +252,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     className={cn(
                       // Taller on mobile so fingers can hit the row reliably (≥44px).
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors lg:py-2",
+                      collapsed && "lg:justify-center lg:px-0",
                       isActive
                         ? "bg-primary/10 text-primary"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
+                    title={collapsed ? t(item.labelKey as string) : undefined}
                   >
                     <item.icon className="h-4 w-4" />
-                    <span className="flex-1">{t(item.labelKey as string)}</span>
-                    {item.beta && (
+                    <span className={cn("flex-1", collapsed && "lg:hidden")}>
+                      {t(item.labelKey as string)}
+                    </span>
+                    {item.beta && !collapsed && (
                       <span
                         aria-label={t("beta")}
                         className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-300"
@@ -252,14 +278,6 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                       >
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
                         <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-                      </span>
-                    )}
-                    {showNotificationBadge && (
-                      <span
-                        aria-label={t("unreadNotifications", { count: unreadNotifications })}
-                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
-                      >
-                        {unreadNotifications > 9 ? "9+" : unreadNotifications}
                       </span>
                     )}
                   </Link>
@@ -283,9 +301,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                         ? "bg-primary/10 text-primary"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
+                    title={collapsed ? t(item.labelKey as string) : undefined}
                   >
                     <item.icon className="h-4 w-4" />
-                    {t(item.labelKey as string)}
+                    <span className={cn(collapsed && "lg:hidden")}>
+                      {t(item.labelKey as string)}
+                    </span>
                   </Link>
                 </li>
               );
@@ -294,14 +315,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         </nav>
 
         {/* User section */}
-        <div className="shrink-0 border-t border-border p-3">
+        <div className={cn("shrink-0 border-t border-border p-3", collapsed && "lg:px-2")}>
           {/* Account name display — surfaced only when the account
               name differs from the user's own name (see
               `showAccountStrip`). For a default solo account the two
               match, so we hide it to avoid duplicating the user name
               below; for renamed or shared accounts it tells the user
               which account they're acting in. */}
-          {showAccountStrip && account?.name ? (
+          {!collapsed && showAccountStrip && account?.name ? (
             <div className="mb-2 flex items-center gap-2 px-3 text-xs text-muted-foreground">
               <UsersRound className="size-3.5 shrink-0" />
               {/* `title=` exposes the full name on hover when it
@@ -331,7 +352,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             </div>
           ) : null}
           <DropdownMenu>
-            <DropdownMenuTrigger className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/60 focus:bg-muted/60 focus:outline-none data-popup-open:bg-muted/60">
+            <DropdownMenuTrigger
+              className={cn(
+                "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/60 focus:bg-muted/60 focus:outline-none data-popup-open:bg-muted/60",
+                collapsed && "lg:justify-center lg:px-0",
+              )}
+            >
               <Avatar className="size-8 shrink-0">
                 {profile?.avatar_url ? (
                   <AvatarImage
@@ -345,7 +371,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                     "U"}
                 </AvatarFallback>
               </Avatar>
-              <div className="min-w-0 flex-1">
+              <div className={cn("min-w-0 flex-1", collapsed && "lg:hidden")}>
                 <p className="truncate text-sm font-medium text-foreground">
                   {profile?.full_name ?? t("defaultUser")}
                 </p>

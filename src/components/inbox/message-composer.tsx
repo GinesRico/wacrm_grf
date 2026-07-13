@@ -112,11 +112,14 @@ interface MediaDraft {
 interface MessageComposerProps {
   conversationId: string;
   sessionExpired: boolean;
+  locked?: boolean;
+  lockedReason?: string;
   onSend: (text: string, replyToId?: string) => void;
   onSendMedia: (payload: SendMediaPayload) => void;
   onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
+  aiDraftSeed?: string | null;
   onClearReply?: () => void;
 }
 
@@ -134,11 +137,14 @@ const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 export function MessageComposer({
   conversationId,
   sessionExpired,
+  locked = false,
+  lockedReason,
   onSend,
   onSendMedia,
   onSendInteractive,
   onOpenTemplates,
   replyTo,
+  aiDraftSeed,
   onClearReply,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
@@ -190,7 +196,7 @@ export function MessageComposer({
   const canSend = useCan("send-messages");
   const readOnly = !canSend;
   // Media (like free-form text) is only allowed inside the 24h window.
-  const inputsDisabled = readOnly || sessionExpired;
+  const inputsDisabled = readOnly || sessionExpired || locked;
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -222,7 +228,7 @@ export function MessageComposer({
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired) return;
+    if (!trimmed || sending || sessionExpired || locked) return;
 
     setSending(true);
     try {
@@ -234,7 +240,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
+  }, [text, sending, sessionExpired, locked, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -269,15 +275,15 @@ export function MessageComposer({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (data.code === "ai_not_configured") {
-          toast.error("AI isn't set up yet — enable it in Settings → AI Assistant.");
+          toast.error(t("aiNotConfigured"));
         } else {
-          toast.error(data.error ?? "Couldn't draft a reply.");
+          toast.error(data.error ?? t("aiDraftFailed"));
         }
         return;
       }
       const draftText = typeof data.draft === "string" ? data.draft.trim() : "";
       if (!draftText) {
-        toast.error("The assistant didn't return a reply.");
+        toast.error(t("aiEmptyReply"));
         return;
       }
       setText(draftText);
@@ -292,11 +298,16 @@ export function MessageComposer({
         }
       });
     } catch {
-      toast.error("Couldn't reach the AI assistant.");
+      toast.error(t("aiNetworkFailed"));
     } finally {
       setDrafting(false);
     }
-  }, [drafting, conversationId, adjustHeight]);
+  }, [drafting, conversationId, adjustHeight, t]);
+
+  useEffect(() => {
+    if (!aiDraftSeed) return;
+    void handleDraft();
+  }, [aiDraftSeed, handleDraft]);
 
   // ---- Interactive message + quick replies --------------------------
 
@@ -390,9 +401,11 @@ export function MessageComposer({
       const max = MEDIA_MAX_BYTES_BY_KIND[kind];
       if (file.size > max) {
         toast.error(
-          `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — ${kind} limit is ${Math.round(
-            max / 1024 / 1024,
-          )} MB.`,
+          t("fileTooLarge", {
+            size: (file.size / 1024 / 1024).toFixed(1),
+            kind,
+            max: Math.round(max / 1024 / 1024),
+          }),
         );
         return;
       }
@@ -403,12 +416,12 @@ export function MessageComposer({
         removeStaged(draftRef.current?.path);
         setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Upload failed.");
+        toast.error(err instanceof Error ? err.message : t("uploadFailed"));
       } finally {
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged, t],
   );
 
   const handlePicked = useCallback(
@@ -431,7 +444,7 @@ export function MessageComposer({
       });
       if (file.size === 0) return; // cancelled / empty take
       if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
-        toast.error("Recording is too long (over 16 MB).");
+        toast.error(t("recordingTooLong"));
         return;
       }
       setBusy(true);
@@ -440,18 +453,18 @@ export function MessageComposer({
         removeStaged(draftRef.current?.path);
         setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Upload failed.");
+        toast.error(err instanceof Error ? err.message : t("uploadFailed"));
       } finally {
         setBusy(false);
       }
     },
-    [removeStaged],
+    [removeStaged, t],
   );
 
   const startRecording = useCallback(async () => {
     if (inputsDisabled || busy || recording) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined") {
-      toast.error("Voice recording isn't supported in this browser.");
+      toast.error(t("voiceUnsupported"));
       return;
     }
     try {
@@ -478,9 +491,9 @@ export function MessageComposer({
     } catch {
       void recorderRef.current?.stop().catch(() => {});
       recorderRef.current = null;
-      toast.error("Microphone access denied or unavailable.");
+      toast.error(t("microphoneDenied"));
     }
-  }, [inputsDisabled, busy, recording, finalizeRecording]);
+  }, [inputsDisabled, busy, recording, finalizeRecording, t]);
 
   const stopRecording = useCallback(() => {
     clearTimer();
@@ -700,9 +713,9 @@ export function MessageComposer({
           <GatedButton
             variant="ghost"
             size="sm"
-            canAct={!readOnly}
+            canAct={!readOnly && !locked}
             gateReason="send messages"
-            title={readOnly ? undefined : t("sendTemplate")}
+            title={locked ? lockedReason : readOnly ? undefined : t("sendTemplate")}
             className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
             onClick={onOpenTemplates}
           >
@@ -712,10 +725,10 @@ export function MessageComposer({
           <GatedButton
             variant="ghost"
             size="sm"
-            canAct={!readOnly}
+            canAct={!readOnly && !locked}
             gateReason="send messages"
             disabled={drafting}
-            title={readOnly ? undefined : t("draftWithAI")}
+            title={locked ? lockedReason : readOnly ? undefined : t("draftWithAI")}
             className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
             onClick={handleDraft}
           >
@@ -734,27 +747,29 @@ export function MessageComposer({
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
-                : sessionExpired
+                : locked
+                  ? (lockedReason ?? t("lockedPlaceholder"))
+                  : sessionExpired
                   ? t("sessionExpiredPlaceholder")
                   : t("typeMessagePlaceholder")
             }
-            disabled={sessionExpired || readOnly}
+            disabled={sessionExpired || readOnly || locked}
             rows={1}
             // Textarea keeps its own inline title — the GatedButton
             // wrapping pattern doesn't apply to non-button inputs.
             // The placeholder text also surfaces the read-only state.
-            title={readOnly ? t("readOnlyTitle") : undefined}
+            title={locked ? lockedReason : readOnly ? t("readOnlyTitle") : undefined}
             className={cn(
               "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+              (sessionExpired || readOnly || locked) && "cursor-not-allowed opacity-50"
             )}
           />
 
           <GatedButton
             size="sm"
-            canAct={!readOnly}
+            canAct={!readOnly && !locked}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
+            disabled={!text.trim() || sessionExpired || locked || sending}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
           >

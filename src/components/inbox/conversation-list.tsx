@@ -2,17 +2,27 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import {
-  CONVERSATION_SELECT,
-  matchesContactFilters,
-  normalizeConversations,
-} from "@/lib/inbox/conversations";
+import { matchesContactFilters } from "@/lib/inbox/conversations";
+import type { InboxScope, InboxSubtab, InboxTab } from "@/lib/inbox/tickets";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
-import { useTranslations } from "next-intl";
+import type { Conversation, Department, Message, Tag } from "@/types";
+import {
+  Search,
+  ChevronDown,
+  X,
+  Check,
+  Inbox,
+  CheckSquare,
+  Building2,
+  User,
+  Users,
+  Eye,
+} from "lucide-react";
+import { format, type Locale } from "date-fns";
+import { es } from "date-fns/locale";
+import { useLocale, useTranslations } from "next-intl";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -21,128 +31,135 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useAuth } from "@/hooks/use-auth";
+import { WhatsAppText } from "./whatsapp-text";
+import { TransferChatDialog } from "./transfer-chat-dialog";
 
 interface ConversationListProps {
   activeConversationId: string | null;
   onSelect: (conversation: Conversation) => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
+  onConversationUpdated: (conversation: Conversation) => void;
   /**
    * Increment to force the fetch effect below to refire. The parent
-   * bumps this on realtime reconnect / tab visibility → visible so the
+   * bumps this on realtime reconnect / tab visibility -> visible so the
    * list catches up on any events sent while the WS was disconnected
    * or the tab was throttled. Optional so existing callers keep working.
    */
   resyncToken?: number;
 }
 
-const STATUS_COLORS: Record<ConversationStatus, string> = {
-  open: "bg-primary",
-  pending: "bg-amber-500",
-  closed: "bg-muted-foreground",
-};
-
-
-
-type InboxFilter = ConversationStatus | "all" | "unread";
+interface InboxCounts {
+  inboxOpen: number;
+  inboxPending: number;
+  resolved: number;
+}
 
 export function ConversationList({
   activeConversationId,
   onSelect,
   conversations,
   onConversationsLoaded,
+  onConversationUpdated,
   resyncToken = 0,
 }: ConversationListProps) {
   const t = useTranslations("Inbox.conversationList");
-  
-  const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = useMemo(() => [
-    { label: t("filterAll"), value: "all" },
-    { label: t("filterUnread"), value: "unread" },
-    { label: t("filterOpen"), value: "open" },
-    { label: t("filterPending"), value: "pending" },
-    { label: t("filterClosed"), value: "closed" },
-  ], [t]);
+  const tThread = useTranslations("Inbox.messageThread");
+  const locale = useLocale();
+  const dateLocale = locale.startsWith("es") ? es : undefined;
+  const { user } = useAuth();
 
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<InboxFilter>("all");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [tab, setTab] = useState<InboxTab>("inbox");
+  const [subtab, setSubtab] = useState<InboxSubtab>("open");
+  const [scope, setScope] = useState<InboxScope>("mine");
+  const [counts, setCounts] = useState<InboxCounts>({
+    inboxOpen: 0,
+    inboxPending: 0,
+    resolved: 0,
+  });
   const [loading, setLoading] = useState(true);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [previewConversation, setPreviewConversation] =
+    useState<Conversation | null>(null);
+  const [previewMessages, setPreviewMessages] = useState<Message[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
   // Broadcast audience filtering. Company is an exact match on the field.
   const [tags, setTags] = useState<Tag[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
 
   // Keep the latest callback in a ref so the fetch effect below can
-  // have a stable, empty-dep identity. Previously the fetch useCallback
-  // depended on `onConversationsLoaded`, which depends on the parent's
-  // `deepLinkConvId` — so every URL change (including one the parent
-  // triggered via router.replace after a click) caused a fresh
-  // conversations fetch. That extra refetch was the trigger for the
-  // deep-link auto-select running a second time and wiping the active
-  // thread's messages.
-  // Mutation lives in an effect (not render) per React 19's refs rule;
-  // the fetch runs once on mount so it's fine to read the slightly
-  // older value — the very next render updates the ref for any
-  // subsequent async completion.
+  // have a stable identity across parent rerenders.
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
   });
 
   useEffect(() => {
-    const supabase = createClient();
+    const handle = setTimeout(() => setDebouncedSearch(search.trim()), 500);
+    return () => clearTimeout(handle);
+  }, [search]);
+
+  useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select(CONVERSATION_SELECT)
-        .order("last_message_at", { ascending: false });
+      setLoading(true);
+      const params = new URLSearchParams({ tab, subtab, scope });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+
+      const res = await fetch(`/api/inbox/conversations?${params.toString()}`);
+      const payload = await res.json().catch(() => ({}));
 
       if (cancelled) return;
 
-      if (error) {
-        // Supabase errors have non-enumerable properties — log fields explicitly
-        console.error("Failed to fetch conversations:", {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        });
+      if (!res.ok) {
+        console.error("Failed to fetch conversations:", payload);
         setLoading(false);
         return;
       }
 
-      onConversationsLoadedRef.current(normalizeConversations(data ?? []));
+      onConversationsLoadedRef.current(payload.conversations ?? []);
+      setCounts(
+        payload.counts ?? { inboxOpen: 0, inboxPending: 0, resolved: 0 },
+      );
       setLoading(false);
     })();
 
     return () => {
       cancelled = true;
     };
-    // `resyncToken` is included so the parent can force a refetch when
-    // the realtime channel reconnects or the tab regains focus — catches
-    // up on any events sent while the WS was disconnected or throttled.
-  }, [resyncToken]);
+  }, [tab, subtab, scope, debouncedSearch, resyncToken]);
 
-  // Tag definitions for the filter picker — loaded once so labels/colours
+  // Tag and department definitions for the filter pickers; loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
   useEffect(() => {
     const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const { data } = await supabase.from("tags").select("*").order("name");
+      const [{ data }, departmentRes] = await Promise.all([
+        supabase.from("tags").select("*").order("name"),
+        fetch("/api/departments", { cache: "no-store" }),
+      ]);
+      const departmentPayload = await departmentRes.json().catch(() => ({}));
       if (!cancelled && data) setTags(data as Tag[]);
+      if (!cancelled && departmentRes.ok) {
+        setDepartments((departmentPayload.departments as Department[] | undefined) ?? []);
+      }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Company options are derived from the loaded conversations — there's no
-  // separate companies table, and only companies with a live conversation
-  // are worth offering as an inbox filter.
   const companies = useMemo(() => {
     const set = new Set<string>();
     for (const c of conversations) {
@@ -161,38 +178,57 @@ export function ConversationList({
   const filtered = useMemo(() => {
     let result = conversations;
 
-    if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
-      result = result.filter((c) => c.status === filter);
+    if (tab === "resolved") {
+      result = result.filter((c) => c.status === "closed");
+    } else if (tab === "inbox") {
+      result = result.filter((c) => c.status === subtab);
     }
 
-    // Contact-based filters (tags via OR logic, exact company match).
+    if (scope === "mine") {
+      result = result.filter(
+        (c) =>
+          c.status === "pending" ||
+          !user?.id ||
+          c.assigned_agent_id === user.id,
+      );
+    }
+
+    if (selectedDepartmentIds.length > 0) {
+      result = result.filter(
+        (c) => c.department_id && selectedDepartmentIds.includes(c.department_id),
+      );
+    }
+
     if (selectedTagIds.length > 0 || selectedCompany !== null) {
       result = result.filter((c) =>
         matchesContactFilters(c, {
           tagIds: selectedTagIds,
           company: selectedCompany,
-        })
+        }),
       );
     }
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter((c) => {
-        const name = c.contact?.name?.toLowerCase() ?? "";
-        const phone = c.contact?.phone?.toLowerCase() ?? "";
-        const lastMsg = c.last_message_text?.toLowerCase() ?? "";
-        return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
-      });
-    }
-
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [
+    conversations,
+    tab,
+    subtab,
+    scope,
+    user?.id,
+    selectedDepartmentIds,
+    selectedTagIds,
+    selectedCompany,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
-      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+    );
+  }, []);
+
+  const toggleDepartment = useCallback((id: string) => {
+    setSelectedDepartmentIds((prev) =>
+      prev.includes(id) ? prev.filter((departmentId) => departmentId !== id) : [...prev, id],
     );
   }, []);
 
@@ -206,71 +242,215 @@ export function ConversationList({
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setSearch(e.target.value);
+      if (tab !== "search") setTab("search");
     },
-    []
+    [tab],
   );
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
       onSelect(conv);
     },
-    [onSelect]
+    [onSelect],
   );
 
-  const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const handleAccept = useCallback(
+    async (conversation: Conversation) => {
+      if (acceptingId) return;
+      setAcceptingId(conversation.id);
+      try {
+        const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "accept" }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.conversation) {
+          console.error("Failed to accept conversation:", payload);
+          return;
+        }
+        onConversationUpdated(payload.conversation);
+        onSelect(payload.conversation);
+        setTab("inbox");
+        setSubtab("open");
+      } finally {
+        setAcceptingId(null);
+      }
+    },
+    [acceptingId, onConversationUpdated, onSelect],
+  );
+
+  const handlePreview = useCallback(
+    async (conversation: Conversation) => {
+      setPreviewConversation(conversation);
+      setPreviewMessages([]);
+      setPreviewLoading(true);
+
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversation.id)
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (error) {
+        console.error("Failed to load conversation preview:", error);
+        setPreviewMessages([]);
+      } else {
+        setPreviewMessages([...(data ?? [])].reverse() as Message[]);
+      }
+
+      setPreviewLoading(false);
+    },
+    [],
+  );
+
+  const patchConversation = useCallback(
+    async (conversation: Conversation, action: "accept" | "resolve") => {
+      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.conversation) {
+        console.error("Failed to update conversation:", payload);
+        return;
+      }
+      onConversationUpdated(payload.conversation);
+      setPreviewConversation(payload.conversation);
+    },
+    [onConversationUpdated],
+  );
 
   return (
-    // w-full on mobile so the list occupies the whole viewport when it's
-    // the single pane showing; fixed 320px on desktop where it shares the
-    // row with the thread + contact sidebar.
-    <div className="flex h-full w-full flex-col border-r border-border bg-card lg:w-80">
-      {/* Search + Filter */}
-      <div className="space-y-2 border-b border-border p-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={handleSearchChange}
-            placeholder={t("searchPlaceholder")}
-            className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
-          />
+    <div
+      className={cn(
+        "flex h-full w-full flex-col border-r border-border bg-card lg:w-[23.75rem]",
+      )}
+    >
+      <div className="border-b border-border">
+        <div className="flex items-center border-b border-border px-2 pt-2">
+          <div className="grid flex-1 grid-cols-3">
+            <TabButton
+              active={tab === "inbox"}
+              onClick={() => setTab("inbox")}
+              label={t("tabInbox")}
+              icon={Inbox}
+            />
+            <TabButton
+              active={tab === "resolved"}
+              onClick={() => setTab("resolved")}
+              label={t("tabResolved")}
+              icon={CheckSquare}
+            />
+            <TabButton
+              active={tab === "search"}
+              onClick={() => setTab("search")}
+              label={t("tabSearch")}
+              icon={Search}
+            />
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1">
-          <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                {activeFilter?.label ?? t("filterAll")}
-                <ChevronDown className="h-3 w-3" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              className="border-border bg-popover"
-            >
-              {FILTER_OPTIONS.map((opt) => (
-                <DropdownMenuItem
-                  key={opt.value}
-                  onClick={() => setFilter(opt.value)}
-                  className={cn(
-                    "text-sm",
-                    filter === opt.value
-                      ? "text-primary"
-                      : "text-popover-foreground"
-                  )}
-                >
-                  {opt.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <div className="space-y-2 p-3">
+            <div className="flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={handleSearchChange}
+                  placeholder={
+                    tab === "inbox"
+                      ? t("searchInboxPlaceholder")
+                      : t("searchPlaceholder")
+                  }
+                  className="h-10 rounded-full border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
+                />
+              </div>
 
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  title={t("departmentFilter")}
+                  aria-label={t("departmentFilter")}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/10 hover:text-primary"
+                >
+                  <Building2 className="h-4 w-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  {departments.length === 0 ? (
+                    <DropdownMenuItem disabled>
+                      {t("noDepartmentsAvailable")}
+                    </DropdownMenuItem>
+                  ) : (
+                    departments.map((department) => (
+                      <DropdownMenuCheckboxItem
+                        key={department.id}
+                        checked={selectedDepartmentIds.includes(department.id)}
+                        onCheckedChange={() => toggleDepartment(department.id)}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span
+                            className="size-2 rounded-full"
+                            style={{ backgroundColor: department.color }}
+                          />
+                          <span className="truncate">{department.name}</span>
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setScope((value) => (value === "mine" ? "all" : "mine"))
+                }
+                title={scope === "mine" ? t("scopeMine") : t("scopeAll")}
+                aria-label={scope === "mine" ? t("scopeMine") : t("scopeAll")}
+                className={cn(
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors",
+                  scope === "mine"
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-border bg-background text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {scope === "mine" ? (
+                  <User className="h-4 w-4" />
+                ) : (
+                  <Users className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+
+            {tab === "inbox" && (
+              <div className="grid grid-cols-2">
+                <SubtabButton
+                  active={subtab === "open"}
+                  onClick={() => setSubtab("open")}
+                  label={t("subtabOpen")}
+                  count={counts.inboxOpen}
+                />
+                <SubtabButton
+                  active={subtab === "pending"}
+                  onClick={() => setSubtab("pending")}
+                  label={t("subtabPending")}
+                  count={counts.inboxPending}
+                />
+              </div>
+            )}
+
+        <div className="flex flex-wrap items-center gap-1">
           {tags.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  "inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
                   selectedTagIds.length > 0
                     ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 {t("tags")}
@@ -285,19 +465,19 @@ export function ConversationList({
                 align="start"
                 className="max-h-64 w-56 border-border bg-popover"
               >
-                {tags.map((t) => (
+                {tags.map((tag) => (
                   <DropdownMenuCheckboxItem
-                    key={t.id}
-                    checked={selectedTagIds.includes(t.id)}
-                    onCheckedChange={() => toggleTag(t.id)}
+                    key={tag.id}
+                    checked={selectedTagIds.includes(tag.id)}
+                    onCheckedChange={() => toggleTag(tag.id)}
                     className="text-sm text-popover-foreground"
                   >
                     <span className="flex items-center gap-2">
                       <span
                         className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: t.color }}
+                        style={{ backgroundColor: tag.color }}
                       />
-                      <span className="truncate">{t.name}</span>
+                      <span className="truncate">{tag.name}</span>
                     </span>
                   </DropdownMenuCheckboxItem>
                 ))}
@@ -309,10 +489,10 @@ export function ConversationList({
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(
-                  "inline-flex max-w-40 items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  "inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
                   selectedCompany
                     ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <span className="truncate">{selectedCompany ?? t("company")}</span>
@@ -328,7 +508,7 @@ export function ConversationList({
                     "text-sm",
                     selectedCompany === null
                       ? "text-primary"
-                      : "text-popover-foreground"
+                      : "text-popover-foreground",
                   )}
                 >
                   {t("allCompanies")}
@@ -341,7 +521,7 @@ export function ConversationList({
                       "text-sm",
                       selectedCompany === co
                         ? "text-primary"
-                        : "text-popover-foreground"
+                        : "text-popover-foreground",
                     )}
                   >
                     <span className="truncate">{co}</span>
@@ -388,14 +568,9 @@ export function ConversationList({
             </button>
           </div>
         )}
+        </div>
       </div>
 
-      {/* Conversation Items.
-          `min-h-0` is load-bearing: a flex child defaults to
-          min-height:auto, so without it this ScrollArea grows to fit
-          every conversation instead of shrinking to the remaining
-          space — the list then overflows and gets clipped by the
-          parent's overflow-hidden with no scrollbar (issue #229). */}
       <ScrollArea className="min-h-0 flex-1">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -413,13 +588,97 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                onPreview={handlePreview}
+                onAccept={handleAccept}
+                accepting={acceptingId === conv.id}
+                dateLocale={dateLocale}
                 t={t}
               />
             ))}
           </div>
         )}
       </ScrollArea>
+
+      <ConversationPreviewDialog
+        conversation={previewConversation}
+        messages={previewMessages}
+        loading={previewLoading}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewConversation(null);
+            setPreviewMessages([]);
+          }
+        }}
+        onAccept={(conversation) => patchConversation(conversation, "accept")}
+        onResolve={(conversation) => patchConversation(conversation, "resolve")}
+        t={t}
+        tTransfer={tThread}
+        currentUserId={user?.id}
+        onConversationUpdated={onConversationUpdated}
+      />
     </div>
+  );
+}
+
+function TabButton({
+  active,
+  label,
+  icon: Icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: typeof Inbox;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      className={cn(
+        "relative flex items-center justify-center gap-1.5 px-2 text-xs font-medium transition-colors",
+        "h-14 border-b-2",
+        active
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon className={cn("h-4 w-4", active && "text-primary")} />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function SubtabButton({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "relative h-10 border-b-2 px-2 text-sm font-medium transition-colors",
+        active
+          ? "border-primary text-foreground"
+          : "border-border text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <span>{label}</span>
+      {count > 0 && (
+        <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+          {count}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -427,6 +686,10 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  onPreview: (conversation: Conversation) => void;
+  onAccept: (conversation: Conversation) => void;
+  accepting: boolean;
+  dateLocale?: Locale;
   t: ReturnType<typeof useTranslations>;
 }
 
@@ -434,71 +697,380 @@ function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  onPreview,
+  onAccept,
+  accepting,
+  dateLocale,
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || t("unknown");
   const initials = displayName.charAt(0).toUpperCase();
+  const lineName =
+    conversation.whatsapp_config?.label ||
+    conversation.whatsapp_config?.phone_number_id ||
+    null;
+  const department = conversation.department;
+  const lineInitial = lineName?.charAt(0).toUpperCase() ?? null;
+  const assignedAgent = conversation.assigned_agent;
+  const assignedAgentName =
+    assignedAgent?.full_name || assignedAgent?.email || null;
+  const assignedInitial = assignedAgentName?.charAt(0).toUpperCase() ?? null;
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
   }, [onSelect, conversation]);
 
-  const timeAgo = conversation.last_message_at
-    ? formatDistanceToNow(new Date(conversation.last_message_at), {
-        addSuffix: false,
+  const lastMessageTime = conversation.last_message_at
+    ? format(new Date(conversation.last_message_at), "HH:mm", {
+        locale: dateLocale,
       })
     : "";
-
   return (
-    <button
-      onClick={handleClick}
+    <div
       className={cn(
-        "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50",
-        isActive && "border-l-2 border-primary bg-muted/70"
+        "relative flex w-full items-stretch gap-3 border-b border-border/70 pl-3 text-left transition-colors hover:bg-muted/50",
+        isActive && "bg-muted/70",
       )}
     >
-      {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
-        {contact?.avatar_url ? (
-          <img
-            src={contact.avatar_url}
-            alt={displayName}
-            className="h-10 w-10 rounded-full object-cover"
-          />
-        ) : (
-          initials
+      <span
+        className={cn(
+          "absolute inset-y-0 left-0 w-1",
+          !department &&
+            (conversation.status === "open"
+            ? "bg-primary"
+            : conversation.status === "pending"
+              ? "bg-destructive"
+              : "bg-muted-foreground"),
         )}
-      </div>
-
-      {/* Content */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">
-            {displayName}
-          </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
-        </div>
-        <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="truncate text-xs text-muted-foreground">
-            {conversation.last_message_text || t("noMessagesYet")}
-          </p>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {conversation.unread_count > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                {conversation.unread_count}
-              </span>
+        style={department ? { backgroundColor: department.color } : undefined}
+      />
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            handleClick();
+          }
+        }}
+        className="flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 text-left"
+      >
+        <div className="relative h-11 w-11 shrink-0">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+            {contact?.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={contact.avatar_url}
+                alt={displayName}
+                className="h-10 w-10 rounded-full object-cover"
+              />
+            ) : (
+              initials
             )}
+          </div>
+
+          {assignedInitial && (
             <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                STATUS_COLORS[conversation.status]
+              title={`${t("agent")}: ${assignedAgentName}`}
+              className="absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-card bg-primary/10 px-1 text-[10px] font-bold leading-none text-primary shadow-sm"
+            >
+              {assignedInitial}
+            </span>
+          )}
+        </div>
+
+        <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-foreground">
+              {displayName}
+            </span>
+            <div className="mt-0.5 min-w-0 pt-0.5">
+              <p className="truncate text-xs text-muted-foreground">
+                <WhatsAppText
+                  text={conversation.last_message_text || t("noMessagesYet")}
+                />
+              </p>
+            </div>
+          </div>
+          <div className="flex w-8 shrink-0 flex-col items-center gap-1">
+            <span className="h-3 text-[10px] leading-3 text-muted-foreground">
+              {lastMessageTime}
+            </span>
+            <div className="flex h-4 items-center gap-1">
+              <span
+                role="button"
+                tabIndex={0}
+                title={t("preview")}
+                aria-label={t("preview")}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onPreview(conversation);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onPreview(conversation);
+                  }
+                }}
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </span>
+              {conversation.unread_count > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  {conversation.unread_count}
+                </span>
               )}
-              title={conversation.status}
-            />
+            </div>
+            <div className="flex h-4 items-center">
+              {lineInitial && (
+                <span
+                  title={`${t("line")}: ${lineName}`}
+                  className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-bold leading-none text-muted-foreground"
+                >
+                  {lineInitial}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </button>
+
+      {conversation.status === "pending" && (
+        <button
+          type="button"
+          disabled={accepting}
+          onClick={() => onAccept(conversation)}
+          className="group flex w-14 shrink-0 items-center justify-center overflow-hidden bg-primary text-primary-foreground transition-all duration-200 ease-out hover:w-24 hover:bg-primary/90 disabled:opacity-60"
+          title={t("accept")}
+          aria-label={t("accept")}
+        >
+          <Check className="h-5 w-5" />
+          <span className="ml-0 max-w-0 overflow-hidden whitespace-nowrap text-xs font-bold opacity-0 transition-all duration-200 group-hover:ml-2 group-hover:max-w-16 group-hover:opacity-100">
+            {t("accept")}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ConversationPreviewDialog({
+  conversation,
+  messages,
+  loading,
+  onOpenChange,
+  onAccept,
+  onResolve,
+  t,
+  tTransfer,
+  currentUserId,
+  onConversationUpdated,
+}: {
+  conversation: Conversation | null;
+  messages: Message[];
+  loading: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAccept: (conversation: Conversation) => void;
+  onResolve: (conversation: Conversation) => void;
+  t: ReturnType<typeof useTranslations>;
+  tTransfer: ReturnType<typeof useTranslations>;
+  currentUserId?: string;
+  onConversationUpdated: (conversation: Conversation) => void;
+}) {
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferAgentId, setTransferAgentId] = useState("");
+  const [transferLineId, setTransferLineId] = useState("");
+  const [transferDepartmentId, setTransferDepartmentId] = useState("");
+  const contact = conversation?.contact;
+  const displayName = contact?.name || contact?.phone || t("unknown");
+  const initials = displayName.charAt(0).toUpperCase();
+  const lineName =
+    conversation?.whatsapp_config?.label ||
+    conversation?.whatsapp_config?.phone_number_id ||
+    null;
+  const lineInitial = lineName?.charAt(0).toUpperCase() ?? null;
+  const assignedAgentName =
+    conversation?.assigned_agent?.full_name ||
+    conversation?.assigned_agent?.email ||
+    null;
+  const assignedInitial = assignedAgentName?.charAt(0).toUpperCase() ?? null;
+
+  const handleTransferSubmit = useCallback(async () => {
+    if (!conversation) return;
+    const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "assign",
+        assigned_agent_id: transferAgentId || null,
+        whatsapp_config_id: transferLineId || null,
+        department_id: transferDepartmentId || null,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload.conversation) {
+      console.error("Failed to transfer conversation:", payload);
+      return;
+    }
+    onConversationUpdated(payload.conversation);
+    setTransferOpen(false);
+  }, [conversation, onConversationUpdated, transferAgentId, transferDepartmentId, transferLineId]);
+
+  return (
+    <Dialog open={conversation !== null} onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton
+        className="max-h-[80vh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
+      >
+        {conversation && (
+          <>
+            <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-3">
+              <div className="relative h-11 w-11 shrink-0">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+                  {contact?.avatar_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={contact.avatar_url}
+                      alt={displayName}
+                      className="h-10 w-10 rounded-full object-cover"
+                    />
+                  ) : (
+                    initials
+                  )}
+                </div>
+                {assignedInitial && (
+                  <span
+                    title={`${t("agent")}: ${assignedAgentName}`}
+                    className="absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-card bg-primary/10 px-1 text-[10px] font-bold leading-none text-primary shadow-sm"
+                  >
+                    {assignedInitial}
+                  </span>
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="truncate text-sm font-semibold">
+                  {displayName}
+                </DialogTitle>
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  {lineInitial && (
+                    <span
+                      title={`${t("line")}: ${lineName}`}
+                      className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-bold leading-none text-muted-foreground"
+                    >
+                      {lineInitial}
+                    </span>
+                  )}
+                  {lineName && <span className="truncate">{lineName}</span>}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2 pr-8">
+                {conversation.status === "pending" && (
+                  <button
+                    type="button"
+                    onClick={() => onAccept(conversation)}
+                    className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                  >
+                    {t("accept")}
+                  </button>
+                )}
+                {conversation.status === "open" && (
+                  <button
+                    type="button"
+                    onClick={() => onResolve(conversation)}
+                    className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                  >
+                    {t("resolve")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTransferAgentId(conversation.assigned_agent_id ?? "");
+                    setTransferLineId(conversation.whatsapp_config_id ?? "");
+                    setTransferDepartmentId(conversation.department_id ?? "");
+                    setTransferOpen(true);
+                  }}
+                  className="h-8 rounded-md border border-border bg-background px-3 text-xs font-medium text-primary hover:bg-muted"
+                >
+                  {t("transfer")}
+                </button>
+              </div>
+            </div>
+
+            <ScrollArea className="h-[58vh] bg-background bg-[url('/inbox-doodle.svg')] bg-repeat">
+              <div className="space-y-2 p-4">
+                {loading ? (
+                  <p className="text-center text-xs text-muted-foreground">
+                    {t("loadingPreview")}
+                  </p>
+                ) : messages.length === 0 ? (
+                  <p className="text-center text-xs text-muted-foreground">
+                    {t("noMessagesYet")}
+                  </p>
+                ) : (
+                  messages.map((message) => (
+                    <PreviewMessageBubble key={message.id} message={message} />
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+            <TransferChatDialog
+              open={transferOpen}
+              onOpenChange={setTransferOpen}
+              selectedAgentId={transferAgentId}
+              onSelectedAgentIdChange={setTransferAgentId}
+              selectedLineId={transferLineId}
+              onSelectedLineIdChange={setTransferLineId}
+              selectedDepartmentId={transferDepartmentId}
+              onSelectedDepartmentIdChange={setTransferDepartmentId}
+              currentUserId={currentUserId}
+              onSubmit={() => void handleTransferSubmit()}
+              t={tTransfer}
+            />
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PreviewMessageBubble({ message }: { message: Message }) {
+  const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const fallback =
+    message.content_type === "image"
+      ? "Imagen"
+      : message.content_type === "audio"
+        ? "Nota de voz"
+        : message.content_type === "document"
+          ? "Documento"
+          : "";
+  const text = message.content_text || fallback;
+
+  return (
+    <div className={cn("flex", isAgent ? "justify-end" : "justify-start")}>
+      <div
+        className={cn(
+          "max-w-[78%] rounded-lg px-3 py-2 text-sm shadow-sm",
+          isAgent
+            ? "bg-primary/15 text-foreground"
+            : "bg-card text-card-foreground",
+        )}
+      >
+        <p className="whitespace-pre-wrap break-words">
+          <WhatsAppText text={text} />
+        </p>
+        <span className="mt-1 block text-right text-[10px] text-muted-foreground">
+          {new Date(message.created_at).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+      </div>
+    </div>
   );
 }

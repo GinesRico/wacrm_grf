@@ -3,18 +3,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
-import { cn } from "@/lib/utils";
-import type { Contact, Deal, ContactNote, Tag } from "@/types";
+import type { Contact, Conversation, Deal, ContactNote, Message, Tag } from "@/types";
 import {
   Phone,
   Mail,
   Copy,
   Check,
-  User,
   Tag as TagIcon,
   DollarSign,
   StickyNote,
   Plus,
+  Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -23,9 +22,15 @@ import { useTranslations } from "next-intl";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  conversation?: Conversation | null;
+  liveStarredMessages?: Message[];
 }
 
-export function ContactSidebar({ contact }: ContactSidebarProps) {
+export function ContactSidebar({
+  contact,
+  conversation,
+  liveStarredMessages,
+}: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
@@ -34,6 +39,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
+  const [starredMessages, setStarredMessages] = useState<Message[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
 
@@ -42,8 +48,8 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
     const supabase = createClient();
 
-    // Fetch deals, notes, and tags in parallel
-    const [dealsRes, notesRes, tagsRes] = await Promise.all([
+    // Fetch deals, notes, tags, and starred messages in parallel.
+    const [dealsRes, notesRes, tagsRes, starredRes] = await Promise.all([
       supabase
         .from("deals")
         .select("*, stage:pipeline_stages(*)")
@@ -58,6 +64,14 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
         .from("contact_tags")
         .select("id, tag_id, tags(*)")
         .eq("contact_id", contact.id),
+      conversation
+        ? supabase
+            .from("messages")
+            .select("*")
+            .eq("conversation_id", conversation.id)
+            .eq("is_starred", true)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ]);
 
     if (dealsRes.data) setDeals(dealsRes.data);
@@ -71,7 +85,10 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
         }));
       setTags(mapped);
     }
-  }, [contact]);
+    if (starredRes.data) {
+      setStarredMessages((starredRes.data as Message[]) ?? []);
+    }
+  }, [contact, conversation]);
 
   // Load on contact change. setContactData/setTags run inside async
   // Supabase callbacks, not synchronously in the effect body.
@@ -129,6 +146,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
   const displayName = contact.name || contact.phone;
   const initials = displayName.charAt(0).toUpperCase();
+  const displayedStarredMessages = liveStarredMessages ?? starredMessages;
 
   return (
     <div className="flex h-full w-70 flex-col border-l border-border bg-card">
@@ -138,6 +156,7 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           <div className="flex flex-col items-center text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-lg font-semibold text-foreground">
               {contact.avatar_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={contact.avatar_url}
                   alt={displayName}
@@ -202,6 +221,35 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
                   >
                     {tag.name}
                   </span>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div className="my-4 border-t border-border" />
+
+          {/* Starred messages */}
+          <div>
+            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              <Star className="h-3 w-3" />
+              {tSidebar("starredMessages")}
+            </div>
+            <div className="mt-2 space-y-2">
+              {displayedStarredMessages.length === 0 ? (
+                <p className="px-1 text-xs text-muted-foreground">
+                  {tSidebar("noStarredMessages")}
+                </p>
+              ) : (
+                displayedStarredMessages.map((message) => (
+                  <div key={message.id} className="rounded-lg bg-muted px-3 py-2">
+                    <p className="line-clamp-3 whitespace-pre-wrap text-xs text-muted-foreground">
+                      {message.content_text || tSidebar("messageWithoutText")}
+                    </p>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      {format(new Date(message.created_at), "MMM d, yyyy HH:mm")}
+                    </p>
+                  </div>
                 ))
               )}
             </div>

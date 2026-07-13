@@ -33,11 +33,18 @@ export async function GET() {
 
     // RLS on profiles allows reading any row whose account matches
     // the caller's, so this query is naturally account-scoped.
-    const { data, error } = await ctx.supabase
-      .from("profiles")
-      .select("user_id, full_name, email, avatar_url, account_role, created_at")
-      .eq("account_id", ctx.accountId)
-      .order("created_at", { ascending: true });
+    const [{ data, error }, { data: departmentRows, error: departmentError }] =
+      await Promise.all([
+        ctx.supabase
+          .from("profiles")
+          .select("user_id, full_name, email, avatar_url, account_role, created_at")
+          .eq("account_id", ctx.accountId)
+          .order("created_at", { ascending: true }),
+        ctx.supabase
+          .from("department_members")
+          .select("department_id, user_id")
+          .eq("account_id", ctx.accountId),
+      ]);
 
     if (error) {
       console.error("[GET /api/account/members] fetch error:", error);
@@ -46,8 +53,21 @@ export async function GET() {
         { status: 500 },
       );
     }
+    if (departmentError) {
+      console.error("[GET /api/account/members] department fetch error:", departmentError);
+      return NextResponse.json(
+        { error: "Failed to load member departments" },
+        { status: 500 },
+      );
+    }
 
     const canSeeEmails = canManageMembers(ctx.role);
+    const departmentIdsByUser = new Map<string, string[]>();
+    for (const row of (departmentRows ?? []) as { department_id: string; user_id: string }[]) {
+      const list = departmentIdsByUser.get(row.user_id) ?? [];
+      list.push(row.department_id);
+      departmentIdsByUser.set(row.user_id, list);
+    }
 
     const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
@@ -62,6 +82,7 @@ export async function GET() {
           avatar_url: row.avatar_url,
           role: row.account_role,
           joined_at: row.created_at,
+          department_ids: departmentIdsByUser.get(row.user_id) ?? [],
         },
       ];
     });

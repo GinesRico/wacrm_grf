@@ -24,10 +24,15 @@ import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
+import {
+  getDefaultWhatsAppConfig,
+  getWhatsAppConfigById,
+} from '@/lib/whatsapp/config';
 
 export interface ResolvedConversation {
   conversationId: string;
   contactId: string;
+  whatsappConfigId: string;
   /** True if this call created the contact (vs matched an existing one). */
   contactCreated: boolean;
 }
@@ -42,7 +47,8 @@ export async function resolveConversationByPhone(
   db: SupabaseClient,
   accountId: string,
   phone: string,
-  name?: string | null
+  name?: string | null,
+  whatsappConfigId?: string | null,
 ): Promise<ResolvedConversation> {
   const sanitized = sanitizePhoneForMeta(phone);
   if (!isValidE164(sanitized)) {
@@ -55,11 +61,9 @@ export async function resolveConversationByPhone(
 
   // Fail fast (and create nothing) when the account has no WhatsApp
   // connected — the same error the send would raise anyway.
-  const { data: config } = await db
-    .from('whatsapp_config')
-    .select('id')
-    .eq('account_id', accountId)
-    .maybeSingle();
+  const config = whatsappConfigId
+    ? await getWhatsAppConfigById(db, accountId, whatsappConfigId)
+    : await getDefaultWhatsAppConfig(db, accountId);
   if (!config) {
     throw new SendMessageError(
       'whatsapp_not_configured',
@@ -144,10 +148,16 @@ export async function resolveConversationByPhone(
     .select('id')
     .eq('account_id', accountId)
     .eq('contact_id', contactId)
+    .eq('whatsapp_config_id', config.id)
     .maybeSingle();
 
   if (conv?.id) {
-    return { conversationId: conv.id, contactId, contactCreated };
+    return {
+      conversationId: conv.id,
+      contactId,
+      whatsappConfigId: config.id,
+      contactCreated,
+    };
   }
 
   const { data: newConv, error: convErr } = await db
@@ -156,6 +166,8 @@ export async function resolveConversationByPhone(
       account_id: accountId,
       user_id: ownerUserId,
       contact_id: contactId,
+      whatsapp_config_id: config.id,
+      status: 'open',
     })
     .select('id')
     .single();
@@ -169,5 +181,10 @@ export async function resolveConversationByPhone(
     );
   }
 
-  return { conversationId: newConv.id, contactId, contactCreated };
+  return {
+    conversationId: newConv.id,
+    contactId,
+    whatsappConfigId: config.id,
+    contactCreated,
+  };
 }
