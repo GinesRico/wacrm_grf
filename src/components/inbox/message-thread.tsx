@@ -415,6 +415,9 @@ export function MessageThread({
   const [forwardContacts, setForwardContacts] = useState<Contact[]>([]);
   const [aiDraftSeed, setAiDraftSeed] = useState<string | null>(null);
   const [lines, setLines] = useState<TransferLine[]>([]);
+  const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
+    Record<string, InteractiveMessagePayload>
+  >({});
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
@@ -434,6 +437,75 @@ export function MessageThread({
       }
     };
   }, []);
+
+  useEffect(() => {
+    const templateNames = Array.from(
+      new Set(
+        messages
+          .filter(
+            (message) =>
+              !message.interactive_payload &&
+              message.template_name,
+          )
+          .map((message) => message.template_name as string),
+      ),
+    );
+
+    if (templateNames.length === 0) {
+      setTemplateFallbackPayloads({});
+      return;
+    }
+
+    let cancelled = false;
+    const supabase = createClient();
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("message_templates")
+        .select("name, footer_text, buttons")
+        .in("name", templateNames);
+
+      if (cancelled) return;
+      if (error) {
+        console.error("Failed to fetch template buttons:", error);
+        return;
+      }
+
+      const payloads: Record<string, InteractiveMessagePayload> = {};
+      for (const row of data ?? []) {
+        const buttons = Array.isArray(row.buttons) ? row.buttons : [];
+        const previewButtons = buttons
+          .map((button, index) => {
+            if (!button || typeof button !== "object") return null;
+            const text = "text" in button ? button.text : null;
+            if (typeof text !== "string" || text.length === 0) return null;
+            return {
+              id: `template-${index}`,
+              title: text,
+            };
+          })
+          .filter((button): button is { id: string; title: string } => Boolean(button));
+
+        if (typeof row.name === "string" && previewButtons.length > 0) {
+          payloads[row.name] = {
+            kind: "buttons",
+            body: "",
+            footer:
+              typeof row.footer_text === "string" && row.footer_text.length > 0
+                ? row.footer_text
+                : undefined,
+            buttons: previewButtons,
+          };
+        }
+      }
+
+      setTemplateFallbackPayloads(payloads);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages]);
   const handleRefreshClick = useCallback(() => {
     if (isRefreshing || !onRefresh) return;
     setIsRefreshing(true);
@@ -882,10 +954,13 @@ export function MessageThread({
     async (body: Record<string, unknown>) => {
       if (!conversation) return;
 
-      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+      const res = await fetch("/api/inbox/conversations", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          ...body,
+          conversation_id: conversation.id,
+        }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.conversation) {
@@ -1339,9 +1414,12 @@ export function MessageThread({
     if (!ok) return;
 
     try {
-      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+      const res = await fetch(
+        `/api/inbox/conversations?conversation_id=${encodeURIComponent(conversation.id)}`,
+        {
         method: "DELETE",
-      });
+        },
+      );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(payload?.error ?? "delete failed");
@@ -1759,6 +1837,11 @@ export function MessageThread({
                           reactions={msgReactions}
                           currentUserId={user?.id}
                           onToggleReaction={handlePillToggle}
+                          templateFallbackPayload={
+                            msg.template_name
+                              ? templateFallbackPayloads[msg.template_name]
+                              : null
+                          }
                         />
                       </MessageActions>
                     );

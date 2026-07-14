@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import type { Message, MessageReaction } from "@/types";
+import type { InteractiveMessagePayload, Message, MessageReaction } from "@/types";
 import {
   Clock,
   Check,
@@ -10,7 +10,6 @@ import {
   XCircle,
   FileText,
   MapPin,
-  LayoutTemplate,
   ImageOff,
   CornerDownLeft,
   Sparkles,
@@ -29,6 +28,7 @@ interface MessageBubbleProps {
   reactions?: MessageReaction[];
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
+  templateFallbackPayload?: InteractiveMessagePayload | null;
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -121,13 +121,85 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   );
 }
 
-function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof useTranslations> }) {
+function TemplateActions({
+  payload,
+  onPrimary,
+}: {
+  payload: InteractiveMessagePayload;
+  onPrimary: boolean;
+}) {
+  return (
+    <div className="mt-2 overflow-hidden">
+      {payload.footer ? (
+        <p
+          className={cn(
+            "px-1 py-2 text-[11px]",
+            onPrimary ? "text-primary-foreground/70" : "text-muted-foreground",
+          )}
+        >
+          <WhatsAppText text={payload.footer} />
+        </p>
+      ) : null}
+      {payload.kind === "buttons" ? (
+        payload.buttons.map((button, index) => (
+          <button
+            key={button.id || index}
+            type="button"
+            disabled
+            className={cn(
+              "flex w-full items-center justify-center gap-2 border-t px-3 py-2 text-sm font-medium",
+              onPrimary
+                ? "border-primary-foreground/25 text-primary-foreground"
+                : "border-border text-primary",
+            )}
+          >
+            <CornerDownLeft className="size-3.5" />
+            <span className="truncate">
+              <WhatsAppText text={button.title} />
+            </span>
+          </button>
+        ))
+      ) : (
+        <button
+          type="button"
+          disabled
+          className={cn(
+            "flex w-full items-center justify-center gap-2 border-t px-3 py-2 text-sm font-medium",
+            onPrimary
+              ? "border-primary-foreground/25 text-primary-foreground"
+              : "border-border text-primary",
+          )}
+        >
+          <CornerDownLeft className="size-3.5" />
+          <span className="truncate">{payload.button_label}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MessageContent({
+  message,
+  t,
+  templateFallbackPayload,
+  onPrimary,
+}: {
+  message: Message;
+  t: ReturnType<typeof useTranslations>;
+  templateFallbackPayload?: InteractiveMessagePayload | null;
+  onPrimary: boolean;
+}) {
   switch (message.content_type) {
     case "text":
       return (
-        <p className="whitespace-pre-wrap break-words text-sm">
-          <WhatsAppText text={message.content_text} />
-        </p>
+        <div>
+          <p className="whitespace-pre-wrap break-words text-sm">
+            <WhatsAppText text={message.content_text} />
+          </p>
+          {templateFallbackPayload ? (
+            <TemplateActions payload={templateFallbackPayload} onPrimary={onPrimary} />
+          ) : null}
+        </div>
       );
 
     case "image":
@@ -171,6 +243,14 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
               <WhatsAppText text={message.content_text} />
             </p>
           )}
+          {message.interactive_payload ? (
+            <div className="mt-2">
+              <InteractivePreview
+                payload={{ ...message.interactive_payload, body: "" }}
+                hideEmptyBody
+              />
+            </div>
+          ) : null}
         </div>
       );
 
@@ -203,20 +283,21 @@ function MessageContent({ message, t }: { message: Message, t: ReturnType<typeof
         </a>
       );
 
-    case "template":
+    case "template": {
+      const templatePayload = message.interactive_payload ?? templateFallbackPayload;
       return (
         <div>
-          <span className="mb-1 inline-flex items-center gap-1 rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
-            <LayoutTemplate className="h-3 w-3" />
-            {t("template")}
-          </span>
           {message.content_text && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+            <p className="whitespace-pre-wrap break-words text-sm">
               <WhatsAppText text={message.content_text} />
             </p>
           )}
+          {templatePayload ? (
+            <TemplateActions payload={templatePayload} onPrimary={onPrimary} />
+          ) : null}
         </div>
       );
+    }
 
     case "location":
       return (
@@ -276,6 +357,7 @@ export function MessageBubble({
   reactions,
   currentUserId,
   onToggleReaction,
+  templateFallbackPayload,
 }: MessageBubbleProps) {
   const t = useTranslations("Inbox.bubble");
 
@@ -306,7 +388,12 @@ export function MessageBubble({
             onPrimary={isAgent}
           />
         )}
-        <MessageContent message={message} t={t} />
+        <MessageContent
+          message={message}
+          t={t}
+          templateFallbackPayload={templateFallbackPayload}
+          onPrimary={isAgent}
+        />
         <div
           className={cn(
             "mt-1 flex items-center gap-1",

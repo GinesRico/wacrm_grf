@@ -5,7 +5,13 @@ import { createClient } from "@/lib/supabase/client";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
 import type { InboxScope, InboxSubtab, InboxTab } from "@/lib/inbox/tickets";
 import { cn } from "@/lib/utils";
-import type { Conversation, Department, Message, Tag } from "@/types";
+import type {
+  Conversation,
+  Department,
+  InteractiveMessagePayload,
+  Message,
+  Tag,
+} from "@/types";
 import {
   Search,
   ChevronDown,
@@ -17,6 +23,7 @@ import {
   User,
   Users,
   Eye,
+  CornerDownLeft,
 } from "lucide-react";
 import { format, type Locale } from "date-fns";
 import { es } from "date-fns/locale";
@@ -259,10 +266,13 @@ export function ConversationList({
       if (acceptingId) return;
       setAcceptingId(conversation.id);
       try {
-        const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+        const res = await fetch("/api/inbox/conversations", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "accept" }),
+          body: JSON.stringify({
+            action: "accept",
+            conversation_id: conversation.id,
+          }),
         });
         const payload = await res.json().catch(() => ({}));
         if (!res.ok || !payload.conversation) {
@@ -308,10 +318,10 @@ export function ConversationList({
 
   const patchConversation = useCallback(
     async (conversation: Conversation, action: "accept" | "resolve") => {
-      const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+      const res = await fetch("/api/inbox/conversations", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, conversation_id: conversation.id }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.conversation) {
@@ -885,6 +895,9 @@ function ConversationPreviewDialog({
   const [transferAgentId, setTransferAgentId] = useState("");
   const [transferLineId, setTransferLineId] = useState("");
   const [transferDepartmentId, setTransferDepartmentId] = useState("");
+  const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
+    Record<string, InteractiveMessagePayload>
+  >({});
   const contact = conversation?.contact;
   const displayName = contact?.name || contact?.phone || t("unknown");
   const initials = displayName.charAt(0).toUpperCase();
@@ -901,11 +914,12 @@ function ConversationPreviewDialog({
 
   const handleTransferSubmit = useCallback(async () => {
     if (!conversation) return;
-    const res = await fetch(`/api/inbox/conversations/${conversation.id}`, {
+    const res = await fetch("/api/inbox/conversations", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "assign",
+        conversation_id: conversation.id,
         assigned_agent_id: transferAgentId || null,
         whatsapp_config_id: transferLineId || null,
         department_id: transferDepartmentId || null,
@@ -919,6 +933,72 @@ function ConversationPreviewDialog({
     onConversationUpdated(payload.conversation);
     setTransferOpen(false);
   }, [conversation, onConversationUpdated, transferAgentId, transferDepartmentId, transferLineId]);
+
+  useEffect(() => {
+    const templateNames = Array.from(
+      new Set(
+        messages
+          .filter((message) => !message.interactive_payload && message.template_name)
+          .map((message) => message.template_name as string),
+      ),
+    );
+
+    if (templateNames.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const supabase = createClient();
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("message_templates")
+        .select("name, footer_text, buttons")
+        .in("name", templateNames);
+
+      if (cancelled) return;
+      if (error) {
+        console.error("Failed to fetch preview template buttons:", error);
+        return;
+      }
+
+      const payloads: Record<string, InteractiveMessagePayload> = {};
+      for (const row of data ?? []) {
+        const buttons = Array.isArray(row.buttons) ? row.buttons : [];
+        const previewButtons = buttons
+          .map((button, index) => {
+            if (!button || typeof button !== "object") return null;
+            const text = "text" in button ? button.text : null;
+            if (typeof text !== "string" || text.length === 0) return null;
+            return {
+              id: `template-${index}`,
+              title: text,
+            };
+          })
+          .filter((button): button is { id: string; title: string } =>
+            Boolean(button),
+          );
+
+        if (typeof row.name === "string" && previewButtons.length > 0) {
+          payloads[row.name] = {
+            kind: "buttons",
+            body: "",
+            footer:
+              typeof row.footer_text === "string" && row.footer_text.length > 0
+                ? row.footer_text
+                : undefined,
+            buttons: previewButtons,
+          };
+        }
+      }
+
+      setTemplateFallbackPayloads(payloads);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages]);
 
   return (
     <Dialog open={conversation !== null} onOpenChange={onOpenChange}>
@@ -1014,7 +1094,15 @@ function ConversationPreviewDialog({
                   </p>
                 ) : (
                   messages.map((message) => (
-                    <PreviewMessageBubble key={message.id} message={message} />
+                    <PreviewMessageBubble
+                      key={message.id}
+                      message={message}
+                      templateFallbackPayload={
+                        message.template_name
+                          ? templateFallbackPayloads[message.template_name]
+                          : null
+                      }
+                    />
                   ))
                 )}
               </div>
@@ -1039,8 +1127,68 @@ function ConversationPreviewDialog({
   );
 }
 
-function PreviewMessageBubble({ message }: { message: Message }) {
+function PreviewTemplateActions({
+  payload,
+  onPrimary,
+}: {
+  payload: InteractiveMessagePayload;
+  onPrimary: boolean;
+}) {
+  return (
+    <div className="mt-2 overflow-hidden">
+      {payload.footer ? (
+        <p
+          className={cn(
+            "px-1 py-1.5 text-[11px]",
+            onPrimary ? "text-foreground/60" : "text-muted-foreground",
+          )}
+        >
+          <WhatsAppText text={payload.footer} />
+        </p>
+      ) : null}
+      {payload.kind === "buttons" ? (
+        payload.buttons.map((button, index) => (
+          <button
+            key={button.id || index}
+            type="button"
+            disabled
+            className={cn(
+              "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
+              onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
+            )}
+          >
+            <CornerDownLeft className="size-3" />
+            <span className="truncate">
+              <WhatsAppText text={button.title} />
+            </span>
+          </button>
+        ))
+      ) : (
+        <button
+          type="button"
+          disabled
+          className={cn(
+            "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
+            onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
+          )}
+        >
+          <CornerDownLeft className="size-3" />
+          <span className="truncate">{payload.button_label}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PreviewMessageBubble({
+  message,
+  templateFallbackPayload,
+}: {
+  message: Message;
+  templateFallbackPayload?: InteractiveMessagePayload | null;
+}) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const templatePayload = message.interactive_payload ?? templateFallbackPayload;
   const fallback =
     message.content_type === "image"
       ? "Imagen"
@@ -1064,6 +1212,9 @@ function PreviewMessageBubble({ message }: { message: Message }) {
         <p className="whitespace-pre-wrap break-words">
           <WhatsAppText text={text} />
         </p>
+        {templatePayload ? (
+          <PreviewTemplateActions payload={templatePayload} onPrimary={isAgent} />
+        ) : null}
         <span className="mt-1 block text-right text-[10px] text-muted-foreground">
           {new Date(message.created_at).toLocaleTimeString([], {
             hour: "2-digit",
