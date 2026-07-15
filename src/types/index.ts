@@ -247,6 +247,10 @@ export interface Message {
   message_id?: string;
   status: MessageStatus;
   created_at: string;
+  deleted_at?: string | null;
+  deleted_by_user_id?: string | null;
+  is_forwarded?: boolean;
+  forwarded_from_message_id?: string | null;
   reply_to_message_id?: string;
   /**
    * Only set when `content_type === 'interactive'` — the stable id of

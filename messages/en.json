@@ -448,7 +448,10 @@
       "downloadMedia": "Download",
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
-      "resetZoom": "Reset zoom"
+      "resetZoom": "Reset zoom",
+      "deletedTitle": "Deleted message",
+      "deletedBody": "The sender deleted this message.",
+      "forwarded": "Forwarded"
     },
     "actions": {
       "reply": "Reply",
@@ -482,6 +485,7 @@
       "location": "[Location]",
       "template": "[Template]",
       "message": "[Message]",
+      "deletedMessage": "[Deleted message]",
       "cancelReply": "Cancel reply"
     },
     "templatePicker": {

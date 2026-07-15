@@ -85,6 +85,8 @@ export interface SendMessageParams {
   /** Structured payload for `messageType === 'interactive'`. */
   interactivePayload?: InteractiveMessagePayload | null;
   replyToMessageId?: string | null;
+  isForwarded?: boolean;
+  forwardedFromMessageId?: string | null;
 }
 
 export interface SendMessageResult {
@@ -495,6 +497,8 @@ export async function sendMessageToConversation(
       message_id: waMessageId,
       status: 'sent',
       reply_to_message_id: replyToMessageId || null,
+      is_forwarded: Boolean(params.isForwarded),
+      forwarded_from_message_id: params.forwardedFromMessageId || null,
     })
     .select()
     .single();

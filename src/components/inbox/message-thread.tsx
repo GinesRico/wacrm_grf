@@ -1136,25 +1136,36 @@ export function MessageThread({
       }
 
       const snapshot = messages;
-      const nextMessages = messages.filter((message) => message.id !== messageId);
+      const deletedAt = new Date().toISOString();
+      const nextMessages = messages.map((message) =>
+        message.id === messageId
+          ? {
+              ...message,
+              deleted_at: deletedAt,
+              deleted_by_user_id: user?.id ?? null,
+            }
+          : message,
+      );
       onMessagesLoaded(nextMessages);
       if (replyTo?.id === messageId) {
         setReplyTo(null);
       }
 
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("messages")
-        .delete()
-        .eq("id", messageId)
-        .eq("conversation_id", conversation.id);
+      const res = await fetch("/api/inbox/messages", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete",
+          message_id: messageId,
+        }),
+      });
 
-      if (error) {
+      if (!res.ok) {
         onMessagesLoaded(snapshot);
         toast.error(t("messageDeleteFailed"));
       }
     },
-    [conversation, messages, onMessagesLoaded, replyTo?.id, t],
+    [conversation, messages, onMessagesLoaded, replyTo?.id, t, user?.id],
   );
 
   const handleToggleMessageStar = useCallback(
@@ -1216,17 +1227,30 @@ export function MessageThread({
 
     const ids = Array.from(selectedMessageIds);
     const snapshot = messages;
-    onMessagesLoaded(messages.filter((message) => !selectedMessageIds.has(message.id)));
+    const deletedAt = new Date().toISOString();
+    onMessagesLoaded(
+      messages.map((message) =>
+        selectedMessageIds.has(message.id)
+          ? {
+              ...message,
+              deleted_at: deletedAt,
+              deleted_by_user_id: user?.id ?? null,
+            }
+          : message,
+      ),
+    );
     clearMessageSelection();
 
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("messages")
-      .delete()
-      .eq("conversation_id", conversation.id)
-      .in("id", ids);
+    const res = await fetch("/api/inbox/messages", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "delete",
+        message_ids: ids,
+      }),
+    });
 
-    if (error) {
+    if (!res.ok) {
       onMessagesLoaded(snapshot);
       toast.error(t("messageDeleteFailed"));
     }
@@ -1237,6 +1261,7 @@ export function MessageThread({
     onMessagesLoaded,
     selectedMessageIds,
     t,
+    user?.id,
   ]);
 
   const handleCopySelectedMessages = useCallback(async () => {
@@ -1303,6 +1328,8 @@ export function MessageThread({
 
   const handleForwardSelectedMessages = useCallback(async () => {
     if (!forwardContactId || !forwardLineId || selectedMessages.length === 0) return;
+    const forwardableMessages = selectedMessages.filter((message) => !message.deleted_at);
+    if (forwardableMessages.length === 0) return;
 
     try {
       const openRes = await fetch("/api/inbox/start-conversation", {
@@ -1319,12 +1346,14 @@ export function MessageThread({
       }
       const targetConversationId = openPayload.conversation_id as string;
 
-      for (const message of selectedMessages) {
+      for (const message of forwardableMessages) {
         const body = {
           conversation_id: targetConversationId,
           message_type: message.content_type === "text" ? "text" : message.content_type,
           content_text: message.content_text ?? "",
           media_url: message.media_url,
+          is_forwarded: true,
+          forwarded_from_message_id: message.id,
         };
         const res = await fetch("/api/whatsapp/send", {
           method: "POST",

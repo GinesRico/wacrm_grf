@@ -77,6 +77,8 @@ export async function POST(request: Request) {
       template_message_params,
       interactive_payload,
       reply_to_message_id,
+      is_forwarded,
+      forwarded_from_message_id,
       whatsapp_config_id,
     } = body
 
@@ -198,6 +200,11 @@ export async function POST(request: Request) {
         templateMessageParams: template_message_params,
         interactivePayload: interactive_payload,
         replyToMessageId: reply_to_message_id,
+        isForwarded: Boolean(is_forwarded),
+        forwardedFromMessageId:
+          typeof forwarded_from_message_id === 'string'
+            ? forwarded_from_message_id
+            : null,
       })
 
       return NextResponse.json({

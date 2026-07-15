@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { InteractiveMessagePayload, Message, MessageReaction } from "@/types";
 import {
@@ -13,11 +13,13 @@ import {
   ImageOff,
   CornerDownLeft,
   Sparkles,
+  Ban,
   X,
   Download,
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Forward,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -78,10 +80,25 @@ function MediaViewer({
   t: ReturnType<typeof useTranslations>;
 }) {
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
   const closeViewer = useCallback(() => {
     setZoom(1);
+    setPan({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
+
+  const updateZoom = useCallback((nextZoom: number) => {
+    const normalized = Math.min(5, Math.max(1, Number(nextZoom.toFixed(2))));
+    setZoom(normalized);
+    if (normalized === 1) setPan({ x: 0, y: 0 });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -92,10 +109,10 @@ function MediaViewer({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeViewer();
       if (kind === "image" && (event.key === "+" || event.key === "=")) {
-        setZoom((value) => Math.min(4, Number((value + 0.25).toFixed(2))));
+        updateZoom(zoom + 0.25);
       }
       if (kind === "image" && event.key === "-") {
-        setZoom((value) => Math.max(1, Number((value - 0.25).toFixed(2))));
+        updateZoom(zoom - 0.25);
       }
     };
 
@@ -104,12 +121,17 @@ function MediaViewer({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [closeViewer, kind, open]);
+  }, [closeViewer, kind, open, updateZoom, zoom]);
 
   if (!open) return null;
 
   const adjustZoom = (delta: number) => {
-    setZoom((value) => Math.min(4, Math.max(1, Number((value + delta).toFixed(2)))));
+    updateZoom(zoom + delta);
+  };
+
+  const resetZoom = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   };
 
   return (
@@ -139,7 +161,7 @@ function MediaViewer({
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                setZoom(1);
+                resetZoom();
               }}
               className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
               aria-label={t("resetZoom")}
@@ -188,7 +210,7 @@ function MediaViewer({
       </div>
 
       <div
-        className="flex max-h-full max-w-full items-center justify-center overflow-auto"
+        className="flex h-full w-full items-center justify-center overflow-hidden"
         onClick={(event) => event.stopPropagation()}
         onWheel={
           kind === "image"
@@ -198,14 +220,63 @@ function MediaViewer({
               }
             : undefined
         }
+        onPointerDown={
+          kind === "image" && zoom > 1
+            ? (event) => {
+                event.currentTarget.setPointerCapture(event.pointerId);
+                dragRef.current = {
+                  pointerId: event.pointerId,
+                  startX: event.clientX,
+                  startY: event.clientY,
+                  originX: pan.x,
+                  originY: pan.y,
+                };
+              }
+            : undefined
+        }
+        onPointerMove={
+          kind === "image" && zoom > 1
+            ? (event) => {
+                const drag = dragRef.current;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                setPan({
+                  x: drag.originX + event.clientX - drag.startX,
+                  y: drag.originY + event.clientY - drag.startY,
+                });
+              }
+            : undefined
+        }
+        onPointerUp={
+          kind === "image"
+            ? (event) => {
+                if (dragRef.current?.pointerId === event.pointerId) {
+                  dragRef.current = null;
+                }
+              }
+            : undefined
+        }
+        onPointerCancel={
+          kind === "image"
+            ? () => {
+                dragRef.current = null;
+              }
+            : undefined
+        }
       >
         {kind === "image" ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={src}
             alt={alt}
-            className="max-h-[88vh] max-w-[88vw] select-none rounded-md object-contain transition-transform duration-150"
-            style={{ transform: `scale(${zoom})` }}
+            className={cn(
+              "max-h-[92vh] max-w-[92vw] select-none rounded-md object-contain transition-transform duration-100",
+              zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
+            )}
+            style={{
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+              transformOrigin: "center center",
+              touchAction: "none",
+            }}
             draggable={false}
           />
         ) : (
@@ -417,6 +488,18 @@ function MessageContent({
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onPrimary: boolean;
 }) {
+  if (message.deleted_at) {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+          <Ban className="size-3.5" />
+          {t("deletedTitle")}
+        </span>
+        <p className="text-sm opacity-80">{t("deletedBody")}</p>
+      </div>
+    );
+  }
+
   switch (message.content_type) {
     case "text":
       return (
@@ -590,6 +673,7 @@ export function MessageBubble({
   const t = useTranslations("Inbox.bubble");
 
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const isDeleted = Boolean(message.deleted_at);
   const time = format(new Date(message.created_at), "HH:mm");
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
@@ -604,9 +688,13 @@ export function MessageBubble({
       <div
         className={cn(
           "relative rounded-2xl px-3 py-2",
-          isAgent
-            ? "rounded-br-md bg-primary text-primary-foreground"
-            : "rounded-bl-md bg-muted text-foreground",
+          isDeleted
+            ? isAgent
+              ? "rounded-br-md border border-primary/20 bg-primary/15 text-primary/80"
+              : "rounded-bl-md border border-border bg-muted/50 text-muted-foreground"
+            : isAgent
+              ? "rounded-br-md bg-primary text-primary-foreground"
+              : "rounded-bl-md bg-muted text-foreground",
         )}
       >
         {reply && (
@@ -616,6 +704,17 @@ export function MessageBubble({
             onPrimary={isAgent}
           />
         )}
+        {message.is_forwarded && !isDeleted ? (
+          <div
+            className={cn(
+              "mb-1 flex items-center gap-1 text-xs italic",
+              isAgent ? "text-primary-foreground/75" : "text-muted-foreground",
+            )}
+          >
+            <Forward className="size-3" />
+            {t("forwarded")}
+          </div>
+        ) : null}
         <MessageContent
           message={message}
           t={t}
@@ -648,12 +747,18 @@ export function MessageBubble({
               // timestamp must read against that (not the neutral
               // foreground) — otherwise it goes low-contrast in light
               // mode. Inbound bubbles use the muted surface.
-              isAgent ? "text-primary-foreground/70" : "text-muted-foreground",
+              isDeleted
+                ? isAgent
+                  ? "text-primary/60"
+                  : "text-muted-foreground"
+                : isAgent
+                  ? "text-primary-foreground/70"
+                  : "text-muted-foreground",
             )}
           >
             {time}
           </span>
-          {isAgent && <StatusIcon status={message.status} />}
+          {isAgent && !isDeleted && <StatusIcon status={message.status} />}
         </div>
       </div>
       {reactions && reactions.length > 0 && onToggleReaction && (

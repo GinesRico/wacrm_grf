@@ -1,0 +1,25 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e8]: Bienvenido de nuevo
+      - generic [ref=e9]: Inicia sesión en tu cuenta
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]:
+          - generic [ref=e13]: Correo electrónico
+          - textbox "Correo electrónico" [ref=e14]:
+            - /placeholder: tu@ejemplo.com
+        - generic [ref=e15]:
+          - generic [ref=e16]:
+            - generic [ref=e17]: Contraseña
+            - link "¿Olvidaste tu contraseña?" [ref=e18] [cursor=pointer]:
+              - /url: /forgot-password
+          - textbox "Contraseña" [ref=e19]:
+            - /placeholder: Introduce tu contraseña
+        - button "Iniciar sesión" [ref=e20]
+      - paragraph [ref=e21]:
+        - text: ¿No tienes cuenta?
+        - link "Crear cuenta" [ref=e22] [cursor=pointer]:
+          - /url: /signup
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e28] [cursor=pointer]

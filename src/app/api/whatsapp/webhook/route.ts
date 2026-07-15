@@ -1,7 +1,7 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
@@ -57,8 +57,8 @@ interface WhatsAppMessage {
     button_reply?: { id: string; title: string }
     list_reply?: { id: string; title: string; description?: string }
   }
-  /** Present when the customer swipe-replies to one of our messages. */
-  context?: { id: string }
+  /** Present for swipe-replies and forwarded messages. */
+  context?: { id?: string; forwarded?: boolean; frequently_forwarded?: boolean }
 }
 
 interface WhatsAppWebhookEntry {
@@ -682,6 +682,7 @@ async function processMessage(
     status: 'delivered',
     created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
     reply_to_message_id: replyToInternalId,
+    is_forwarded: Boolean(message.context?.forwarded || message.context?.frequently_forwarded),
     // Only populated for content_type='interactive'. Migration 010 added
     // the column; null for every other content_type so existing inserts
     // behave identically.

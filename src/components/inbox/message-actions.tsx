@@ -64,6 +64,7 @@ export function MessageActions({
   const actionRef = useRef<HTMLDivElement | null>(null);
   const lastTapRef = useRef(0);
   const starred = Boolean(message.is_starred);
+  const isDeleted = Boolean(message.deleted_at);
 
   const isAgent =
     message.sender_type === "agent" || message.sender_type === "bot";
@@ -174,6 +175,10 @@ export function MessageActions({
         setMenuOpen(false);
       },
     },
+    ...(
+      isDeleted
+        ? []
+        : [
     {
       key: "reply",
       label: t("reply"),
@@ -217,6 +222,8 @@ export function MessageActions({
       onClick: handleDelete,
       destructive: true,
     },
+          ]
+    ),
   ];
 
   // Row alignment lives here (not in MessageBubble) so the `group/actions`
@@ -256,7 +263,7 @@ export function MessageActions({
           </button>
         )}
         {children}
-        {starred && (
+        {starred && !isDeleted && (
           <span
             className={cn(
               "absolute -bottom-1 z-10 flex size-4 items-center justify-center rounded-full bg-popover text-amber-500 shadow ring-1 ring-border",
@@ -275,19 +282,21 @@ export function MessageActions({
             role="menu"
             aria-label={t("messageMenu")}
           >
-            <div className="mb-1 flex items-center justify-between gap-1 rounded-full border border-border bg-background px-2 py-1 shadow-sm">
-              {QUICK_EMOJIS.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => handlePickEmoji(emoji)}
-                  className="flex size-7 items-center justify-center rounded-full text-lg leading-none transition-transform hover:scale-125 hover:bg-muted"
-                  aria-label={t("reactWith", { emoji })}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+            {!isDeleted && (
+              <div className="mb-1 flex items-center justify-between gap-1 rounded-full border border-border bg-background px-2 py-1 shadow-sm">
+                {QUICK_EMOJIS.map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => handlePickEmoji(emoji)}
+                    className="flex size-7 items-center justify-center rounded-full text-lg leading-none transition-transform hover:scale-125 hover:bg-muted"
+                    aria-label={t("reactWith", { emoji })}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="overflow-hidden rounded-lg">
               {menuItems.map((item) => {
                 const Icon = item.icon;

@@ -24,6 +24,8 @@ import {
   Users,
   Eye,
   CornerDownLeft,
+  Ban,
+  Forward,
 } from "lucide-react";
 import { format, type Locale } from "date-fns";
 import { es } from "date-fns/locale";
@@ -337,12 +339,12 @@ export function ConversationList({
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-col border-r border-border bg-card lg:w-[23.75rem]",
+        "flex h-full min-w-0 w-full flex-col border-r border-border bg-card lg:w-[23.75rem]",
       )}
     >
-      <div className="border-b border-border">
-        <div className="flex items-center border-b border-border px-2 pt-2">
-          <div className="grid flex-1 grid-cols-3">
+      <div className="min-w-0 border-b border-border">
+        <div className="flex min-w-0 items-center border-b border-border px-2 pt-2">
+          <div className="grid min-w-0 flex-1 grid-cols-3">
             <TabButton
               active={tab === "inbox"}
               onClick={() => setTab("inbox")}
@@ -436,7 +438,7 @@ export function ConversationList({
             </div>
 
             {tab === "inbox" && (
-              <div className="grid grid-cols-2">
+              <div className="grid min-w-0 grid-cols-2">
                 <SubtabButton
                   active={subtab === "open"}
                   onClick={() => setSubtab("open")}
@@ -647,15 +649,15 @@ function TabButton({
       onClick={onClick}
       title={label}
       className={cn(
-        "relative flex items-center justify-center gap-1.5 px-2 text-xs font-medium transition-colors",
+        "relative flex min-w-0 items-center justify-center gap-1.5 px-1 text-xs font-medium transition-colors sm:px-2",
         "h-14 border-b-2",
         active
           ? "border-primary text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground",
       )}
     >
-      <Icon className={cn("h-4 w-4", active && "text-primary")} />
-      <span className="truncate">{label}</span>
+      <Icon className={cn("h-4 w-4 shrink-0", active && "text-primary")} />
+      <span className="min-w-0 truncate">{label}</span>
     </button>
   );
 }
@@ -676,13 +678,13 @@ function SubtabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "relative h-10 border-b-2 px-2 text-sm font-medium transition-colors",
+        "relative flex h-10 min-w-0 items-center justify-center gap-1 border-b-2 px-1 text-sm font-medium transition-colors sm:px-2",
         active
           ? "border-primary text-foreground"
           : "border-border text-muted-foreground hover:text-foreground",
       )}
     >
-      <span>{label}</span>
+      <span className="min-w-0 truncate">{label}</span>
       {count > 0 && (
         <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
           {count}
@@ -1187,8 +1189,10 @@ function PreviewMessageBubble({
   message: Message;
   templateFallbackPayload?: InteractiveMessagePayload | null;
 }) {
+  const tBubble = useTranslations("Inbox.bubble");
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const templatePayload = message.interactive_payload ?? templateFallbackPayload;
+  const isDeleted = Boolean(message.deleted_at);
   const fallback =
     message.content_type === "image"
       ? "Imagen"
@@ -1204,15 +1208,42 @@ function PreviewMessageBubble({
       <div
         className={cn(
           "max-w-[78%] rounded-lg px-3 py-2 text-sm shadow-sm",
-          isAgent
-            ? "bg-primary/15 text-foreground"
-            : "bg-card text-card-foreground",
+          isDeleted
+            ? isAgent
+              ? "border border-primary/20 bg-primary/10 text-primary/80"
+              : "border border-border bg-muted/60 text-muted-foreground"
+            : isAgent
+              ? "bg-primary/15 text-foreground"
+              : "bg-card text-card-foreground",
         )}
       >
-        <p className="whitespace-pre-wrap break-words">
-          <WhatsAppText text={text} />
-        </p>
-        {templatePayload ? (
+        {isDeleted ? (
+          <div className="flex flex-col gap-1">
+            <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+              <Ban className="size-3" />
+              {tBubble("deletedTitle")}
+            </span>
+            <span className="text-xs opacity-80">{tBubble("deletedBody")}</span>
+          </div>
+        ) : (
+          <>
+            {message.is_forwarded ? (
+              <div
+                className={cn(
+                  "mb-1 flex items-center gap-1 text-xs italic",
+                  isAgent ? "text-primary" : "text-muted-foreground",
+                )}
+              >
+                <Forward className="size-3" />
+                {tBubble("forwarded")}
+              </div>
+            ) : null}
+            <p className="whitespace-pre-wrap break-words">
+              <WhatsAppText text={text} />
+            </p>
+          </>
+        )}
+        {!isDeleted && templatePayload ? (
           <PreviewTemplateActions payload={templatePayload} onPrimary={isAgent} />
         ) : null}
         <span className="mt-1 block text-right text-[10px] text-muted-foreground">

@@ -383,7 +383,10 @@
       "downloadMedia": "Descargar",
       "zoomIn": "Ampliar",
       "zoomOut": "Reducir",
-      "resetZoom": "Restablecer zoom"
+      "resetZoom": "Restablecer zoom",
+      "deletedTitle": "Mensaje eliminado",
+      "deletedBody": "El emisor ha eliminado este mensaje.",
+      "forwarded": "Reenviado"
     },
     "actions": {
       "reply": "Responder",
@@ -417,6 +420,7 @@
       "location": "[Ubicacion]",
       "template": "[Plantilla]",
       "message": "[Mensaje]",
+      "deletedMessage": "[Mensaje eliminado]",
       "cancelReply": "Cancelar respuesta"
     },
     "templatePicker": {
