@@ -76,13 +76,21 @@ type MediaPreviewKind =
   | "image"
   | "audio"
   | "video"
+  | "sticker"
   | "document"
   | "location"
   | "template"
-  | "interactive";
+  | "interactive"
+  | "unsupported";
 
 function parseMediaPreviewToken(text: string): MediaPreviewKind | null {
   const normalized = text.trim().toLowerCase();
+  if (
+    normalized === "[unsupported]" ||
+    normalized.startsWith("[unsupported message type:")
+  ) {
+    return "unsupported";
+  }
   switch (normalized) {
     case "[image]":
     case "image":
@@ -95,6 +103,9 @@ function parseMediaPreviewToken(text: string): MediaPreviewKind | null {
     case "[video]":
     case "video":
       return "video";
+    case "[sticker]":
+    case "sticker":
+      return "sticker";
     case "[document]":
     case "document":
     case "documento":
@@ -111,6 +122,8 @@ function parseMediaPreviewToken(text: string): MediaPreviewKind | null {
     case "[interactive]":
     case "interactive":
       return "interactive";
+    case "unsupported":
+      return "unsupported";
     default:
       return null;
   }
@@ -124,6 +137,8 @@ function mediaPreviewLabel(kind: MediaPreviewKind, t: ReturnType<typeof useTrans
       return t("mediaAudio");
     case "video":
       return t("mediaVideo");
+    case "sticker":
+      return t("mediaSticker");
     case "document":
       return t("mediaDocument");
     case "location":
@@ -132,6 +147,8 @@ function mediaPreviewLabel(kind: MediaPreviewKind, t: ReturnType<typeof useTrans
       return t("mediaTemplate");
     case "interactive":
       return t("mediaInteractive");
+    case "unsupported":
+      return t("mediaUnsupported");
   }
 }
 
@@ -143,6 +160,8 @@ function MediaPreviewIcon({ kind }: { kind: MediaPreviewKind }) {
       return <Mic className="size-3.5" />;
     case "video":
       return <Video className="size-3.5" />;
+    case "sticker":
+      return <MessageSquare className="size-3.5" />;
     case "document":
       return <FileText className="size-3.5" />;
     case "location":
@@ -150,6 +169,8 @@ function MediaPreviewIcon({ kind }: { kind: MediaPreviewKind }) {
     case "template":
       return <LayoutTemplate className="size-3.5" />;
     case "interactive":
+      return <MessageSquare className="size-3.5" />;
+    case "unsupported":
       return <MessageSquare className="size-3.5" />;
   }
 }
@@ -1359,9 +1380,11 @@ function PreviewMessageBubble({
       ? "Imagen"
       : message.content_type === "audio"
         ? "Nota de voz"
-        : message.content_type === "document"
-          ? "Documento"
-          : "";
+        : message.content_type === "sticker"
+          ? "Sticker"
+          : message.content_type === "document"
+            ? "Documento"
+            : "";
   const text = message.content_text || fallback;
 
   return (

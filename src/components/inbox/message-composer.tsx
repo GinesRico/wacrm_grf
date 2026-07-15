@@ -11,22 +11,21 @@ import {
 import {
   Send,
   LayoutTemplate,
-  Image as ImageIcon,
-  Video,
   FileText,
-  Mic,
-  Square,
   X,
   Loader2,
   Plus,
+  Paperclip,
   MessageSquareDashed,
   Zap,
   Smile,
+  PenLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
@@ -70,10 +69,6 @@ export const CHAT_MEDIA_BUCKET = "chat-media";
 
 /** Meta caps media captions at 1024 chars. Enforced here and in the send route. */
 export const MEDIA_CAPTION_MAX = 1024;
-
-/** Hard cap on a single voice recording so it can't blow the upload/
- *  transcode limits — auto-stops the recorder when reached. */
-const MAX_RECORDING_SECONDS = 5 * 60;
 
 const EMOJI_CHOICES = [
   "😀",
@@ -124,14 +119,23 @@ interface ReplyDraft {
 
 // Mirrors the chat-media bucket's allowed_mime_types (migration 023) for
 // the file picker so unsupported files are rejected before upload rather
-// than failing with a confusing Storage error. Audio has no picker — it's
-// captured via the recorder.
-const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
+// than failing with a confusing Storage error.
+const PICKER_ACCEPT: Record<ComposerMediaKind, string> = {
   image: "image/png,image/jpeg,image/webp",
   video: "video/mp4,video/3gpp",
+  audio: "audio/ogg,audio/mpeg,audio/aac,audio/mp4,audio/amr",
   document:
     "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
 };
+
+const ATTACH_ACCEPT = Object.values(PICKER_ACCEPT).join(",");
+
+function mediaKindFromFile(file: File): ComposerMediaKind {
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type.startsWith("video/")) return "video";
+  if (file.type.startsWith("audio/")) return "audio";
+  return "document";
+}
 
 interface MediaDraft {
   kind: ComposerMediaKind;
@@ -154,18 +158,9 @@ interface MessageComposerProps {
   replyTo?: ReplyDraft | null;
   aiDraftSeed?: string | null;
   onClearReply?: () => void;
+  signatureEnabled: boolean;
+  onSignatureEnabledChange: (enabled: boolean) => void;
 }
-
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-/** Worker that encodes mic input to Ogg/Opus entirely in the browser
- *  (vendored from opus-recorder into /public). Recording client-side in a
- *  Meta-accepted format means no server ffmpeg / transcode step. */
-const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
 export function MessageComposer({
   conversationId,
@@ -179,6 +174,8 @@ export function MessageComposer({
   replyTo,
   aiDraftSeed,
   onClearReply,
+  signatureEnabled,
+  onSignatureEnabledChange,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
   const { prompt, promptDialog } = useAppPrompt();
@@ -202,9 +199,7 @@ export function MessageComposer({
   // attachment; `busy` covers the upload/transcode window.
   const [draft, setDraft] = useState<MediaDraft | null>(null);
   const [busy, setBusy] = useState(false);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const videoInputRef = useRef<HTMLInputElement>(null);
-  const documentInputRef = useRef<HTMLInputElement>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
   // Mirror of `draft` for the unmount cleanup, which can't read render
   // state. Kept in sync below so navigating away with a staged-but-unsent
   // attachment GCs the orphaned object.
@@ -219,14 +214,6 @@ export function MessageComposer({
     void deleteAccountMedia(CHAT_MEDIA_BUCKET, path).catch(() => {});
   }, []);
 
-  // Voice recording state. The recorder encodes Ogg/Opus in-browser
-  // (opus-recorder) so there's no server-side transcode.
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
-  const recorderRef = useRef<import("opus-recorder").default | null>(null);
-  const cancelledRef = useRef(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // Viewers (read-only role) can browse the inbox but never send.
   // For solo users this is always true — single-owner accounts pass
   // every capability — so the disabled branch is a no-op there.
@@ -236,32 +223,19 @@ export function MessageComposer({
   const inputsDisabled = readOnly || sessionExpired || locked;
 
   useEffect(() => {
-    if (inputsDisabled || draft || recording) return;
+    if (inputsDisabled || draft) return;
     const id = window.setTimeout(() => {
       textareaRef.current?.focus();
     }, 80);
     return () => window.clearTimeout(id);
-  }, [conversationId, draft, inputsDisabled, recording]);
+  }, [conversationId, draft, inputsDisabled]);
 
-  const clearTimer = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  // Tear down any live recording + timer on unmount so a mid-record
-  // navigation doesn't leak the mic, and GC a staged-but-unsent
-  // attachment so it doesn't orphan in the bucket.
+  // Tear down a staged-but-unsent attachment on unmount so it doesn't orphan in the bucket.
   useEffect(() => {
     return () => {
-      clearTimer();
-      cancelledRef.current = true;
-      // stop() releases the mic stream + audio context inside opus-recorder.
-      void recorderRef.current?.stop().catch(() => {});
       removeStaged(draftRef.current?.path);
     };
-  }, [clearTimer, removeStaged]);
+  }, [removeStaged]);
 
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
@@ -325,7 +299,7 @@ export function MessageComposer({
   );
 
   const slashQuery = text.startsWith("/") ? text.slice(1).trim().toLowerCase() : "";
-  const slashPickerOpen = text.startsWith("/") && !inputsDisabled && !draft && !recording;
+  const slashPickerOpen = text.startsWith("/") && !inputsDisabled && !draft;
   const visibleSlashQuickReplies = slashQuickReplies.filter((qr) => {
     if (!slashQuery) return true;
     const haystack = `${qr.title} ${qr.content_text ?? ""}`.toLowerCase();
@@ -540,8 +514,8 @@ export function MessageComposer({
   );
 
   const handlePicked = useCallback(
-    (kind: "image" | "video" | "document", file: File | undefined) => {
-      if (file) void stageUpload(kind, file);
+    (file: File | undefined) => {
+      if (file) void stageUpload(mediaKindFromFile(file), file);
     },
     [stageUpload],
   );
@@ -556,104 +530,11 @@ export function MessageComposer({
           ?.getAsFile();
       if (!file) return;
 
-      const kind: ComposerMediaKind = file.type.startsWith("image/")
-        ? "image"
-        : file.type.startsWith("video/")
-          ? "video"
-          : file.type.startsWith("audio/")
-            ? "audio"
-            : "document";
-
       e.preventDefault();
-      void stageUpload(kind, file);
+      void stageUpload(mediaKindFromFile(file), file);
     },
     [busy, draft, inputsDisabled, stageUpload],
   );
-
-  // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
-
-  // The encoded Ogg/Opus file from opus-recorder → upload as an audio
-  // draft. WhatsApp renders Ogg/Opus as a playable voice note.
-  const finalizeRecording = useCallback(
-    async (bytes: Uint8Array) => {
-      // Uint8Array is a valid BlobPart at runtime; the cast sidesteps the
-      // lib.dom ArrayBufferLike-vs-ArrayBuffer generic mismatch.
-      const file = new File([bytes as unknown as BlobPart], `voice-${Date.now()}.ogg`, {
-        type: "audio/ogg",
-      });
-      if (file.size === 0) return; // cancelled / empty take
-      if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
-        toast.error(t("recordingTooLong"));
-        return;
-      }
-      setBusy(true);
-      try {
-        const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
-        removeStaged(draftRef.current?.path);
-        setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : t("uploadFailed"));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [removeStaged, t],
-  );
-
-  const startRecording = useCallback(async () => {
-    if (inputsDisabled || busy || recording) return;
-    if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === "undefined") {
-      toast.error(t("voiceUnsupported"));
-      return;
-    }
-    try {
-      // Lazy-load the encoder (≈400 KB worker) only when the user records,
-      // keeping it out of the main bundle.
-      const { default: Recorder } = await import("opus-recorder");
-      const recorder = new Recorder({
-        encoderPath: OPUS_ENCODER_PATH,
-        numberOfChannels: 1,
-        encoderApplication: 2048, // VOIP — tuned for speech
-        encoderSampleRate: 48000,
-        streamPages: false, // one callback with the complete file on stop
-      });
-      cancelledRef.current = false;
-      recorder.ondataavailable = (bytes) => {
-        if (cancelledRef.current) return;
-        void finalizeRecording(bytes);
-      };
-      recorderRef.current = recorder;
-      await recorder.start();
-      setRecording(true);
-      setRecordSeconds(0);
-      timerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
-    } catch {
-      void recorderRef.current?.stop().catch(() => {});
-      recorderRef.current = null;
-      toast.error(t("microphoneDenied"));
-    }
-  }, [inputsDisabled, busy, recording, finalizeRecording, t]);
-
-  const stopRecording = useCallback(() => {
-    clearTimer();
-    setRecording(false);
-    void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
-
-  const cancelRecording = useCallback(() => {
-    cancelledRef.current = true;
-    clearTimer();
-    setRecording(false);
-    void recorderRef.current?.stop().catch(() => {});
-  }, [clearTimer]);
-
-  // Auto-stop at the cap so a forgotten recording can't blow the
-  // upload size limit.
-  useEffect(() => {
-    if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
-      stopRecording();
-    }
-  }, [recording, recordSeconds, stopRecording]);
 
   // ---- Draft send / discard -----------------------------------------
 
@@ -715,34 +596,14 @@ export function MessageComposer({
         </div>
       )}
 
-      {/* Hidden file inputs driven by the attach menu. */}
+      {/* Hidden file input driven by the attach menu. */}
       <input
-        ref={imageInputRef}
+        ref={attachInputRef}
         type="file"
-        accept={PICKER_ACCEPT.image}
+        accept={ATTACH_ACCEPT}
         className="hidden"
         onChange={(e) => {
-          handlePicked("image", e.target.files?.[0]);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={videoInputRef}
-        type="file"
-        accept={PICKER_ACCEPT.video}
-        className="hidden"
-        onChange={(e) => {
-          handlePicked("video", e.target.files?.[0]);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={documentInputRef}
-        type="file"
-        accept={PICKER_ACCEPT.document}
-        className="hidden"
-        onChange={(e) => {
-          handlePicked("document", e.target.files?.[0]);
+          handlePicked(e.target.files?.[0]);
           e.target.value = "";
         }}
       />
@@ -757,29 +618,6 @@ export function MessageComposer({
           onSend={sendDraft}
           t={t}
         />
-      ) : recording ? (
-        // Recording bar — replaces the composer while the mic is live.
-        <div className="flex items-center gap-3 rounded-xl border border-border bg-muted px-4 py-2.5">
-          <span className="flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500" />
-          <span className="flex-1 text-sm text-foreground">
-            {t("recording", { current: formatDuration(recordSeconds), max: formatDuration(MAX_RECORDING_SECONDS) })}
-          </span>
-          <button
-            type="button"
-            onClick={cancelRecording}
-            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-card hover:text-foreground"
-          >
-            {t("cancel")}
-          </button>
-          <Button
-            size="sm"
-            onClick={stopRecording}
-            className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90"
-            title={t("stopAndAttach")}
-          >
-            <Square className="h-4 w-4" />
-          </Button>
-        </div>
       ) : (
         <div className="relative flex items-end gap-2">
           {/* Quick replies appear inline when the draft starts with /. */}
@@ -842,22 +680,10 @@ export function MessageComposer({
                 <Plus className="h-4 w-4" />
               )}
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="border-border bg-popover">
-              <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
-                <ImageIcon className="mr-2 h-4 w-4" />
-                {t("photo")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => videoInputRef.current?.click()}>
-                <Video className="mr-2 h-4 w-4" />
-                {t("video")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => documentInputRef.current?.click()}>
-                <FileText className="mr-2 h-4 w-4" />
-                {t("document")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => void startRecording()}>
-                <Mic className="mr-2 h-4 w-4" />
-                {t("voiceNote")}
+            <DropdownMenuContent align="start" className="w-64 border-border bg-popover">
+              <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
+                <Paperclip className="mr-2 h-4 w-4" />
+                {t("attach")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onOpenTemplates}>
                 <LayoutTemplate className="mr-2 h-4 w-4" />
@@ -871,6 +697,13 @@ export function MessageComposer({
                 <Zap className="mr-2 h-4 w-4" />
                 {t("quickReplies")}
               </DropdownMenuItem>
+              <DropdownMenuCheckboxItem
+                checked={signatureEnabled}
+                onCheckedChange={onSignatureEnabledChange}
+              >
+                <PenLine className="mr-2 h-4 w-4" />
+                {t("signMessages")}
+              </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
 

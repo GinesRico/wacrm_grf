@@ -1,4 +1,4 @@
-import type { Metadata, Viewport } from "next";
+﻿import type { Metadata, Viewport } from "next";
 import { NextIntlClientProvider } from 'next-intl';
 import { getLocale, getMessages } from 'next-intl/server';
 import { Inter } from "next/font/google";
@@ -22,10 +22,10 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: {
-    default: "wacrm",
-    template: "%s — wacrm",
+    default: "ChatMessage",
+    template: "%s — ChatMessage",
   },
-  description: "Self-hostable CRM template for WhatsApp.",
+  description: "ChatMessage para WhatsApp.",
   robots: {
     index: false,
     follow: false,
@@ -45,13 +45,13 @@ export const viewport: Viewport = {
   colorScheme: "dark light",
 };
 
-// Inline boot script — runs before React hydrates so the user's
+// Inline boot script â€” runs before React hydrates so the user's
 // chosen accent (data-theme) AND mode (data-mode) are on the <html>
 // element before first paint. Without this every page load flashes
 // the server-rendered defaults for a frame before the React tree
 // mounts and applies the picked values.
 //
-// Kept dependency-free (no imports, no JSX) — must be a string the
+// Kept dependency-free (no imports, no JSX) â€” must be a string the
 // browser can run as a single <script>. Knowledge of valid ids is
 // sourced from the THEME_IDS / MODES constants so adding one doesn't
 // silently break the boot path.
@@ -95,7 +95,7 @@ export default async function RootLayout({
       // `data-mode` on <html> from localStorage before React hydrates,
       // so for any non-default choice the client DOM intentionally
       // differs from the server-rendered defaults. suppressHydration-
-      // Warning silences the expected mismatch — it only applies to
+      // Warning silences the expected mismatch â€” it only applies to
       // this element's own attributes, so genuine mismatches in
       // children still surface.
       suppressHydrationWarning

@@ -125,6 +125,8 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  jumpToMessageId?: string | null;
+  onJumpHandled?: () => void;
 }
 
 type TransferLine = Pick<
@@ -134,6 +136,7 @@ type TransferLine = Pick<
 
 const NO_LINE_VALUE = "__none";
 const NO_AGENT_VALUE = "__queue";
+const SIGNATURE_STORAGE_KEY = "inbox-sign-messages";
 const NO_DEPARTMENT_VALUE = "__no_department";
 
 function TransferDialog({
@@ -392,6 +395,8 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  jumpToMessageId,
+  onJumpHandled,
 }: MessageThreadProps) {
   const t = useTranslations("Inbox.messageThread");
   const tActions = useTranslations("Inbox.actions");
@@ -401,7 +406,7 @@ export function MessageThread({
   const dateLocale = locale.startsWith("es") ? es : undefined;
   const { confirm, confirmDialog } = useAppConfirm();
 
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const [sessionCheckedConversationId, setSessionCheckedConversationId] =
@@ -419,11 +424,59 @@ export function MessageThread({
   const [forwardLineId, setForwardLineId] = useState("");
   const [forwardContacts, setForwardContacts] = useState<Contact[]>([]);
   const [aiDraftSeed, setAiDraftSeed] = useState<string | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  const [signatureEnabled, setSignatureEnabled] = useState(false);
   const [lines, setLines] = useState<TransferLine[]>([]);
   const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
     Record<string, InteractiveMessagePayload>
   >({});
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
+
+  useEffect(() => {
+    try {
+      setSignatureEnabled(localStorage.getItem(SIGNATURE_STORAGE_KEY) === "true");
+    } catch {
+      // localStorage can be unavailable in constrained contexts.
+    }
+  }, []);
+
+  const handleSignatureEnabledChange = useCallback((enabled: boolean) => {
+    setSignatureEnabled(enabled);
+    try {
+      localStorage.setItem(SIGNATURE_STORAGE_KEY, String(enabled));
+    } catch {
+      // Ignore persistence failures; the in-memory toggle still works.
+    }
+  }, []);
+
+  const agentSignatureName =
+    profile?.full_name?.trim() || profile?.email?.trim() || user?.email || "";
+
+  const signMessageText = useCallback(
+    (value: string) => {
+      if (!signatureEnabled || !agentSignatureName) return value;
+      return `*${agentSignatureName}:*\n${value}`;
+    },
+    [agentSignatureName, signatureEnabled],
+  );
+
+  const jumpToMessage = useCallback((messageId: string) => {
+    const target = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-message-id="${messageId}"]`,
+    );
+    if (!target) return false;
+
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightMessageId(messageId);
+
+    window.setTimeout(() => {
+      setHighlightMessageId((current) =>
+        current === messageId ? null : current,
+      );
+    }, 1800);
+
+    return true;
+  }, []);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferAgentId, setTransferAgentId] = useState<string>("");
@@ -785,6 +838,13 @@ export function MessageThread({
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (!jumpToMessageId || !scrollRef.current) return;
+    const jumped = jumpToMessage(jumpToMessageId);
+    if (!jumped) return;
+    onJumpHandled?.();
+  }, [jumpToMessageId, onJumpHandled, messages, jumpToMessage]);
+
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
       if (!conversation) return;
@@ -792,12 +852,14 @@ export function MessageThread({
       const tempId = `temp-${Date.now()}`;
 
       // Optimistic update — shows the message immediately with "sending" status
+      const signedText = signMessageText(text);
+
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
         sender_type: "agent",
         content_type: "text",
-        content_text: text,
+        content_text: signedText,
         status: "sending",
         created_at: new Date().toISOString(),
         reply_to_message_id: replyToId,
@@ -812,7 +874,7 @@ export function MessageThread({
           body: JSON.stringify({
             conversation_id: conversation.id,
             message_type: "text",
-            content_text: text,
+            content_text: signedText,
             reply_to_message_id: replyToId,
           }),
         });
@@ -839,7 +901,7 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage]
+    [conversation, onNewMessage, onUpdateMessage, signMessageText]
   );
 
   const handleSendMedia = useCallback(
@@ -849,10 +911,13 @@ export function MessageThread({
       // Documents show their filename in our own bubble (and to the
       // recipient as the Meta caption when no caption was typed); other
       // kinds use the caption as-is. Audio carries no caption.
+      const signedCaption = payload.caption
+        ? signMessageText(payload.caption)
+        : payload.caption;
       const contentText =
         payload.kind === "document"
-          ? payload.caption || payload.filename || "Document"
-          : payload.caption;
+          ? signedCaption || payload.filename || "Document"
+          : signedCaption;
 
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
@@ -905,7 +970,7 @@ export function MessageThread({
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, signMessageText],
   );
 
   const handleSendInteractive = useCallback(
@@ -913,6 +978,7 @@ export function MessageThread({
       if (!conversation) return;
 
       const tempId = `temp-${Date.now()}`;
+      const signedPayload = { ...payload, body: signMessageText(payload.body) };
       // Optimistic bubble — renders the buttons/list immediately via the
       // interactive_payload, same as the persisted row will.
       const optimisticMsg: Message = {
@@ -920,8 +986,8 @@ export function MessageThread({
         conversation_id: conversation.id,
         sender_type: "agent",
         content_type: "interactive",
-        content_text: payload.body,
-        interactive_payload: payload,
+        content_text: signedPayload.body,
+        interactive_payload: signedPayload,
         status: "sending",
         created_at: new Date().toISOString(),
         reply_to_message_id: replyToId,
@@ -935,7 +1001,7 @@ export function MessageThread({
           body: JSON.stringify({
             conversation_id: conversation.id,
             message_type: "interactive",
-            interactive_payload: payload,
+            interactive_payload: signedPayload,
             reply_to_message_id: replyToId,
           }),
         });
@@ -958,7 +1024,7 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, signMessageText],
   );
 
   const patchConversation = useCallback(
@@ -1883,6 +1949,7 @@ export function MessageThread({
                               ? t("me") 
                               : contact?.name || contact?.phone || "Unknown",
                           preview: buildReplyPreview(parent, tQuote),
+                          messageId: parent.id,
                         }
                       : null;
                     const msgReactions = reactionsByMessageId.get(msg.id);
@@ -1897,36 +1964,53 @@ export function MessageThread({
                       const next = own?.emoji === emoji ? "" : emoji;
                       void postReaction(msg.id, next);
                     };
+                    if (msg.content_type === "system") {
+                      return (
+                        <div key={msg.id} data-message-id={msg.id}>
+                          <MessageBubble message={msg} />
+                        </div>
+                      );
+                    }
                     return (
-                      <MessageActions
+                      <div
                         key={msg.id}
-                        message={msg}
-                        onReply={() => handleStartReply(msg)}
-                        onReact={(emoji) => {
-                          if (emoji) void postReaction(msg.id, emoji);
-                        }}
-                        onDelete={() => handleDeleteMessage(msg.id)}
-                        onToggleStar={() => handleToggleMessageStar(msg)}
-                        onSelect={() => beginMessageSelection(msg.id)}
-                        onForward={() => openForwardDialogForMessage(msg.id)}
-                        onAiReply={() => handleAiReplyToMessage(msg)}
-                        onToggleSelected={() => toggleSelectedMessage(msg.id)}
-                        selected={selectedMessageIds.has(msg.id)}
-                        selectionMode={selectionMode}
+                        data-message-id={msg.id}
+                        className={cn(
+                          "rounded-2xl transition-all duration-300",
+                          highlightMessageId === msg.id &&
+                            "animate-pulse bg-primary/10 ring-2 ring-primary/40 ring-offset-2 ring-offset-background",
+                        )}
                       >
-                        <MessageBubble
+                        <MessageActions
                           message={msg}
-                          reply={reply}
-                          reactions={msgReactions}
-                          currentUserId={user?.id}
-                          onToggleReaction={handlePillToggle}
-                          templateFallbackPayload={
-                            msg.template_name
-                              ? templateFallbackPayloads[msg.template_name]
-                              : null
-                          }
-                        />
-                      </MessageActions>
+                          onReply={() => handleStartReply(msg)}
+                          onReact={(emoji) => {
+                            if (emoji) void postReaction(msg.id, emoji);
+                          }}
+                          onDelete={() => handleDeleteMessage(msg.id)}
+                          onToggleStar={() => handleToggleMessageStar(msg)}
+                          onSelect={() => beginMessageSelection(msg.id)}
+                          onForward={() => openForwardDialogForMessage(msg.id)}
+                          onAiReply={() => handleAiReplyToMessage(msg)}
+                          onToggleSelected={() => toggleSelectedMessage(msg.id)}
+                          selected={selectedMessageIds.has(msg.id)}
+                          selectionMode={selectionMode}
+                        >
+                          <MessageBubble
+                            message={msg}
+                            reply={reply}
+                            reactions={msgReactions}
+                            currentUserId={user?.id}
+                            onToggleReaction={handlePillToggle}
+                            templateFallbackPayload={
+                              msg.template_name
+                                ? templateFallbackPayloads[msg.template_name]
+                                : null
+                            }
+                            onJumpToMessage={jumpToMessage}
+                          />
+                        </MessageActions>
+                      </div>
                     );
                   })}
                 </div>
@@ -2029,6 +2113,8 @@ export function MessageThread({
         replyTo={replyTo}
         aiDraftSeed={aiDraftSeed}
         onClearReply={() => setReplyTo(null)}
+        signatureEnabled={signatureEnabled}
+        onSignatureEnabledChange={handleSignatureEnabledChange}
       />
 
       <TemplatePicker

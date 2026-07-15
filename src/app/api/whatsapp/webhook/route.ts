@@ -646,20 +646,33 @@ async function processMessage(
   // parseMessageContent. Silence the unused-var warning:
   void mediaType
 
-  // The messages.content_type CHECK constraint (widened in migration 010
-  // to add 'interactive' for button/list taps) allows:
-  //   text, image, document, audio, video, location, template, interactive
+  // The messages.content_type CHECK constraint allows the inbox-rendered
+  // WhatsApp types we store directly:
+  //   text, image, document, audio, video, sticker, location, template,
+  //   interactive
   // Map incoming WhatsApp types that aren't in that list to the closest
   // allowed value so the INSERT doesn't fail with a constraint error.
   const ALLOWED_CONTENT_TYPES = new Set([
-    'text', 'image', 'document', 'audio', 'video',
+    'text', 'image', 'document', 'audio', 'video', 'sticker',
     'location', 'template', 'interactive',
   ])
-  const contentType = ALLOWED_CONTENT_TYPES.has(message.type)
+  let contentType = ALLOWED_CONTENT_TYPES.has(message.type)
     ? message.type
     : message.type === 'sticker'
       ? 'image'   // stickers are images
       : 'text'    // reaction, unknown → text fallback
+
+  if (message.type === 'sticker') {
+    contentType = 'sticker'
+  }
+  if (
+    message.type === 'image' &&
+    !contentText &&
+    message.image?.mime_type?.toLowerCase().includes('webp')
+  ) {
+    contentType = 'sticker'
+  }
+  const unsupportedInbound = message.type === 'unsupported'
 
   // Determine whether this is the contact's very first inbound message
   // BEFORE we insert, so the count is accurate. Covers the case where
@@ -748,7 +761,7 @@ async function processMessage(
           }
         : {
             kind: 'text',
-            text: contentText ?? message.text?.body ?? '',
+            text: unsupportedInbound ? '' : contentText ?? message.text?.body ?? '',
             meta_message_id: message.id,
           },
     isFirstInboundMessage,
@@ -760,7 +773,7 @@ async function processMessage(
   // message all exist before any step — including send_message — runs.
   // Fire-and-forget: a slow or failing automation must not block the
   // webhook's 200 OK response to Meta.
-  const inboundText = contentText ?? message.text?.body ?? ''
+  const inboundText = unsupportedInbound ? '' : contentText ?? message.text?.body ?? ''
   const automationTriggers: (
     | 'new_contact_created'
     | 'first_inbound_message'
@@ -926,9 +939,9 @@ async function parseMessageContent(
       return empty
 
     case 'sticker':
-      // Stickers are images under the hood. Treat them as such so the
-      // MessageBubble renders the <img>. The caller maps the DB
-      // content_type to 'image' for the CHECK constraint.
+      // Stickers are images under the hood, but keep a first-class
+      // content_type so the inbox can render them like WhatsApp stickers
+      // instead of regular photos.
       if (message.sticker?.id) {
         return {
           ...empty,
@@ -950,6 +963,9 @@ async function parseMessageContent(
 
     case 'reaction':
       return { ...empty, contentText: message.reaction?.emoji || null }
+
+    case 'unsupported':
+      return { ...empty, contentText: '[unsupported]' }
 
     case 'interactive': {
       // The customer tapped a reply button or a list row on a message
@@ -973,7 +989,7 @@ async function parseMessageContent(
     default:
       return {
         ...empty,
-        contentText: `[Unsupported message type: ${message.type}]`,
+        contentText: '[unsupported]',
       }
   }
 }

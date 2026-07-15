@@ -31,11 +31,12 @@ import { useTranslations } from "next-intl";
 interface MessageBubbleProps {
   message: Message;
   /** Pre-computed quote info for messages that reply to another. */
-  reply?: { authorLabel: string; preview: string } | null;
+  reply?: { authorLabel: string; preview: string; messageId?: string } | null;
   reactions?: MessageReaction[];
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
   templateFallbackPayload?: InteractiveMessagePayload | null;
+  onJumpToMessage?: (messageId: string) => void;
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -296,10 +297,12 @@ function MediaImage({
   url,
   alt,
   t,
+  sticker = false,
 }: {
   url: string;
   alt: string;
   t: ReturnType<typeof useTranslations>;
+  sticker?: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -340,7 +343,12 @@ function MediaImage({
 
   if (error) {
     return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
+      <div
+        className={cn(
+          "flex items-center justify-center rounded-lg bg-muted",
+          sticker ? "h-32 w-32 bg-transparent" : "h-40 w-60",
+        )}
+      >
         <ImageOff className="h-8 w-8 text-muted-foreground" />
       </div>
     );
@@ -348,7 +356,12 @@ function MediaImage({
 
   if (loading) {
     return (
-      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
+      <div
+        className={cn(
+          "flex items-center justify-center rounded-lg bg-muted",
+          sticker ? "h-32 w-32 bg-transparent" : "h-40 w-60",
+        )}
+      >
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
     );
@@ -366,7 +379,12 @@ function MediaImage({
         <img
           src={src ?? ""}
           alt={alt}
-          className="max-h-64 max-w-60 cursor-zoom-in rounded-lg object-cover transition brightness-100 hover:brightness-95"
+          className={cn(
+            "cursor-zoom-in transition brightness-100 hover:brightness-95",
+            sticker
+              ? "max-h-40 max-w-40 object-contain"
+              : "max-h-64 max-w-60 rounded-lg object-cover",
+          )}
           onError={() => setError(true)}
         />
       </button>
@@ -488,11 +506,18 @@ function MessageContent({
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onPrimary: boolean;
 }) {
+  const text = message.content_text ?? "";
+  const isUnsupportedText =
+    text.trim().toLowerCase() === "[unsupported]" ||
+    text.trim().toLowerCase().startsWith("[unsupported message type:");
+
   if (message.deleted_at) {
     const deletedPreview = message.content_text || (() => {
       switch (message.content_type) {
         case "image":
           return t("photo");
+        case "sticker":
+          return t("sticker");
         case "video":
           return t("video");
         case "audio":
@@ -523,6 +548,13 @@ function MessageContent({
 
   switch (message.content_type) {
     case "text":
+      if (isUnsupportedText) {
+        return (
+          <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+            {t("unsupported")}
+          </p>
+        );
+      }
       return (
         <div>
           <p className="whitespace-pre-wrap break-words text-sm">
@@ -535,16 +567,25 @@ function MessageContent({
       );
 
     case "image":
+    case "sticker":
       return (
         <div>
           {message.media_url ? (
             <MediaImage
               url={message.media_url}
-              alt={t("sharedImageAlt")}
+              alt={
+                message.content_type === "sticker"
+                  ? t("sharedStickerAlt")
+                  : t("sharedImageAlt")
+              }
               t={t}
+              sticker={message.content_type === "sticker"}
             />
           ) : (
-            <MediaUnavailable label={t("photo")} t={t} />
+            <MediaUnavailable
+              label={message.content_type === "sticker" ? t("sticker") : t("photo")}
+              t={t}
+            />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -690,11 +731,23 @@ export function MessageBubble({
   currentUserId,
   onToggleReaction,
   templateFallbackPayload,
+  onJumpToMessage,
 }: MessageBubbleProps) {
   const t = useTranslations("Inbox.bubble");
 
+  if (message.content_type === "system") {
+    return (
+      <div className="flex justify-center py-1">
+        <div className="max-w-[80%] rounded-full bg-background/85 px-4 py-2 text-center text-xs italic text-muted-foreground shadow-sm">
+          <WhatsAppText text={message.content_text || ""} />
+        </div>
+      </div>
+    );
+  }
+
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const isDeleted = Boolean(message.deleted_at);
+  const isSticker = message.content_type === "sticker";
   const time = format(new Date(message.created_at), "HH:mm");
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
@@ -713,8 +766,10 @@ export function MessageBubble({
             ? isAgent
               ? "rounded-br-md border border-primary/20 bg-primary/15 text-primary/80"
               : "rounded-bl-md border border-border bg-muted/50 text-muted-foreground"
+            : isSticker
+              ? "bg-transparent px-0 py-0 shadow-none"
             : isAgent
-              ? "rounded-br-md bg-primary text-primary-foreground"
+              ? "rounded-br-md border border-primary/20 bg-primary-soft-2 text-foreground shadow-sm"
               : "rounded-bl-md bg-muted text-foreground",
         )}
       >
@@ -722,14 +777,19 @@ export function MessageBubble({
           <ReplyQuote
             authorLabel={reply.authorLabel}
             preview={reply.preview}
-            onPrimary={isAgent}
+            onPrimary={false}
+            onClick={
+              reply.messageId && onJumpToMessage
+                ? () => onJumpToMessage(reply.messageId!)
+                : undefined
+            }
           />
         )}
         {message.is_forwarded && !isDeleted ? (
           <div
             className={cn(
               "mb-1 flex items-center gap-1 text-xs italic",
-              isAgent ? "text-primary-foreground/75" : "text-muted-foreground",
+              "text-muted-foreground",
             )}
           >
             <Forward className="size-3" />
@@ -740,7 +800,7 @@ export function MessageBubble({
           message={message}
           t={t}
           templateFallbackPayload={templateFallbackPayload}
-          onPrimary={isAgent}
+          onPrimary={false}
         />
         <div
           className={cn(
@@ -754,7 +814,7 @@ export function MessageBubble({
               glance. */}
           {message.ai_generated && (
             <span
-              className="inline-flex items-center gap-0.5 rounded-full bg-primary-foreground/20 px-1.5 py-px text-[9px] font-semibold uppercase leading-none tracking-wide text-primary-foreground"
+              className="inline-flex items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-px text-[9px] font-semibold uppercase leading-none tracking-wide text-primary"
               title={t("aiBadgeTitle")}
             >
               <Sparkles className="h-2.5 w-2.5" />
@@ -773,7 +833,7 @@ export function MessageBubble({
                   ? "text-primary/60"
                   : "text-muted-foreground"
                 : isAgent
-                  ? "text-primary-foreground/70"
+                  ? "text-muted-foreground"
                   : "text-muted-foreground",
             )}
           >

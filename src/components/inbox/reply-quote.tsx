@@ -15,6 +15,7 @@ interface ReplyQuoteProps {
   /** Present → renders the composer-chip variant with an X button. Absent →
    *  renders the embedded-in-bubble variant. */
   onDismiss?: () => void;
+  onClick?: () => void;
   /** True when embedded inside an outbound (primary-filled) bubble, so the
    *  quote must read against the primary surface rather than the neutral
    *  foreground — otherwise it goes low-contrast in light mode. */
@@ -25,14 +26,20 @@ export function ReplyQuote({
   authorLabel,
   preview,
   onDismiss,
+  onClick,
   onPrimary = false,
 }: ReplyQuoteProps) {
   const t = useTranslations("Inbox.replyQuote");
   const isChip = !!onDismiss;
+  const interactive = Boolean(onClick);
+  const Root = interactive ? "button" : "div";
   return (
-    <div
+    <Root
+      type={interactive ? "button" : undefined}
+      onClick={onClick}
       className={cn(
-        "flex items-start gap-2 border-l-2 px-2 py-1",
+        "flex w-full items-start gap-2 border-l-2 px-2 py-1 text-left",
+        interactive && "transition-colors hover:bg-primary/10",
         onPrimary ? "border-primary-foreground/50" : "border-primary",
         isChip
           ? "rounded-md bg-muted/80"
@@ -71,7 +78,7 @@ export function ReplyQuote({
           <X className="h-3.5 w-3.5" />
         </button>
       )}
-    </div>
+    </Root>
   );
 }
 
@@ -83,6 +90,8 @@ export function buildReplyPreview(message: Message, t: ReturnType<typeof useTran
       return t("photo");
     case "video":
       return t("video");
+    case "sticker":
+      return t("sticker");
     case "audio":
       return t("audio");
     case "document":

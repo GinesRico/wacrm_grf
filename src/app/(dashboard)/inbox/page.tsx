@@ -60,6 +60,7 @@ export default function InboxPage() {
    * below reconciles to the stored value right after mount instead.
    */
   const [contactPanelOpen, setContactPanelOpen] = useState(true);
+  const [jumpToMessageId, setJumpToMessageId] = useState<string | null>(null);
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
@@ -676,6 +677,8 @@ export default function InboxPage() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            jumpToMessageId={jumpToMessageId}
+            onJumpHandled={() => setJumpToMessageId(null)}
           />
         </div>
 
@@ -688,7 +691,10 @@ export default function InboxPage() {
             <ContactSidebar
               contact={activeContact}
               conversation={activeConversation}
+              liveMessages={messages}
               liveStarredMessages={messages.filter((message) => message.is_starred)}
+              onJumpToMessage={setJumpToMessageId}
+              onClose={() => setContactPanelOpen(false)}
             />
           </div>
         )}

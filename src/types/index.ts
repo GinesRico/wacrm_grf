@@ -229,8 +229,10 @@ export type ContentType =
   | 'document'
   | 'audio'
   | 'video'
+  | 'sticker'
   | 'location'
   | 'template'
+  | 'system'
   /** Customer tapped a reply button or list row on a message we sent. */
   | 'interactive';
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';

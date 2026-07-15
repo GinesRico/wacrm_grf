@@ -55,6 +55,38 @@ type ConversationMutationPatch = {
   department_id?: string | null;
 };
 
+function systemMessageForAction(action: InboxAction, agentName: string) {
+  switch (action) {
+    case "accept":
+      return `Chat aceptado por ${agentName}`;
+    case "resolve":
+      return `Chat resuelto por ${agentName}`;
+    case "return_to_pending":
+      return `Chat devuelto a cola por ${agentName}`;
+    case "reopen":
+      return `Chat reabierto por ${agentName}`;
+    case "assign":
+      return null;
+  }
+}
+
+async function resolveAgentName(
+  db: SupabaseClient,
+  accountId: string,
+  userId: string,
+) {
+  const { data, error } = await db
+    .from("profiles")
+    .select("full_name, email")
+    .eq("account_id", accountId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  const row = data as { full_name?: string | null; email?: string | null } | null;
+  return row?.full_name?.trim() || row?.email?.trim() || "un usuario";
+}
+
 export function getConversationMutationPatch(
   action: InboxAction,
   current: ConversationState,
@@ -367,6 +399,22 @@ export async function mutateInboxConversation(
     params.accountId,
     [normalizeConversation(updatedRows[0] as never)],
   );
+
+  const agentName = await resolveAgentName(db, params.accountId, params.userId);
+  const systemText = systemMessageForAction(params.action, agentName);
+  if (systemText) {
+    const { error: messageError } = await db.from("messages").insert({
+      conversation_id: params.conversationId,
+      sender_type: "bot",
+      sender_id: params.userId,
+      content_type: "system",
+      content_text: systemText,
+      status: "sent",
+    });
+    if (messageError) {
+      console.error("Failed to create inbox system message:", messageError);
+    }
+  }
 
   return updated;
 }
