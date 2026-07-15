@@ -489,13 +489,34 @@ function MessageContent({
   onPrimary: boolean;
 }) {
   if (message.deleted_at) {
+    const deletedPreview = message.content_text || (() => {
+      switch (message.content_type) {
+        case "image":
+          return t("photo");
+        case "video":
+          return t("video");
+        case "audio":
+          return t("audio");
+        case "document":
+          return t("document");
+        case "location":
+          return t("locationShared");
+        case "template":
+          return t("template");
+        default:
+          return t("unsupported");
+      }
+    })();
+
     return (
       <div className="flex flex-col gap-1">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
           <Ban className="size-3.5" />
           {t("deletedTitle")}
         </span>
-        <p className="text-sm opacity-80">{t("deletedBody")}</p>
+        <p className="whitespace-pre-wrap break-words text-sm opacity-80">
+          <WhatsAppText text={deletedPreview} />
+        </p>
       </div>
     );
   }

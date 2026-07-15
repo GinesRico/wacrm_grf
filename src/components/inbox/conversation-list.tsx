@@ -26,6 +26,13 @@ import {
   CornerDownLeft,
   Ban,
   Forward,
+  ImageIcon,
+  Mic,
+  Video,
+  FileText,
+  MapPin,
+  LayoutTemplate,
+  MessageSquare,
 } from "lucide-react";
 import { format, type Locale } from "date-fns";
 import { es } from "date-fns/locale";
@@ -63,6 +70,110 @@ interface InboxCounts {
   inboxOpen: number;
   inboxPending: number;
   resolved: number;
+}
+
+type MediaPreviewKind =
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "location"
+  | "template"
+  | "interactive";
+
+function parseMediaPreviewToken(text: string): MediaPreviewKind | null {
+  const normalized = text.trim().toLowerCase();
+  switch (normalized) {
+    case "[image]":
+    case "image":
+    case "imagen":
+      return "image";
+    case "[audio]":
+    case "audio":
+    case "nota de voz":
+      return "audio";
+    case "[video]":
+    case "video":
+      return "video";
+    case "[document]":
+    case "document":
+    case "documento":
+      return "document";
+    case "[location]":
+    case "location":
+    case "ubicacion":
+    case "ubicación":
+      return "location";
+    case "[template]":
+    case "template":
+    case "plantilla":
+      return "template";
+    case "[interactive]":
+    case "interactive":
+      return "interactive";
+    default:
+      return null;
+  }
+}
+
+function mediaPreviewLabel(kind: MediaPreviewKind, t: ReturnType<typeof useTranslations>) {
+  switch (kind) {
+    case "image":
+      return t("mediaImage");
+    case "audio":
+      return t("mediaAudio");
+    case "video":
+      return t("mediaVideo");
+    case "document":
+      return t("mediaDocument");
+    case "location":
+      return t("mediaLocation");
+    case "template":
+      return t("mediaTemplate");
+    case "interactive":
+      return t("mediaInteractive");
+  }
+}
+
+function MediaPreviewIcon({ kind }: { kind: MediaPreviewKind }) {
+  switch (kind) {
+    case "image":
+      return <ImageIcon className="size-3.5" />;
+    case "audio":
+      return <Mic className="size-3.5" />;
+    case "video":
+      return <Video className="size-3.5" />;
+    case "document":
+      return <FileText className="size-3.5" />;
+    case "location":
+      return <MapPin className="size-3.5" />;
+    case "template":
+      return <LayoutTemplate className="size-3.5" />;
+    case "interactive":
+      return <MessageSquare className="size-3.5" />;
+  }
+}
+
+function ConversationPreviewText({
+  text,
+  t,
+}: {
+  text: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const kind = parseMediaPreviewToken(text);
+  if (!kind) {
+    return <WhatsAppText text={text} />;
+  }
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0 text-muted-foreground">
+        <MediaPreviewIcon kind={kind} />
+      </span>
+      <span className="truncate">{mediaPreviewLabel(kind, t)}</span>
+    </span>
+  );
 }
 
 export function ConversationList({
@@ -229,6 +340,53 @@ export function ConversationList({
     selectedCompany,
   ]);
 
+  const visiblePendingCount = useMemo(() => {
+    let result = conversations.filter((c) => c.status === "pending");
+
+    if (scope === "mine") {
+      result = result.filter((c) => c.status === "pending");
+    }
+
+    if (selectedDepartmentIds.length > 0) {
+      result = result.filter(
+        (c) => c.department_id && selectedDepartmentIds.includes(c.department_id),
+      );
+    }
+
+    if (selectedTagIds.length > 0 || selectedCompany !== null) {
+      result = result.filter((c) =>
+        matchesContactFilters(c, {
+          tagIds: selectedTagIds,
+          company: selectedCompany,
+        }),
+      );
+    }
+
+    return result.length;
+  }, [
+    conversations,
+    scope,
+    selectedDepartmentIds,
+    selectedTagIds,
+    selectedCompany,
+  ]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (tab !== "inbox" || subtab !== "open") return;
+    if (filtered.length > 0) return;
+    if (counts.inboxPending > 0 || visiblePendingCount > 0) {
+      setSubtab("pending");
+    }
+  }, [
+    counts.inboxPending,
+    filtered.length,
+    loading,
+    subtab,
+    tab,
+    visiblePendingCount,
+  ]);
+
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
       prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
@@ -366,7 +524,7 @@ export function ConversationList({
           </div>
         </div>
 
-        <div className="space-y-2 p-3">
+        <div className="space-y-2 px-3 pt-3 pb-0">
             <div className="flex items-center gap-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -454,95 +612,97 @@ export function ConversationList({
               </div>
             )}
 
-        <div className="flex flex-wrap items-center gap-1">
-          {tags.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className={cn(
-                  "inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
-                  selectedTagIds.length > 0
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {t("tags")}
-                {selectedTagIds.length > 0 && (
-                  <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                    {selectedTagIds.length}
-                  </span>
-                )}
-                <ChevronDown className="h-3 w-3" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="max-h-64 w-56 border-border bg-popover"
-              >
-                {tags.map((tag) => (
-                  <DropdownMenuCheckboxItem
-                    key={tag.id}
-                    checked={selectedTagIds.includes(tag.id)}
-                    onCheckedChange={() => toggleTag(tag.id)}
-                    className="text-sm text-popover-foreground"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: tag.color }}
-                      />
-                      <span className="truncate">{tag.name}</span>
-                    </span>
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-
-          {companies.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                className={cn(
-                  "inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
-                  selectedCompany
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <span className="truncate">{selectedCompany ?? t("company")}</span>
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="max-h-64 w-56 border-border bg-popover"
-              >
-                <DropdownMenuItem
-                  onClick={() => setSelectedCompany(null)}
+        {(tags.length > 0 || companies.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1">
+            {tags.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
                   className={cn(
-                    "text-sm",
-                    selectedCompany === null
+                    "inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
+                    selectedTagIds.length > 0
                       ? "text-primary"
-                      : "text-popover-foreground",
+                      : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  {t("allCompanies")}
-                </DropdownMenuItem>
-                {companies.map((co) => (
+                  {t("tags")}
+                  {selectedTagIds.length > 0 && (
+                    <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                      {selectedTagIds.length}
+                    </span>
+                  )}
+                  <ChevronDown className="h-3 w-3" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="max-h-64 w-56 border-border bg-popover"
+                >
+                  {tags.map((tag) => (
+                    <DropdownMenuCheckboxItem
+                      key={tag.id}
+                      checked={selectedTagIds.includes(tag.id)}
+                      onCheckedChange={() => toggleTag(tag.id)}
+                      className="text-sm text-popover-foreground"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        />
+                        <span className="truncate">{tag.name}</span>
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            {companies.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  className={cn(
+                    "inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
+                    selectedCompany
+                      ? "text-primary"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span className="truncate">{selectedCompany ?? t("company")}</span>
+                  <ChevronDown className="h-3 w-3 shrink-0" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="max-h-64 w-56 border-border bg-popover"
+                >
                   <DropdownMenuItem
-                    key={co}
-                    onClick={() => setSelectedCompany(co)}
+                    onClick={() => setSelectedCompany(null)}
                     className={cn(
                       "text-sm",
-                      selectedCompany === co
+                      selectedCompany === null
                         ? "text-primary"
                         : "text-popover-foreground",
                     )}
                   >
-                    <span className="truncate">{co}</span>
+                    {t("allCompanies")}
                   </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
+                  {companies.map((co) => (
+                    <DropdownMenuItem
+                      key={co}
+                      onClick={() => setSelectedCompany(co)}
+                      className={cn(
+                        "text-sm",
+                        selectedCompany === co
+                          ? "text-primary"
+                          : "text-popover-foreground",
+                      )}
+                    >
+                      <span className="truncate">{co}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+        )}
 
         {hasContactFilters && (
           <div className="flex flex-wrap items-center gap-1">
@@ -589,7 +749,7 @@ export function ConversationList({
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-4 py-12 text-center">
+          <div className="px-4 py-8 text-center">
             <p className="text-sm text-muted-foreground">{t("noConversations")}</p>
           </div>
         ) : (
@@ -800,8 +960,9 @@ function ConversationItem({
             </span>
             <div className="mt-0.5 min-w-0 pt-0.5">
               <p className="truncate text-xs text-muted-foreground">
-                <WhatsAppText
+                <ConversationPreviewText
                   text={conversation.last_message_text || t("noMessagesYet")}
+                  t={t}
                 />
               </p>
             </div>
@@ -1223,7 +1384,9 @@ function PreviewMessageBubble({
               <Ban className="size-3" />
               {tBubble("deletedTitle")}
             </span>
-            <span className="text-xs opacity-80">{tBubble("deletedBody")}</span>
+            <span className="whitespace-pre-wrap break-words text-xs opacity-80">
+              <WhatsAppText text={text} />
+            </span>
           </div>
         ) : (
           <>

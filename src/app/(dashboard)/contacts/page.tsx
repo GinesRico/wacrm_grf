@@ -342,42 +342,48 @@ export default function ContactsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
+      <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-foreground">{t('title')}</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {totalCount > 0 ? t('subtitle', { count: totalCount }) : t('subtitleZero')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {canEditSettings && (
             <Button
               variant="outline"
               onClick={() => setCustomFieldsOpen(true)}
-              className="border-border text-muted-foreground hover:bg-muted"
+              title={t('customFieldsBtn')}
+              aria-label={t('customFieldsBtn')}
+              className="h-9 w-9 border-border px-0 text-muted-foreground hover:bg-muted sm:h-8 sm:w-auto sm:px-2.5"
             >
               <SlidersHorizontal className="size-4" />
-              {t('customFieldsBtn')}
+              <span className="hidden sm:inline">{t('customFieldsBtn')}</span>
             </Button>
           )}
           <GatedButton
             variant="outline"
             canAct={canEdit}
             gateReason="add or import contacts"
+            title={t('importBtn')}
+            aria-label={t('importBtn')}
             onClick={() => setImportOpen(true)}
-            className="border-border text-muted-foreground hover:bg-muted"
+            className="h-9 w-9 border-border px-0 text-muted-foreground hover:bg-muted sm:h-8 sm:w-auto sm:px-2.5"
           >
             <Upload className="size-4" />
-            {t('importBtn')}
+            <span className="hidden sm:inline">{t('importBtn')}</span>
           </GatedButton>
           <GatedButton
             canAct={canEdit}
             gateReason="add or import contacts"
+            title={t('addContactBtn')}
+            aria-label={t('addContactBtn')}
             onClick={openAddForm}
-            className="bg-primary hover:bg-primary/90 text-primary-foreground"
+            className="h-9 w-9 bg-primary px-0 text-primary-foreground hover:bg-primary/90 sm:h-8 sm:w-auto sm:px-2.5"
           >
             <Plus className="size-4" />
-            {t('addContactBtn')}
+            <span className="hidden sm:inline">{t('addContactBtn')}</span>
           </GatedButton>
         </div>
       </div>

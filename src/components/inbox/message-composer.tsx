@@ -6,11 +6,11 @@ import {
   useCallback,
   useEffect,
   KeyboardEvent,
+  ClipboardEvent,
 } from "react";
 import {
   Send,
   LayoutTemplate,
-  Paperclip,
   Image as ImageIcon,
   Video,
   FileText,
@@ -18,10 +18,10 @@ import {
   Square,
   X,
   Loader2,
-  Sparkles,
   Plus,
   MessageSquareDashed,
   Zap,
+  Smile,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -31,6 +31,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -55,6 +60,7 @@ import {
 import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
 import type { InteractiveMessagePayload, QuickReply } from "@/types";
 import { QuickReplyPicker } from "./quick-reply-picker";
+import { useAppPrompt } from "@/hooks/use-app-dialog";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -68,6 +74,33 @@ export const MEDIA_CAPTION_MAX = 1024;
 /** Hard cap on a single voice recording so it can't blow the upload/
  *  transcode limits — auto-stops the recorder when reached. */
 const MAX_RECORDING_SECONDS = 5 * 60;
+
+const EMOJI_CHOICES = [
+  "😀",
+  "😄",
+  "😂",
+  "😊",
+  "😍",
+  "😘",
+  "😎",
+  "🤔",
+  "😮",
+  "😢",
+  "🙏",
+  "👍",
+  "👌",
+  "👏",
+  "💪",
+  "❤️",
+  "🔥",
+  "✅",
+  "🚗",
+  "🔧",
+  "📦",
+  "📸",
+  "📍",
+  "☎️",
+];
 
 export interface SendMediaPayload {
   kind: ComposerMediaKind;
@@ -148,6 +181,7 @@ export function MessageComposer({
   onClearReply,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
+  const { prompt, promptDialog } = useAppPrompt();
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -160,6 +194,9 @@ export function MessageComposer({
     useState<InteractiveMessagePayload>(blankButtonsPayload);
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+  const [slashQuickReplies, setSlashQuickReplies] = useState<QuickReply[]>([]);
+  const [slashLoading, setSlashLoading] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
@@ -197,6 +234,14 @@ export function MessageComposer({
   const readOnly = !canSend;
   // Media (like free-form text) is only allowed inside the 24h window.
   const inputsDisabled = readOnly || sessionExpired || locked;
+
+  useEffect(() => {
+    if (inputsDisabled || draft || recording) return;
+    const id = window.setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 80);
+    return () => window.clearTimeout(id);
+  }, [conversationId, draft, inputsDisabled, recording]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -259,6 +304,53 @@ export function MessageComposer({
     },
     [adjustHeight]
   );
+
+  const insertTextAtCursor = useCallback(
+    (value: string) => {
+      const el = textareaRef.current;
+      const start = el?.selectionStart ?? text.length;
+      const end = el?.selectionEnd ?? text.length;
+      const nextText = `${text.slice(0, start)}${value}${text.slice(end)}`;
+      setText(nextText);
+      requestAnimationFrame(() => {
+        adjustHeight();
+        const target = textareaRef.current;
+        if (!target) return;
+        const cursor = start + value.length;
+        target.focus();
+        target.setSelectionRange(cursor, cursor);
+      });
+    },
+    [adjustHeight, text],
+  );
+
+  const slashQuery = text.startsWith("/") ? text.slice(1).trim().toLowerCase() : "";
+  const slashPickerOpen = text.startsWith("/") && !inputsDisabled && !draft && !recording;
+  const visibleSlashQuickReplies = slashQuickReplies.filter((qr) => {
+    if (!slashQuery) return true;
+    const haystack = `${qr.title} ${qr.content_text ?? ""}`.toLowerCase();
+    return haystack.includes(slashQuery);
+  });
+
+  useEffect(() => {
+    if (!slashPickerOpen) return;
+    let cancelled = false;
+    setSlashLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch("/api/quick-replies", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) {
+          setSlashQuickReplies((data.quick_replies as QuickReply[]) ?? []);
+        }
+      } finally {
+        if (!cancelled) setSlashLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slashPickerOpen]);
 
   // Ask the AI assistant for a suggested reply and drop it into the
   // composer for the agent to edit + send. Read-only server-side —
@@ -337,9 +429,13 @@ export function MessageComposer({
       toast.error(result.error);
       return;
     }
-    const title = window
-      .prompt(t("quickReplyNamePrompt"))
-      ?.trim();
+    const title = (
+      await prompt({
+        title: t("quickReplyNamePrompt"),
+        confirmLabel: t("save"),
+        cancelLabel: t("cancel"),
+      })
+    )?.trim();
     if (!title) return;
     setSavingQuickReply(true);
     try {
@@ -363,7 +459,7 @@ export function MessageComposer({
     } finally {
       setSavingQuickReply(false);
     }
-  }, [interactivePayload, t]);
+  }, [interactivePayload, prompt, t]);
 
   // A picked quick reply: text fills the composer; interactive opens the
   // builder pre-filled so the agent can tweak before sending.
@@ -387,6 +483,25 @@ export function MessageComposer({
           el.focus();
           el.setSelectionRange(el.value.length, el.value.length);
         }
+      });
+    },
+    [openInteractiveBuilder, adjustHeight],
+  );
+
+  const handlePickSlashQuickReply = useCallback(
+    (qr: QuickReply) => {
+      if (qr.kind === "interactive" && qr.interactive_payload) {
+        setText("");
+        openInteractiveBuilder(qr.interactive_payload);
+        return;
+      }
+      setText(qr.content_text ?? "");
+      requestAnimationFrame(() => {
+        adjustHeight();
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
       });
     },
     [openInteractiveBuilder, adjustHeight],
@@ -429,6 +544,30 @@ export function MessageComposer({
       if (file) void stageUpload(kind, file);
     },
     [stageUpload],
+  );
+
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (inputsDisabled || busy || draft) return;
+      const file =
+        Array.from(e.clipboardData.files)[0] ??
+        Array.from(e.clipboardData.items)
+          .find((item) => item.kind === "file")
+          ?.getAsFile();
+      if (!file) return;
+
+      const kind: ComposerMediaKind = file.type.startsWith("image/")
+        ? "image"
+        : file.type.startsWith("video/")
+          ? "video"
+          : file.type.startsWith("audio/")
+            ? "audio"
+            : "document";
+
+      e.preventDefault();
+      void stageUpload(kind, file);
+    },
+    [busy, draft, inputsDisabled, stageUpload],
   );
 
   // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
@@ -642,8 +781,49 @@ export function MessageComposer({
           </Button>
         </div>
       ) : (
-        <div className="flex items-end gap-2">
-          {/* Attach menu — photo / video / document / voice. */}
+        <div className="relative flex items-end gap-2">
+          {/* Quick replies appear inline when the draft starts with /. */}
+          {slashPickerOpen && (
+            <div className="absolute bottom-full left-11 z-30 mb-2 max-h-72 w-80 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 text-sm shadow-lg">
+              {slashLoading ? (
+                <div className="flex items-center justify-center py-5 text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </div>
+              ) : visibleSlashQuickReplies.length === 0 ? (
+                <div className="px-3 py-5 text-center text-xs text-muted-foreground">
+                  {t("quickRepliesEmpty")}
+                </div>
+              ) : (
+                visibleSlashQuickReplies.map((qr) => (
+                  <button
+                    key={qr.id}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handlePickSlashQuickReply(qr)}
+                    className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left hover:bg-muted"
+                  >
+                    {qr.kind === "interactive" ? (
+                      <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    ) : (
+                      <MessageSquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-foreground">
+                        {qr.title}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {qr.kind === "interactive"
+                          ? t("interactiveMessage")
+                          : qr.content_text}
+                      </span>
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* + menu groups media, templates, interactive messages and snippets. */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled || busy}
@@ -652,14 +832,14 @@ export function MessageComposer({
                   ? t("readOnlyTitle")
                   : inputsDisabled
                     ? undefined
-                    : t("attachMedia")
+                    : t("moreActions")
               }
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Paperclip className="h-4 w-4" />
+                <Plus className="h-4 w-4" />
               )}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="border-border bg-popover">
@@ -679,26 +859,10 @@ export function MessageComposer({
                 <Mic className="mr-2 h-4 w-4" />
                 {t("voiceNote")}
               </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* + menu — interactive messages + quick replies. Gated on the
-              24h window like free-form text (interactive requires it). */}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              disabled={inputsDisabled}
-              title={
-                readOnly
-                  ? t("readOnlyTitle")
-                  : inputsDisabled
-                    ? undefined
-                    : t("moreActions")
-              }
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Plus className="h-4 w-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="border-border bg-popover">
+              <DropdownMenuItem onClick={onOpenTemplates}>
+                <LayoutTemplate className="mr-2 h-4 w-4" />
+                {t("templates")}
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openInteractiveBuilder()}>
                 <MessageSquareDashed className="mr-2 h-4 w-4" />
                 {t("interactiveMessage")}
@@ -710,40 +874,41 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly && !locked}
-            gateReason="send messages"
-            title={locked ? lockedReason : readOnly ? undefined : t("sendTemplate")}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-            onClick={onOpenTemplates}
-          >
-            <LayoutTemplate className="h-4 w-4" />
-          </GatedButton>
-
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly && !locked}
-            gateReason="send messages"
-            disabled={drafting}
-            title={locked ? lockedReason : readOnly ? undefined : t("draftWithAI")}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-primary"
-            onClick={handleDraft}
-          >
-            {drafting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Sparkles className="h-4 w-4" />
-            )}
-          </GatedButton>
+          <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
+            <PopoverTrigger
+              disabled={inputsDisabled}
+              title={t("emoji")}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Smile className="h-4 w-4" />
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="start"
+              className="grid w-72 grid-cols-8 gap-1 p-2"
+            >
+              {EMOJI_CHOICES.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => {
+                    insertTextAtCursor(emoji);
+                    setEmojiOpen(false);
+                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-lg hover:bg-muted"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </PopoverContent>
+          </Popover>
 
           <textarea
             ref={textareaRef}
             value={text}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
@@ -776,15 +941,6 @@ export function MessageComposer({
             <Send className="h-4 w-4" />
           </GatedButton>
         </div>
-      )}
-
-      {/* Hint sits outside the flex row so its height doesn't push
-          `items-end` buttons below the textarea. Indented to line up
-          under the textarea left edge. */}
-      {!draft && !recording && (
-        <p className="mt-1 pl-[5.5rem] text-[10px] text-muted-foreground">
-          {t("draftHint")}
-        </p>
       )}
 
       {/* Interactive-message builder dialog. */}
@@ -826,6 +982,7 @@ export function MessageComposer({
         onOpenChange={setQuickReplyOpen}
         onPick={handlePickQuickReply}
       />
+      {promptDialog}
     </div>
   );
 }

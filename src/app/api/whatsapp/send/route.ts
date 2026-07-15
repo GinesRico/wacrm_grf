@@ -183,6 +183,19 @@ export async function POST(request: Request) {
       )
     }
 
+    if (message_type !== 'template') {
+      const sessionOpen = await isConversationWithinCustomerSession(
+        supabase,
+        conversationId,
+      )
+      if (!sessionOpen) {
+        return NextResponse.json(
+          { error: 'The 24-hour WhatsApp session has expired. Send an approved template to re-engage this contact.' },
+          { status: 409 },
+        )
+      }
+    }
+
     // Delegate to the shared send core (validates, sends to Meta with
     // phone-variant retry, persists, pauses active flow runs). Its
     // `SendMessageError` carries a machine code + HTTP status; the
@@ -303,4 +316,25 @@ async function findOrCreateConversation(
   }
 
   return created.id
+}
+
+async function isConversationWithinCustomerSession(
+  supabase: SendSupabase,
+  conversationId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('created_at')
+    .eq('conversation_id', conversationId)
+    .eq('sender_type', 'customer')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !data?.created_at) return false
+
+  const lastCustomerAt = new Date(data.created_at).getTime()
+  if (!Number.isFinite(lastCustomerAt)) return false
+
+  return Date.now() - lastCustomerAt < 24 * 60 * 60 * 1000
 }

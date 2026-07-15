@@ -19,7 +19,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -36,12 +35,66 @@ const PREFIXES = [
   { value: "52", label: "México (+52)" },
 ] as const;
 
+const COUNTRY_PREFIXES = [
+  { value: "34", label: "España (+34)" },
+  { value: "1", label: "EE. UU. / Canadá (+1)" },
+  { value: "44", label: "Reino Unido (+44)" },
+  { value: "351", label: "Portugal (+351)" },
+  { value: "33", label: "Francia (+33)" },
+  { value: "49", label: "Alemania (+49)" },
+  { value: "39", label: "Italia (+39)" },
+  { value: "52", label: "México (+52)" },
+  { value: "54", label: "Argentina (+54)" },
+  { value: "55", label: "Brasil (+55)" },
+  { value: "56", label: "Chile (+56)" },
+  { value: "57", label: "Colombia (+57)" },
+  { value: "51", label: "Perú (+51)" },
+  { value: "593", label: "Ecuador (+593)" },
+  { value: "598", label: "Uruguay (+598)" },
+  { value: "595", label: "Paraguay (+595)" },
+  { value: "591", label: "Bolivia (+591)" },
+  { value: "58", label: "Venezuela (+58)" },
+  { value: "507", label: "Panamá (+507)" },
+  { value: "506", label: "Costa Rica (+506)" },
+  { value: "503", label: "El Salvador (+503)" },
+  { value: "502", label: "Guatemala (+502)" },
+  { value: "504", label: "Honduras (+504)" },
+  { value: "505", label: "Nicaragua (+505)" },
+  { value: "809", label: "República Dominicana (+809)" },
+  { value: "31", label: "Países Bajos (+31)" },
+  { value: "32", label: "Bélgica (+32)" },
+  { value: "41", label: "Suiza (+41)" },
+  { value: "43", label: "Austria (+43)" },
+  { value: "353", label: "Irlanda (+353)" },
+  { value: "45", label: "Dinamarca (+45)" },
+  { value: "46", label: "Suecia (+46)" },
+  { value: "47", label: "Noruega (+47)" },
+  { value: "358", label: "Finlandia (+358)" },
+  { value: "48", label: "Polonia (+48)" },
+  { value: "420", label: "Chequia (+420)" },
+  { value: "40", label: "Rumanía (+40)" },
+  { value: "30", label: "Grecia (+30)" },
+  { value: "90", label: "Turquía (+90)" },
+  { value: "212", label: "Marruecos (+212)" },
+  { value: "213", label: "Argelia (+213)" },
+  ...PREFIXES.filter(() => false),
+] as const;
+
 interface WhatsAppLine {
   id: string;
   label?: string | null;
   phone_number_id: string;
+  display_phone_number?: string | null;
   status?: string | null;
   is_default?: boolean | null;
+}
+
+function prefixLabel(value: string): string {
+  return COUNTRY_PREFIXES.find((item) => item.value === value)?.label ?? `+${value}`;
+}
+
+function lineDisplayName(line: WhatsAppLine): string {
+  return line.label?.trim() || line.display_phone_number?.trim() || line.phone_number_id;
 }
 
 interface StartConversationButtonProps {
@@ -67,6 +120,10 @@ export function StartConversationButton({
   const selectedContact = useMemo(
     () => contacts.find((c) => c.id === selectedContactId) ?? null,
     [contacts, selectedContactId],
+  );
+  const selectedLine = useMemo(
+    () => lines.find((line) => line.id === lineId) ?? null,
+    [lineId, lines],
   );
 
   const suggestions = useMemo(() => {
@@ -216,10 +273,12 @@ export function StartConversationButton({
                   }}
                 >
                   <SelectTrigger className="h-10 w-full bg-background">
-                    <SelectValue />
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {prefixLabel(prefix)}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
-                    {PREFIXES.map((item) => (
+                    {COUNTRY_PREFIXES.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
                         {item.label}
                       </SelectItem>
@@ -236,12 +295,14 @@ export function StartConversationButton({
                   }}
                 >
                   <SelectTrigger className="h-10 w-full bg-background">
-                    <SelectValue placeholder={t("noLine")} />
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {selectedLine ? lineDisplayName(selectedLine) : t("noLine")}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     {lines.map((line) => (
                       <SelectItem key={line.id} value={line.id}>
-                        {line.label || line.phone_number_id}
+                        {lineDisplayName(line)}
                       </SelectItem>
                     ))}
                   </SelectContent>

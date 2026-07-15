@@ -38,6 +38,7 @@ import {
   SelectTrigger,
 } from '@/components/ui/select';
 import type { Department, WhatsAppConfig as WhatsAppConfigType } from '@/types';
+import { useAppConfirm } from '@/hooks/use-app-dialog';
 
 const MASKED_TOKEN = '••••••••••••••••';
 
@@ -49,6 +50,7 @@ type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
   const supabase = createClient();
+  const { confirm, confirmDialog } = useAppConfirm();
   // After multi-user, whatsapp_config is one-row-per-account, not
   // one-row-per-user. We pull `accountId` straight off the auth
   // context and key every read off it — so a teammate who just
@@ -378,7 +380,14 @@ export function WhatsAppConfig() {
   }
 
   async function handleReset() {
-    if (!confirm(t('resetConfirm'))) {
+    const ok = await confirm({
+      title: t('resetTitle'),
+      description: t('resetConfirm'),
+      confirmLabel: t('reset'),
+      cancelLabel: t('cancel'),
+      destructive: true,
+    });
+    if (!ok) {
       return;
     }
 
@@ -485,6 +494,7 @@ export function WhatsAppConfig() {
 
   return (
     <section className="animate-in fade-in-50 duration-200">
+      {confirmDialog}
       <SettingsPanelHead
         title={t("title")}
         description={t("description")}

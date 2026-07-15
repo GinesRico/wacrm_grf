@@ -25,6 +25,7 @@ import {
   type InteractiveMessagePayload,
 } from "@/lib/whatsapp/interactive";
 import type { QuickReply, QuickReplyKind } from "@/types";
+import { useAppConfirm } from "@/hooks/use-app-dialog";
 
 interface DraftState {
   id?: string;
@@ -49,6 +50,7 @@ export function QuickRepliesManager() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [saving, setSaving] = useState(false);
+  const { confirm, confirmDialog } = useAppConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,7 +116,14 @@ export function QuickRepliesManager() {
 
   const remove = useCallback(
     async (id: string) => {
-      if (!window.confirm(t("deleteConfirm"))) return;
+      const ok = await confirm({
+        title: t("delete"),
+        description: t("deleteConfirm"),
+        confirmLabel: t("delete"),
+        cancelLabel: t("cancel"),
+        destructive: true,
+      });
+      if (!ok) return;
       const res = await fetch(`/api/quick-replies/${id}`, { method: "DELETE" });
       if (!res.ok) {
         toast.error(t("deleteFailed"));
@@ -122,11 +131,12 @@ export function QuickRepliesManager() {
       }
       await load();
     },
-    [load, t],
+    [confirm, load, t],
   );
 
   return (
     <div>
+      {confirmDialog}
       <SettingsPanelHead
         title={t("title")}
         description={t("description")}

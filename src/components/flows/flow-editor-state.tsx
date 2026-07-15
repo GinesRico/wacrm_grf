@@ -53,6 +53,7 @@ import { useTranslations } from "next-intl";
 import { unlinkNodeReferences } from "@/lib/flows/edges";
 import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
+import { useAppConfirm } from "@/hooks/use-app-dialog";
 
 // ============================================================
 // State shape
@@ -239,6 +240,7 @@ export function FlowEditorProvider({
 }: ProviderProps) {
   const router = useRouter();
   const t = useTranslations("Flows.editorState");
+  const { confirm, confirmDialog } = useAppConfirm();
 
   const [state, setStateRaw] = useState<BuilderState>(() => ({
     name: initialFlow.name,
@@ -402,9 +404,13 @@ export function FlowEditorProvider({
 
   // ---- Delete ----
   const deleteFlow = useCallback(async () => {
-    const yes = window.confirm(
-      `Delete "${state.name}"? Any active runs end immediately. This can't be undone.`,
-    );
+    const yes = await confirm({
+      title: t("delete"),
+      description: t("deleteConfirm", { name: state.name }),
+      confirmLabel: t("delete"),
+      cancelLabel: t("cancel"),
+      destructive: true,
+    });
     if (!yes) return;
     try {
       const res = await fetch(`/api/flows/${initialFlow.id}`, {
@@ -416,7 +422,7 @@ export function FlowEditorProvider({
       const msg = err instanceof Error ? err.message : "Delete failed";
       toast.error(msg);
     }
-  }, [initialFlow.id, router, state.name]);
+  }, [confirm, initialFlow.id, router, state.name, t]);
 
   // ---- Node mutations ----
   const updateNode = useCallback(
@@ -563,5 +569,10 @@ export function FlowEditorProvider({
     ],
   );
 
-  return <FlowEditorCtx.Provider value={value}>{children}</FlowEditorCtx.Provider>;
+  return (
+    <FlowEditorCtx.Provider value={value}>
+      {children}
+      {confirmDialog}
+    </FlowEditorCtx.Provider>
+  );
 }

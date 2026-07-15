@@ -317,7 +317,14 @@
       "departmentFilter": "Filter by departments",
       "noDepartmentsAvailable": "No departments configured",
       "collapseInbox": "Collapse inbox",
-      "expandInbox": "Expand inbox"
+      "expandInbox": "Expand inbox",
+      "mediaImage": "Image",
+      "mediaAudio": "Audio",
+      "mediaVideo": "Video",
+      "mediaDocument": "Document",
+      "mediaLocation": "Location",
+      "mediaTemplate": "Template",
+      "mediaInteractive": "Interactive message"
     },
     "messageThread": {
       "backToConversations": "Back to conversations",
@@ -345,6 +352,7 @@
       "defaultLine": "Default",
       "noDepartmentsAvailable": "No departments configured",
       "availableUntil": "Available until {value}",
+      "loadingMessages": "Loading messages...",
       "noMessagesYet": "No messages yet",
       "sendTemplateHint": "Send a template to start the conversation",
       "selectConversation": "Select a conversation",
@@ -405,6 +413,7 @@
       "document": "Document",
       "voiceNote": "Voice note",
       "sendTemplate": "Send template",
+      "emoji": "Emoji",
       "draftWithAI": "Draft a reply with AI",
       "addCaption": "Add a caption…",
       "removeAttachment": "Remove attachment",
@@ -414,6 +423,7 @@
       "quickRepliesEmpty": "No quick replies yet. Add some in Settings → Quick replies.",
       "saveAsQuickReply": "Save as quick reply",
       "send": "Send",
+      "save": "Save",
       "quickReplyNamePrompt": "Name this quick reply:",
       "quickReplySaved": "Saved as a quick reply.",
       "quickReplySaveError": "Couldn't save the quick reply.",
@@ -459,6 +469,7 @@
       "copy": "Copy",
       "copyText": "Copy text",
       "delete": "Delete",
+      "cancel": "Cancel",
       "react": "React",
       "reactWith": "React with {emoji}",
       "forward": "Forward",
@@ -1497,7 +1508,10 @@
       "fixIssues": "Fix the issues below before activating.",
       "statusActivated": "Flow activated.",
       "statusArchived": "Archived.",
-      "statusDraft": "Saved as draft."
+      "statusDraft": "Saved as draft.",
+      "delete": "Delete flow",
+      "cancel": "Cancel",
+      "deleteConfirm": "Delete \"{name}\"? Any active runs will end immediately. This cannot be undone."
     },
     "summary": {
       "options": "{count} {count, plural, =1 {option} other {options}}",
@@ -1629,6 +1643,8 @@
       "created": "Department created",
       "saved": "Department saved",
       "deleted": "Department deleted",
+      "delete": "Delete",
+      "cancel": "Cancel",
       "deleteConfirm": "Delete department \"{name}\"? Lines and tickets will move to another department when possible.",
       "loadFailed": "Failed to load departments",
       "saveFailed": "Failed to save department"
@@ -1893,6 +1909,9 @@
       "numberFullyWired": "Number is fully wired — Meta is delivering events.",
       "numberNotRegistered": "Number is not fully registered. See the checks below for which step failed.",
       "verificationEndpointFailed": "Could not reach the verification endpoint.",
+      "resetTitle": "Reset configuration",
+      "reset": "Reset",
+      "cancel": "Cancel",
       "resetConfirm": "This will delete the current WhatsApp config so you can re-enter it. Continue?",
       "resetFailed": "Failed to reset configuration",
       "configCleared": "Configuration cleared. You can now re-enter your credentials.",
@@ -2033,6 +2052,7 @@
       "saveFailed": "Couldn't save the quick reply.",
       "created": "Quick reply created.",
       "updated": "Quick reply updated.",
+      "delete": "Delete",
       "deleteConfirm": "Delete this quick reply?",
       "deleteFailed": "Couldn't delete the quick reply."
     },

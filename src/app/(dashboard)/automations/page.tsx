@@ -40,7 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { AUTOMATION_TEMPLATES, type TemplateSlug } from "@/lib/automations/templates"
+import type { TemplateSlug } from "@/lib/automations/templates"
 import { triggerMeta, formatRelative } from "@/lib/automations/trigger-meta"
 import { cn } from "@/lib/utils"
 
@@ -160,8 +160,8 @@ export default function AutomationsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-foreground">{t("title")}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {t("subtitle")}
@@ -170,11 +170,13 @@ export default function AutomationsPage() {
         <GatedButton
           canAct={canCreate}
           gateReason="create automations"
+          title={t("create")}
+          aria-label={t("create")}
           onClick={() => router.push("/automations/new")}
-          className="bg-primary text-primary-foreground hover:bg-primary/90"
+          className="h-9 w-9 bg-primary px-0 text-primary-foreground hover:bg-primary/90 sm:h-8 sm:w-auto sm:px-2.5"
         >
           <Plus className="h-4 w-4" />
-          {t("create")}
+          <span className="hidden sm:inline">{t("create")}</span>
         </GatedButton>
       </div>
 
@@ -183,7 +185,6 @@ export default function AutomationsPage() {
           <h2 className="mb-3 text-sm font-semibold text-muted-foreground">{t("templatesTitle")}</h2>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {TEMPLATE_ORDER.map((slug) => {
-              const template = AUTOMATION_TEMPLATES[slug]
               const Icon = TEMPLATE_ICON[slug]
               const templateName = t(`templates.${slug}.name` as Parameters<typeof t>[0])
               const templateDescription = t(

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SettingsPanelHead } from './settings-panel-head';
 import type { Department } from '@/types';
+import { useAppConfirm } from '@/hooks/use-app-dialog';
 
 const DEFAULT_COLOR = '#22c55e';
 
@@ -21,6 +22,7 @@ export function DepartmentsSettings() {
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const { confirm, confirmDialog } = useAppConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,7 +91,14 @@ export function DepartmentsSettings() {
   }
 
   async function deleteDepartment(department: Department) {
-    if (!window.confirm(t('deleteConfirm', { name: department.name }))) return;
+    const ok = await confirm({
+      title: t('delete'),
+      description: t('deleteConfirm', { name: department.name }),
+      confirmLabel: t('delete'),
+      cancelLabel: t('cancel'),
+      destructive: true,
+    });
+    if (!ok) return;
     setSavingId(department.id);
     try {
       const res = await fetch(`/api/departments/${department.id}`, {
@@ -125,6 +134,7 @@ export function DepartmentsSettings() {
 
   return (
     <section className="animate-in fade-in-50 space-y-6 duration-200">
+      {confirmDialog}
       <SettingsPanelHead title={t('title')} description={t('description')} />
 
       <Card>

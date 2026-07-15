@@ -252,7 +252,14 @@
       "departmentFilter": "Filtrar por departamentos",
       "noDepartmentsAvailable": "Departamentos no configurados",
       "collapseInbox": "Contraer bandeja",
-      "expandInbox": "Expandir bandeja"
+      "expandInbox": "Expandir bandeja",
+      "mediaImage": "Imagen",
+      "mediaAudio": "Audio",
+      "mediaVideo": "Video",
+      "mediaDocument": "Documento",
+      "mediaLocation": "Ubicacion",
+      "mediaTemplate": "Plantilla",
+      "mediaInteractive": "Mensaje interactivo"
     },
     "messageThread": {
       "backToConversations": "Volver a conversaciones",
@@ -280,6 +287,7 @@
       "defaultLine": "Predeterminada",
       "noDepartmentsAvailable": "Departamentos no configurados",
       "availableUntil": "Disponible hasta {value}",
+      "loadingMessages": "Cargando mensajes...",
       "noMessagesYet": "Aun no hay mensajes",
       "sendTemplateHint": "Envia una plantilla para iniciar la conversacion",
       "selectConversation": "Selecciona una conversacion",
@@ -340,6 +348,7 @@
       "document": "Documento",
       "voiceNote": "Nota de voz",
       "sendTemplate": "Enviar plantilla",
+      "emoji": "Emoji",
       "draftWithAI": "Redactar respuesta con IA",
       "addCaption": "Anadir pie...",
       "removeAttachment": "Eliminar adjunto",
@@ -349,6 +358,7 @@
       "quickRepliesEmpty": "Aun no hay respuestas rapidas. Anadelas en Ajustes -> Respuestas rapidas.",
       "saveAsQuickReply": "Guardar como respuesta rapida",
       "send": "Enviar",
+      "save": "Guardar",
       "quickReplyNamePrompt": "Nombre de esta respuesta rapida:",
       "quickReplySaved": "Guardada como respuesta rapida.",
       "quickReplySaveError": "No se pudo guardar la respuesta rapida.",
@@ -394,6 +404,7 @@
       "copy": "Copiar",
       "copyText": "Copiar texto",
       "delete": "Eliminar",
+      "cancel": "Cancelar",
       "react": "Reaccionar",
       "reactWith": "Reaccionar con {emoji}",
       "forward": "Reenviar",
@@ -675,6 +686,7 @@
       "created": "Respuesta rápida creada.",
       "updated": "Respuesta rápida actualizada.",
       "deleteConfirm": "¿Eliminar esta respuesta rápida?",
+      "delete": "Eliminar",
       "deleteFailed": "No se pudo eliminar la respuesta rápida."
     },
     "whatsapp": {
@@ -764,6 +776,9 @@
       "numberFullyWired": "El numero esta completamente conectado; Meta esta entregando eventos.",
       "numberNotRegistered": "El numero no esta completamente registrado. Revisa abajo que paso fallo.",
       "verificationEndpointFailed": "No se pudo contactar con el endpoint de verificacion.",
+      "resetTitle": "Restablecer configuracion",
+      "reset": "Restablecer",
+      "cancel": "Cancelar",
       "resetConfirm": "Esto eliminara la configuracion actual de WhatsApp para que puedas volver a introducirla. Continuar?",
       "resetFailed": "No se pudo restablecer la configuracion",
       "configCleared": "Configuracion eliminada. Ya puedes volver a introducir tus credenciales.",
@@ -789,6 +804,8 @@
       "created": "Departamento creado",
       "saved": "Departamento guardado",
       "deleted": "Departamento eliminado",
+      "delete": "Eliminar",
+      "cancel": "Cancelar",
       "deleteConfirm": "Eliminar el departamento \"{name}\"? Las lineas y tickets se moveran a otro departamento cuando sea posible.",
       "loadFailed": "No se pudieron cargar los departamentos",
       "saveFailed": "No se pudo guardar el departamento"
@@ -2096,7 +2113,10 @@
       "fixIssues": "Corrige los problemas de abajo antes de activar.",
       "statusActivated": "Flujo activado.",
       "statusArchived": "Archivado.",
-      "statusDraft": "Guardado como borrador."
+      "statusDraft": "Guardado como borrador.",
+      "delete": "Eliminar flujo",
+      "cancel": "Cancelar",
+      "deleteConfirm": "Eliminar \"{name}\"? Las ejecuciones activas finalizaran inmediatamente. No se puede deshacer."
     },
     "summary": {
       "options": "{count} {count, plural, =1 {opcion} other {opciones}}",

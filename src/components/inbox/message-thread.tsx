@@ -29,6 +29,7 @@ import {
   Forward,
   X,
   Copy,
+  CornerUpLeft,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { es } from "date-fns/locale";
@@ -64,6 +65,7 @@ import { TemplatePicker } from "./template-picker";
 import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
+import { useAppConfirm } from "@/hooks/use-app-dialog";
 
 interface ReplyDraft {
   id: string;
@@ -397,10 +399,13 @@ export function MessageThread({
   const tQuote = useTranslations("Inbox.replyQuote");
   const locale = useLocale();
   const dateLocale = locale.startsWith("es") ? es : undefined;
+  const { confirm, confirmDialog } = useAppConfirm();
 
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
+  const [sessionCheckedConversationId, setSessionCheckedConversationId] =
+    useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [members, setMembers] = useState<AccountMember[]>([]);
@@ -544,7 +549,11 @@ export function MessageThread({
   // 24-hour session timer
   const sessionInfo = useMemo(() => {
     if (!messages.length) {
-      return { expired: false, remaining: "", availableUntil: "" };
+      return {
+        expired: true,
+        remaining: t("noCustomerMessages"),
+        availableUntil: "",
+      };
     }
 
     // Find last customer message
@@ -609,6 +618,7 @@ export function MessageThread({
 
     (async () => {
       setLoading(true);
+      setSessionCheckedConversationId(null);
 
       const { data, error } = await supabase
         .from("messages")
@@ -622,6 +632,7 @@ export function MessageThread({
         console.error("Failed to fetch messages:", error);
       } else {
         onMessagesLoadedRef.current(data ?? []);
+        setSessionCheckedConversationId(conversationId);
       }
 
       if (!cancelled) setLoading(false);
@@ -983,6 +994,9 @@ export function MessageThread({
       setTicketAction(action);
       try {
         await patchConversation({ action });
+        if (action === "resolve" || action === "return_to_pending") {
+          onBack?.();
+        }
       } catch (err) {
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(t("ticketActionFailed", { reason }));
@@ -990,7 +1004,7 @@ export function MessageThread({
         setTicketAction(null);
       }
     },
-    [conversation, patchConversation, ticketAction, t],
+    [conversation, onBack, patchConversation, ticketAction, t],
   );
 
   const conversationLocked = conversation?.status !== "open";
@@ -1000,6 +1014,10 @@ export function MessageThread({
       : conversation?.status === "closed"
         ? t("reopenBeforeReply")
         : undefined;
+  const sessionPending = sessionCheckedConversationId !== conversationId;
+  const composerLocked = conversationLocked || loading || sessionPending;
+  const composerLockedReason =
+    loading || sessionPending ? t("loadingMessages") : lockedReason;
 
   const handleOpenTemplates = useCallback(() => {
     if (conversationLocked) return;
@@ -1222,7 +1240,13 @@ export function MessageThread({
 
   const handleDeleteSelectedMessages = useCallback(async () => {
     if (!conversation || selectedMessageIds.size === 0) return;
-    const ok = window.confirm(t("deleteSelectedConfirm", { count: selectedMessageIds.size }));
+    const ok = await confirm({
+      title: t("delete"),
+      description: t("deleteSelectedConfirm", { count: selectedMessageIds.size }),
+      confirmLabel: t("delete"),
+      cancelLabel: t("cancel"),
+      destructive: true,
+    });
     if (!ok) return;
 
     const ids = Array.from(selectedMessageIds);
@@ -1256,6 +1280,7 @@ export function MessageThread({
     }
   }, [
     clearMessageSelection,
+    confirm,
     conversation,
     messages,
     onMessagesLoaded,
@@ -1439,7 +1464,13 @@ export function MessageThread({
 
   const handleDeleteConversation = useCallback(async () => {
     if (!conversation) return;
-    const ok = window.confirm(t("deleteConfirm"));
+    const ok = await confirm({
+      title: t("deleteTicket"),
+      description: t("deleteConfirm"),
+      confirmLabel: t("delete"),
+      cancelLabel: t("cancel"),
+      destructive: true,
+    });
     if (!ok) return;
 
     try {
@@ -1458,7 +1489,7 @@ export function MessageThread({
       console.error("Failed to delete conversation:", err);
       toast.error(t("deleteFailed"));
     }
-  }, [conversation, onConversationDeleted, t]);
+  }, [confirm, conversation, onConversationDeleted, t]);
 
   const handleTransferSubmit = useCallback(async () => {
     if (!conversation) return;
@@ -1470,11 +1501,22 @@ export function MessageThread({
         whatsapp_config_id: transferLineId || null,
       });
       setTransferOpen(false);
+      if (!transferAgentId && transferDepartmentId) {
+        onBack?.();
+      }
     } catch (err) {
       console.error("Failed to transfer conversation:", err);
       toast.error(t("assignmentFailed"));
     }
-  }, [conversation, patchConversation, t, transferAgentId, transferDepartmentId, transferLineId]);
+  }, [
+    conversation,
+    onBack,
+    patchConversation,
+    t,
+    transferAgentId,
+    transferDepartmentId,
+    transferLineId,
+  ]);
 
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
@@ -1533,8 +1575,8 @@ export function MessageThread({
     <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="relative flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-2.5 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+      <div className="relative flex items-center justify-between gap-2 border-b border-border bg-card px-2 py-2.5 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
           {onBack && (
@@ -1597,7 +1639,7 @@ export function MessageThread({
           <span className="sr-only">{contact.phone}</span>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -1644,10 +1686,12 @@ export function MessageThread({
               type="button"
               disabled={ticketAction !== null}
               onClick={() => void handleTicketAction("accept")}
-              className="inline-flex h-7 items-center gap-1 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+              title={t("accept")}
+              aria-label={t("accept")}
+              className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:h-7 sm:w-auto sm:px-2"
             >
               <Check className="h-3 w-3" />
-              {t("accept")}
+              <span className="hidden sm:inline">{t("accept")}</span>
             </button>
           )}
 
@@ -1657,17 +1701,23 @@ export function MessageThread({
                 type="button"
                 disabled={ticketAction !== null}
                 onClick={() => void handleTicketAction("return_to_pending")}
-                className="inline-flex h-8 items-center rounded-md border border-border bg-background px-3 text-xs font-medium text-primary hover:bg-muted disabled:opacity-60"
+                title={t("returnToPending")}
+                aria-label={t("returnToPending")}
+                className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-border bg-background px-0 text-xs font-medium text-primary hover:bg-muted disabled:opacity-60 sm:w-auto sm:px-3"
               >
-                {t("returnToPending")}
+                <CornerUpLeft className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{t("returnToPending")}</span>
               </button>
               <button
                 type="button"
                 disabled={ticketAction !== null}
                 onClick={() => void handleTicketAction("resolve")}
-                className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                title={t("resolve")}
+                aria-label={t("resolve")}
+                className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:w-auto sm:px-3"
               >
-                {t("resolve")}
+                <Check className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{t("resolve")}</span>
               </button>
             </>
           )}
@@ -1677,9 +1727,12 @@ export function MessageThread({
               type="button"
               disabled={ticketAction !== null}
               onClick={() => void handleTicketAction("reopen")}
-              className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+              title={t("reopen")}
+              aria-label={t("reopen")}
+              className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:w-auto sm:px-3"
             >
-              {t("reopen")}
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{t("reopen")}</span>
             </button>
           )}
 
@@ -1701,7 +1754,7 @@ export function MessageThread({
             >
               <DropdownMenuItem
                 onClick={() => {
-                  setTransferAgentId(assignedAgentId ?? "");
+                  setTransferAgentId("");
                   setTransferDepartmentId(conversation.department_id ?? "");
                   setTransferLineId(conversation.whatsapp_config_id ?? "");
                   setTransferOpen(true);
@@ -1748,6 +1801,7 @@ export function MessageThread({
         currentUserId={user?.id}
         t={t}
       />
+      {confirmDialog}
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
@@ -1966,8 +2020,8 @@ export function MessageThread({
       <MessageComposer
         conversationId={conversation.id}
         sessionExpired={sessionInfo.expired}
-        locked={conversationLocked}
-        lockedReason={lockedReason}
+        locked={composerLocked}
+        lockedReason={composerLockedReason}
         onSend={handleSend}
         onSendMedia={handleSendMedia}
         onSendInteractive={handleSendInteractive}

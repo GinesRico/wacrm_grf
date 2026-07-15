@@ -33,6 +33,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useAppConfirm } from "@/hooks/use-app-dialog";
 
 /**
  * Flows list page.
@@ -86,6 +87,7 @@ export default function FlowsPage() {
   const router = useRouter();
   const canCreate = useCan("send-messages");
   const t = useTranslations("Flows.list");
+  const { confirm, confirmDialog } = useAppConfirm();
   const [flows, setFlows] = useState<FlowRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -178,7 +180,13 @@ export default function FlowsPage() {
   }
 
   async function handleDelete(flow: FlowRow) {
-    const yes = window.confirm(t("deleteConfirm", { name: flow.name }));
+    const yes = await confirm({
+      title: t("delete"),
+      description: t("deleteConfirm", { name: flow.name }),
+      confirmLabel: t("delete"),
+      cancelLabel: t("cancel"),
+      destructive: true,
+    });
     if (!yes) return;
     try {
       const res = await fetch(`/api/flows/${flow.id}`, { method: "DELETE" });
@@ -201,6 +209,7 @@ export default function FlowsPage() {
 
   return (
     <div className="space-y-6 p-6">
+      {confirmDialog}
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
