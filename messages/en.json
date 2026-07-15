@@ -441,7 +441,14 @@
       "unsupported": "[Unsupported message type]",
       "aiBadge": "AI",
       "aiBadgeTitle": "Sent automatically by the AI assistant",
-      "sharedImageAlt": "Shared image"
+      "sharedImageAlt": "Shared image",
+      "openImage": "Open image",
+      "openVideo": "Open video",
+      "closeViewer": "Close viewer",
+      "downloadMedia": "Download",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "resetZoom": "Reset zoom"
     },
     "actions": {
       "reply": "Reply",

@@ -13,6 +13,11 @@ import {
   ImageOff,
   CornerDownLeft,
   Sparkles,
+  X,
+  Download,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -57,10 +62,178 @@ function MediaUnavailable({ label, t }: { label: string, t: ReturnType<typeof us
   );
 }
 
-function MediaImage({ url, alt }: { url: string; alt: string }) {
+function MediaViewer({
+  open,
+  kind,
+  src,
+  alt,
+  onClose,
+  t,
+}: {
+  open: boolean;
+  kind: "image" | "video";
+  src: string;
+  alt: string;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const [zoom, setZoom] = useState(1);
+  const closeViewer = useCallback(() => {
+    setZoom(1);
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeViewer();
+      if (kind === "image" && (event.key === "+" || event.key === "=")) {
+        setZoom((value) => Math.min(4, Number((value + 0.25).toFixed(2))));
+      }
+      if (kind === "image" && event.key === "-") {
+        setZoom((value) => Math.max(1, Number((value - 0.25).toFixed(2))));
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeViewer, kind, open]);
+
+  if (!open) return null;
+
+  const adjustZoom = (delta: number) => {
+    setZoom((value) => Math.min(4, Math.max(1, Number((value + delta).toFixed(2)))));
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={kind === "image" ? t("openImage") : t("openVideo")}
+      onClick={closeViewer}
+    >
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+        {kind === "image" ? (
+          <>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                adjustZoom(-0.25);
+              }}
+              className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+              aria-label={t("zoomOut")}
+              title={t("zoomOut")}
+            >
+              <ZoomOut className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setZoom(1);
+              }}
+              className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+              aria-label={t("resetZoom")}
+              title={t("resetZoom")}
+            >
+              <RotateCcw className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                adjustZoom(0.25);
+              }}
+              className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+              aria-label={t("zoomIn")}
+              title={t("zoomIn")}
+            >
+              <ZoomIn className="size-5" />
+            </button>
+          </>
+        ) : null}
+        <a
+          href={src}
+          download
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => event.stopPropagation()}
+          className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+          aria-label={t("downloadMedia")}
+          title={t("downloadMedia")}
+        >
+          <Download className="size-5" />
+        </a>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            closeViewer();
+          }}
+          className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+          aria-label={t("closeViewer")}
+          title={t("closeViewer")}
+        >
+          <X className="size-6" />
+        </button>
+      </div>
+
+      <div
+        className="flex max-h-full max-w-full items-center justify-center overflow-auto"
+        onClick={(event) => event.stopPropagation()}
+        onWheel={
+          kind === "image"
+            ? (event) => {
+                event.preventDefault();
+                adjustZoom(event.deltaY > 0 ? -0.15 : 0.15);
+              }
+            : undefined
+        }
+      >
+        {kind === "image" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={alt}
+            className="max-h-[88vh] max-w-[88vw] select-none rounded-md object-contain transition-transform duration-150"
+            style={{ transform: `scale(${zoom})` }}
+            draggable={false}
+          />
+        ) : (
+          <video
+            src={src}
+            controls
+            autoPlay
+            className="max-h-[88vh] max-w-[88vw] rounded-md bg-black shadow-2xl"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MediaImage({
+  url,
+  alt,
+  t,
+}: {
+  url: string;
+  alt: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   const loadImage = useCallback(async () => {
     if (!url) return;
@@ -111,13 +284,68 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={src ?? ""}
-      alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
-      onError={() => setError(true)}
-    />
+    <>
+      <button
+        type="button"
+        onClick={() => setViewerOpen(true)}
+        className="block overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-ring"
+        aria-label={t("openImage")}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src ?? ""}
+          alt={alt}
+          className="max-h-64 max-w-60 cursor-zoom-in rounded-lg object-cover transition brightness-100 hover:brightness-95"
+          onError={() => setError(true)}
+        />
+      </button>
+      {src ? (
+        <MediaViewer
+          open={viewerOpen}
+          kind="image"
+          src={src}
+          alt={alt}
+          onClose={() => setViewerOpen(false)}
+          t={t}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function MediaVideo({
+  url,
+  t,
+}: {
+  url: string;
+  t: ReturnType<typeof useTranslations>;
+}) {
+  const [viewerOpen, setViewerOpen] = useState(false);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setViewerOpen(true)}
+        className="block overflow-hidden rounded-lg focus:outline-none focus:ring-2 focus:ring-ring"
+        aria-label={t("openVideo")}
+      >
+        <video
+          src={url}
+          className="max-h-64 max-w-60 cursor-zoom-in rounded-lg bg-black object-cover transition brightness-100 hover:brightness-95"
+          preload="metadata"
+          muted
+        />
+      </button>
+      <MediaViewer
+        open={viewerOpen}
+        kind="video"
+        src={url}
+        alt={t("video")}
+        onClose={() => setViewerOpen(false)}
+        t={t}
+      />
+    </>
   );
 }
 
@@ -206,7 +434,11 @@ function MessageContent({
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt={t("sharedImageAlt")} />
+            <MediaImage
+              url={message.media_url}
+              alt={t("sharedImageAlt")}
+              t={t}
+            />
           ) : (
             <MediaUnavailable label={t("photo")} t={t} />
           )}
@@ -230,11 +462,7 @@ function MessageContent({
       return (
         <div>
           {message.media_url ? (
-            <video
-              src={message.media_url}
-              controls
-              className="max-h-64 max-w-60 rounded-lg"
-            />
+            <MediaVideo url={message.media_url} t={t} />
           ) : (
             <MediaUnavailable label={t("video")} t={t} />
           )}

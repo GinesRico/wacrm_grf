@@ -376,7 +376,14 @@
       "unsupported": "[Tipo de mensaje no compatible]",
       "aiBadge": "IA",
       "aiBadgeTitle": "Enviado automaticamente por el asistente de IA",
-      "sharedImageAlt": "Imagen compartida"
+      "sharedImageAlt": "Imagen compartida",
+      "openImage": "Abrir imagen",
+      "openVideo": "Abrir video",
+      "closeViewer": "Cerrar visor",
+      "downloadMedia": "Descargar",
+      "zoomIn": "Ampliar",
+      "zoomOut": "Reducir",
+      "resetZoom": "Restablecer zoom"
     },
     "actions": {
       "reply": "Responder",
