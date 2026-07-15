@@ -54,6 +54,7 @@ import { TransferChatDialog } from "./transfer-chat-dialog";
 interface ConversationListProps {
   activeConversationId: string | null;
   onSelect: (conversation: Conversation) => void;
+  onClearSelection?: () => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
   onConversationUpdated: (conversation: Conversation) => void;
@@ -200,6 +201,7 @@ function ConversationPreviewText({
 export function ConversationList({
   activeConversationId,
   onSelect,
+  onClearSelection,
   conversations,
   onConversationsLoaded,
   onConversationUpdated,
@@ -236,6 +238,7 @@ export function ConversationList({
   const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<string[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const effectiveScope: InboxScope = tab === "inbox" ? scope : "all";
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable identity across parent rerenders.
@@ -254,7 +257,7 @@ export function ConversationList({
 
     (async () => {
       setLoading(true);
-      const params = new URLSearchParams({ tab, subtab, scope });
+      const params = new URLSearchParams({ tab, subtab, scope: effectiveScope });
       if (debouncedSearch) params.set("search", debouncedSearch);
 
       const res = await fetch(`/api/inbox/conversations?${params.toString()}`);
@@ -278,7 +281,7 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-  }, [tab, subtab, scope, debouncedSearch, resyncToken]);
+  }, [tab, subtab, effectiveScope, debouncedSearch, resyncToken]);
 
   // Tag and department definitions for the filter pickers; loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
@@ -325,7 +328,7 @@ export function ConversationList({
       result = result.filter((c) => c.status === subtab);
     }
 
-    if (scope === "mine") {
+    if (effectiveScope === "mine") {
       result = result.filter(
         (c) =>
           c.status === "pending" ||
@@ -354,7 +357,7 @@ export function ConversationList({
     conversations,
     tab,
     subtab,
-    scope,
+    effectiveScope,
     user?.id,
     selectedDepartmentIds,
     selectedTagIds,
@@ -364,7 +367,7 @@ export function ConversationList({
   const visiblePendingCount = useMemo(() => {
     let result = conversations.filter((c) => c.status === "pending");
 
-    if (scope === "mine") {
+    if (effectiveScope === "mine") {
       result = result.filter((c) => c.status === "pending");
     }
 
@@ -386,7 +389,7 @@ export function ConversationList({
     return result.length;
   }, [
     conversations,
-    scope,
+    effectiveScope,
     selectedDepartmentIds,
     selectedTagIds,
     selectedCompany,
@@ -510,9 +513,25 @@ export function ConversationList({
         return;
       }
       onConversationUpdated(payload.conversation);
+      if (action === "accept") {
+        onSelect(payload.conversation);
+        setTab("inbox");
+        setSubtab("open");
+        setPreviewConversation(null);
+        setPreviewMessages([]);
+        return;
+      }
+      if (action === "resolve") {
+        setPreviewConversation(null);
+        setPreviewMessages([]);
+        if (activeConversationId === conversation.id) {
+          onClearSelection?.();
+        }
+        return;
+      }
       setPreviewConversation(payload.conversation);
     },
-    [onConversationUpdated],
+    [activeConversationId, onClearSelection, onConversationUpdated, onSelect],
   );
 
   return (
@@ -596,19 +615,25 @@ export function ConversationList({
 
               <button
                 type="button"
+                disabled={tab !== "inbox"}
                 onClick={() =>
                   setScope((value) => (value === "mine" ? "all" : "mine"))
                 }
-                title={scope === "mine" ? t("scopeMine") : t("scopeAll")}
-                aria-label={scope === "mine" ? t("scopeMine") : t("scopeAll")}
+                title={
+                  effectiveScope === "mine" ? t("scopeMine") : t("scopeAll")
+                }
+                aria-label={
+                  effectiveScope === "mine" ? t("scopeMine") : t("scopeAll")
+                }
                 className={cn(
                   "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  scope === "mine"
+                  effectiveScope === "mine"
                     ? "border-primary/30 bg-primary/10 text-primary"
                     : "border-border bg-background text-muted-foreground hover:text-foreground",
+                  tab !== "inbox" && "cursor-default opacity-80",
                 )}
               >
-                {scope === "mine" ? (
+                {effectiveScope === "mine" ? (
                   <User className="h-4 w-4" />
                 ) : (
                   <Users className="h-4 w-4" />
@@ -764,7 +789,9 @@ export function ConversationList({
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea
+        className={cn("min-h-0 flex-1", tab !== "inbox" && "pt-px")}
+      >
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
@@ -909,10 +936,11 @@ function ConversationItem({
   const assignedAgentName =
     assignedAgent?.full_name || assignedAgent?.email || null;
   const assignedInitial = assignedAgentName?.charAt(0).toUpperCase() ?? null;
+  const opensDirectly = conversation.status !== "pending";
 
   const handleClick = useCallback(() => {
-    onSelect(conversation);
-  }, [onSelect, conversation]);
+    if (opensDirectly) onSelect(conversation);
+  }, [conversation, onSelect, opensDirectly]);
 
   const lastMessageTime = conversation.last_message_at
     ? format(new Date(conversation.last_message_at), "HH:mm", {
@@ -939,15 +967,19 @@ function ConversationItem({
         style={department ? { backgroundColor: department.color } : undefined}
       />
       <div
-        role="button"
-        tabIndex={0}
-        onClick={handleClick}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            handleClick();
-          }
-        }}
+        role={opensDirectly ? "button" : undefined}
+        tabIndex={opensDirectly ? 0 : undefined}
+        onClick={opensDirectly ? handleClick : undefined}
+        onKeyDown={
+          opensDirectly
+            ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  handleClick();
+                }
+              }
+            : undefined
+        }
         className="flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 text-left"
       >
         <div className="relative h-11 w-11 shrink-0">
@@ -1237,18 +1269,22 @@ function ConversationPreviewDialog({
                   <button
                     type="button"
                     onClick={() => onAccept(conversation)}
-                    className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                    title={t("accept")}
+                    aria-label={t("accept")}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                   >
-                    {t("accept")}
+                    <Check className="h-4 w-4" />
                   </button>
                 )}
-                {conversation.status === "open" && (
+                {conversation.status !== "closed" && (
                   <button
                     type="button"
                     onClick={() => onResolve(conversation)}
-                    className="h-8 rounded-md bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                    title={t("resolve")}
+                    aria-label={t("resolve")}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
                   >
-                    {t("resolve")}
+                    <CheckSquare className="h-4 w-4" />
                   </button>
                 )}
                 <button
@@ -1259,9 +1295,11 @@ function ConversationPreviewDialog({
                     setTransferDepartmentId(conversation.department_id ?? "");
                     setTransferOpen(true);
                   }}
-                  className="h-8 rounded-md border border-border bg-background px-3 text-xs font-medium text-primary hover:bg-muted"
+                  title={t("transfer")}
+                  aria-label={t("transfer")}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-primary hover:bg-muted"
                 >
-                  {t("transfer")}
+                  <Forward className="h-4 w-4" />
                 </button>
               </div>
             </div>

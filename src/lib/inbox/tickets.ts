@@ -105,10 +105,10 @@ export function getConversationMutationPatch(
       }
       return { status: "open", assigned_agent_id: userId };
     case "resolve":
-      if (current.status !== "open") {
-        throw new InboxWorkflowError("Only open conversations can be resolved.", 409);
+      if (current.status !== "open" && current.status !== "pending") {
+        throw new InboxWorkflowError("Only open or pending conversations can be resolved.", 409);
       }
-      return { status: "closed" };
+      return { status: "closed", assigned_agent_id: userId };
     case "return_to_pending":
       if (current.status !== "open") {
         throw new InboxWorkflowError("Only open conversations can be returned to pending.", 409);
@@ -243,8 +243,10 @@ export async function listInboxConversations(
             departmentIds.includes(conversation.department_id),
         );
 
+  const effectiveScope =
+    params.tab === "inbox" ? params.scope : ("all" as InboxScope);
   const scoped = visibleByDepartment.filter((c) =>
-    matchesScope(c, params.scope, params.userId),
+    matchesScope(c, effectiveScope, params.userId),
   );
 
   const counts: InboxCounts = {

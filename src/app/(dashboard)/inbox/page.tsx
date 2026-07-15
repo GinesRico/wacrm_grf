@@ -635,6 +635,7 @@ export default function InboxPage() {
           <ConversationList
             activeConversationId={activeConversation?.id ?? null}
             onSelect={handleSelectConversation}
+            onClearSelection={handleCloseConversation}
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             onConversationUpdated={handleConversationUpdated}
