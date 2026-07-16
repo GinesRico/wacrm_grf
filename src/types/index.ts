@@ -465,6 +465,9 @@ export type AutomationTriggerType =
   | 'conversation_assigned'
   | 'tag_added'
   | 'time_based'
+  | 'payment_link_created'
+  | 'payment_paid'
+  | 'payment_failed'
   /** Customer tapped a reply button / list row whose id matches; lets
    *  multi-step menus be chained across automations. */
   | 'interactive_reply';
@@ -479,6 +482,8 @@ export type AutomationStepType =
   | 'assign_conversation'
   | 'update_contact_field'
   | 'create_deal'
+  | 'create_payment_link'
+  | 'send_payment_link'
   | 'wait'
   | 'condition'
   | 'send_webhook'
@@ -562,6 +567,15 @@ export interface CreateDealStepConfig {
   value?: number;
 }
 
+export interface PaymentLinkStepConfig {
+  amount_eur?: number;
+  amount_cents?: number;
+  concept: string;
+  email?: string;
+  phone?: string;
+  message?: string;
+}
+
 export interface WaitStepConfig {
   amount: number;
   unit: 'minutes' | 'hours' | 'days';
@@ -596,6 +610,7 @@ export type AutomationStepConfig =
   | AssignConversationStepConfig
   | UpdateContactFieldStepConfig
   | CreateDealStepConfig
+  | PaymentLinkStepConfig
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig

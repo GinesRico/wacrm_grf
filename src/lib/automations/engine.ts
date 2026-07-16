@@ -16,11 +16,22 @@ import type {
   WaitStepConfig,
   CreateDealStepConfig,
   AssignConversationStepConfig,
+  PaymentLinkStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
 import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
+import {
+  ARVERA_DEFAULT_MESSAGE,
+  buildPaymentTemplateParams,
+  createArveraPaymentLink,
+  formatEuroAmount,
+  normalizeAmountCents,
+  renderPaymentMessage,
+  requireActiveArveraConnection,
+  responseToPaymentRecord,
+} from '@/lib/integrations/arvera-payments'
 
 // ------------------------------------------------------------
 // Public API
@@ -574,6 +585,117 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       })
       if (!res.ok) throw new Error(`webhook returned ${res.status}`)
       return `webhook ${res.status}`
+    }
+
+    case 'create_payment_link':
+    case 'send_payment_link': {
+      const cfg = step.step_config as PaymentLinkStepConfig
+      if (!args.contactId) throw new Error(`${step.step_type} needs a contact`)
+      const amountCents = normalizeAmountCents(cfg)
+      if (!amountCents) throw new Error(`${step.step_type} needs a valid amount`)
+      if (!cfg.concept) throw new Error(`${step.step_type} needs concept`)
+
+      const { data: contact } = await db
+        .from('contacts')
+        .select('id, email, phone')
+        .eq('id', args.contactId)
+        .eq('account_id', args.automation.account_id)
+        .maybeSingle()
+      if (!contact) throw new Error('contact not found for payment link')
+
+      const { config, apiKey } = await requireActiveArveraConnection(
+        db,
+        args.automation.account_id,
+      )
+      const concept = interpolate(cfg.concept, args)
+      const email = cfg.email ? interpolate(cfg.email, args) : contact.email
+      const phone = cfg.phone ? interpolate(cfg.phone, args) : contact.phone
+      const payload = await createArveraPaymentLink({
+        config,
+        apiKey,
+        input: { amountCents, concept, email, phone },
+      })
+      const normalized = responseToPaymentRecord(payload)
+
+      const { data: link, error } = await db
+        .from('payment_links')
+        .insert({
+          account_id: args.automation.account_id,
+          contact_id: args.contactId,
+          conversation_id: args.context.conversation_id ?? null,
+          provider: 'arvera-payments',
+          amount_cents: amountCents,
+          currency: 'EUR',
+          concept,
+          email,
+          phone,
+          order_id: normalized.orderId,
+          payment_url: normalized.paymentUrl,
+          status: normalized.status,
+          raw_response: payload,
+          created_by: args.automation.user_id,
+        })
+        .select('*')
+        .single()
+      if (error || !link) {
+        throw new Error(`payment link save failed: ${error?.message ?? 'unknown error'}`)
+      }
+
+      args.context.vars = {
+        ...(args.context.vars ?? {}),
+        payment_link_id: link.id,
+        payment_url: link.payment_url,
+        order_id: link.order_id,
+        amount_cents: link.amount_cents,
+        concept: link.concept,
+      }
+
+      if (step.step_type === 'send_payment_link') {
+        const conversationId = await resolveConversationId(args)
+        if (config.delivery_mode === 'template' && config.template_name) {
+          const templateParams = buildPaymentTemplateParams(config, {
+            payment_url: link.payment_url,
+            order_id: link.order_id,
+            amount_cents: link.amount_cents,
+            concept: link.concept,
+            email: link.email,
+            phone: link.phone,
+          })
+          const { whatsapp_message_id } = await engineSendTemplate({
+            accountId: args.automation.account_id,
+            userId: args.automation.user_id,
+            conversationId,
+            contactId: args.contactId,
+            templateName: config.template_name,
+            language: config.template_language || 'en_US',
+            params: templateParams.body,
+            messageParams: {
+              body: templateParams.body,
+              buttonParams: templateParams.buttonParams,
+            },
+          })
+          return `payment link template sent (${link.order_id}, ${whatsapp_message_id})`
+        }
+        const text = renderPaymentMessage(
+          cfg.message || config.default_message || ARVERA_DEFAULT_MESSAGE,
+          {
+            payment_url: link.payment_url,
+            amount_eur: formatEuroAmount(amountCents),
+            concept: link.concept,
+            order_id: link.order_id,
+          },
+        )
+        const { whatsapp_message_id } = await engineSendText({
+          accountId: args.automation.account_id,
+          userId: args.automation.user_id,
+          conversationId,
+          contactId: args.contactId,
+          text,
+        })
+        return `payment link sent (${link.order_id}, ${whatsapp_message_id})`
+      }
+
+      return `payment link created (${link.order_id})`
     }
 
     case 'close_conversation': {

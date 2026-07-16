@@ -28,6 +28,14 @@ export interface InteractiveButton {
   id: string
   /** Visible label (≤ 20 chars per Meta). */
   title: string
+  /** Optional template-button metadata used only for local rendering. */
+  type?: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER' | 'COPY_CODE' | string
+  /** URL template for Meta URL buttons. May contain {{1}}. */
+  url?: string
+  /** Example value used by Meta for dynamic URL buttons. */
+  example?: string
+  /** Phone number for Meta phone buttons. */
+  phone_number?: string
 }
 
 export interface InteractiveButtonsPayload {

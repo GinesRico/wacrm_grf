@@ -107,6 +107,15 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.title`, message: 'title is required' })
       }
       break
+    case 'create_payment_link':
+    case 'send_payment_link':
+      if (!hasValidAmount(c)) {
+        issues.push({ path: `${path}.amount`, message: 'valid payment amount is required' })
+      }
+      if (!nonEmpty(c.concept)) {
+        issues.push({ path: `${path}.concept`, message: 'payment concept is required' })
+      }
+      break
     case 'wait':
       if (typeof c.amount !== 'number' || !Number.isFinite(c.amount) || c.amount <= 0) {
         issues.push({ path: `${path}.amount`, message: 'wait amount must be greater than 0' })
@@ -205,4 +214,14 @@ export function validateTriggerForActivation(
 
 function nonEmpty(v: unknown): boolean {
   return typeof v === 'string' && v.trim().length > 0
+}
+
+function hasValidAmount(c: Record<string, unknown>): boolean {
+  if (typeof c.amount_cents === 'number') {
+    return Number.isInteger(c.amount_cents) && c.amount_cents > 0
+  }
+  if (typeof c.amount_eur === 'number') {
+    return Number.isFinite(c.amount_eur) && c.amount_eur > 0
+  }
+  return false
 }

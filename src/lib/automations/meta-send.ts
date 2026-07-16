@@ -13,6 +13,9 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
 import { supabaseAdmin } from './admin-client'
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
+import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
+import type { MessageTemplate } from '@/types'
 
 // ------------------------------------------------------------
 // Automation-side Meta sender.
@@ -47,6 +50,7 @@ interface SendTemplateArgs {
   templateName: string
   language?: string
   params?: string[]
+  messageParams?: SendTimeParams
 }
 
 export async function engineSendText(args: SendTextArgs): Promise<{ whatsapp_message_id: string }> {
@@ -142,6 +146,20 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   }
 
   const accessToken = decrypt(config.access_token)
+  let templateRow: MessageTemplate | null = null
+  if (input.kind === 'template') {
+    const { data } = await db
+      .from('message_templates')
+      .select('*')
+      .eq('account_id', input.accountId)
+      .eq('name', input.templateName)
+      .eq('language', input.language || 'en_US')
+      .maybeSingle()
+    if (data && !isMessageTemplate(data)) {
+      throw new Error('Template row is malformed locally - sync templates from Meta')
+    }
+    templateRow = data ?? null
+  }
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
@@ -152,6 +170,8 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
         templateName: input.templateName,
         language: input.language,
         params: input.params,
+        template: templateRow ?? undefined,
+        messageParams: input.messageParams,
       })
       return r.messageId
     }

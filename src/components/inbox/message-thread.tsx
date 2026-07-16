@@ -66,6 +66,7 @@ import { AiThreadBanner } from "./ai-thread-banner";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
 import { useAppConfirm } from "@/hooks/use-app-dialog";
+import { toInteractiveTemplateButton } from "@/lib/inbox/template-buttons";
 
 interface ReplyDraft {
   id: string;
@@ -533,16 +534,8 @@ export function MessageThread({
       for (const row of data ?? []) {
         const buttons = Array.isArray(row.buttons) ? row.buttons : [];
         const previewButtons = buttons
-          .map((button, index) => {
-            if (!button || typeof button !== "object") return null;
-            const text = "text" in button ? button.text : null;
-            if (typeof text !== "string" || text.length === 0) return null;
-            return {
-              id: `template-${index}`,
-              title: text,
-            };
-          })
-          .filter((button): button is { id: string; title: string } => Boolean(button));
+          .map(toInteractiveTemplateButton)
+          .filter((button): button is NonNullable<typeof button> => Boolean(button));
 
         if (typeof row.name === "string" && previewButtons.length > 0) {
           payloads[row.name] = {
@@ -2115,6 +2108,7 @@ export function MessageThread({
         onClearReply={() => setReplyTo(null)}
         signatureEnabled={signatureEnabled}
         onSignatureEnabledChange={handleSignatureEnabledChange}
+        contact={contact}
       />
 
       <TemplatePicker

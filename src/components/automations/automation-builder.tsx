@@ -23,6 +23,7 @@ import {
   UserCheck,
   PencilLine,
   Briefcase,
+  CreditCard,
   Hourglass,
   GitBranch,
   Webhook,
@@ -107,6 +108,8 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   assign_conversation: { label: "assign_conversation", icon: UserCheck, border: "border-l-primary" },
   update_contact_field: { label: "update_contact_field", icon: PencilLine, border: "border-l-primary" },
   create_deal: { label: "create_deal", icon: Briefcase, border: "border-l-primary" },
+  create_payment_link: { label: "create_payment_link", icon: CreditCard, border: "border-l-primary" },
+  send_payment_link: { label: "send_payment_link", icon: CreditCard, border: "border-l-primary" },
   wait: { label: "wait", icon: Hourglass, border: "border-l-border" },
   condition: { label: "condition", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "send_webhook", icon: Webhook, border: "border-l-primary" },
@@ -123,6 +126,8 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "assign_conversation",
   "update_contact_field",
   "create_deal",
+  "create_payment_link",
+  "send_payment_link",
   "wait",
   "condition",
   "send_webhook",
@@ -138,6 +143,9 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: "conversation_assigned" },
   { value: "tag_added" },
   { value: "time_based" },
+  { value: "payment_link_created" },
+  { value: "payment_paid" },
+  { value: "payment_failed" },
 ]
 
 function cid(): string {
@@ -180,6 +188,14 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
       return { field: "name", value: "" }
     case "create_deal":
       return { pipeline_id: "", stage_id: "", title: "", value: 0 }
+    case "create_payment_link":
+      return { amount_eur: 0, concept: "" }
+    case "send_payment_link":
+      return {
+        amount_eur: 0,
+        concept: "",
+        message: "Aqui tienes tu enlace de pago: {{payment_url}}",
+      }
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":
@@ -210,6 +226,7 @@ interface AutomationResources {
   customFields: CustomField[]
   pipelines: PipelineOption[]
   stages: PipelineStageOption[]
+  paymentsEnabled: boolean
 }
 
 interface PipelineOption {
@@ -231,6 +248,7 @@ const ResourcesContext = createContext<AutomationResources>({
   customFields: [],
   pipelines: [],
   stages: [],
+  paymentsEnabled: false,
 })
 
 function useResources(): AutomationResources {
@@ -244,6 +262,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   const [customFields, setCustomFields] = useState<CustomField[]>([])
   const [pipelines, setPipelines] = useState<PipelineOption[]>([])
   const [stages, setStages] = useState<PipelineStageOption[]>([])
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -277,6 +296,20 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
       setStages((stagesRes.data as PipelineStageOption[] | null) ?? [])
     })()
 
+    void (async () => {
+      try {
+        const res = await fetch("/api/integrations/apps", { cache: "no-store" })
+        if (!res.ok) return
+        const json = await res.json()
+        const app = json.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-payments",
+        )
+        if (!cancelled) setPaymentsEnabled(Boolean(app?.connection?.enabled))
+      } catch {
+        if (!cancelled) setPaymentsEnabled(false)
+      }
+    })()
+
     // Members go through the API so we inherit its email-visibility
     // rules (agents/viewers don't see emails). Unreachable on older
     // deployments → pickers fall back to a raw agent-id input.
@@ -298,7 +331,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
 
   return (
     <ResourcesContext.Provider
-      value={{ tags, members, templates, customFields, pipelines, stages }}
+      value={{ tags, members, templates, customFields, pipelines, stages, paymentsEnabled }}
     >
       {children}
     </ResourcesContext.Provider>
@@ -794,6 +827,14 @@ function TriggerCard({
   t: ReturnType<typeof useTranslations>
 }) {
   const [open, setOpen] = useState(false)
+  const { paymentsEnabled } = useResources()
+  const triggerOptions = TRIGGER_OPTIONS.filter((option) => {
+    const isPaymentTrigger =
+      option.value === "payment_link_created" ||
+      option.value === "payment_paid" ||
+      option.value === "payment_failed"
+    return paymentsEnabled || !isPaymentTrigger || option.value === type
+  })
   return (
     // Card width: full on mobile, fixed 320px on sm+. The canvas wrapper
     // (max-w-2xl + px-4) keeps this tidy on tablet/desktop.
@@ -828,7 +869,7 @@ function TriggerCard({
                 onChange={(e) => onTypeChange(e.target.value as AutomationTriggerType)}
                 className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               >
-                {TRIGGER_OPTIONS.map((o) => (
+                {triggerOptions.map((o) => (
                   <option key={o.value} value={o.value}>
                     {t(`triggers.${o.value}.label`)}
                   </option>
@@ -1234,6 +1275,12 @@ function BranchColumn({
 
 function AddButton({ onPick }: { onPick: (t: AutomationStepType) => void }) {
   const t = useTranslations("Automations.builder")
+  const { paymentsEnabled } = useResources()
+  const addableSteps = ADDABLE_STEPS.filter(
+    (step) =>
+      paymentsEnabled ||
+      (step !== "create_payment_link" && step !== "send_payment_link"),
+  )
   return (
     <div className="relative flex flex-col items-center">
       <div className="h-4 w-[2px] bg-border" aria-hidden />
@@ -1248,7 +1295,7 @@ function AddButton({ onPick }: { onPick: (t: AutomationStepType) => void }) {
           align="start"
           className="max-h-80 min-w-56 overflow-y-auto border-border bg-popover"
         >
-          {ADDABLE_STEPS.map((tp) => {
+          {addableSteps.map((tp) => {
             const Icon = STEP_META[tp].icon
             return (
               <DropdownMenuItem key={tp} onClick={() => onPick(tp)}>
@@ -1394,6 +1441,39 @@ function StepEditor({
           </FieldBlock>
         </>
       )
+    case "create_payment_link":
+    case "send_payment_link":
+      return (
+        <>
+          <FieldBlock label={t("config.amountEurLabel")}>
+            <Input
+              type="number"
+              min={0.01}
+              step="0.01"
+              value={(cfg.amount_eur as number) ?? 0}
+              onChange={(e) => set({ amount_eur: Number(e.target.value) })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t("config.conceptLabel")}>
+            <Input
+              value={(cfg.concept as string) ?? ""}
+              onChange={(e) => set({ concept: e.target.value })}
+              placeholder="Factura {{ vars.invoice }}"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          {step.step_type === "send_payment_link" && (
+            <FieldBlock label={t("config.paymentMessageLabel")}>
+              <Textarea
+                value={(cfg.message as string) ?? ""}
+                onChange={(e) => set({ message: e.target.value })}
+                className="min-h-20 bg-muted text-foreground"
+              />
+            </FieldBlock>
+          )}
+        </>
+      )
     case "wait":
       return (
         <div className="grid grid-cols-2 gap-2">
@@ -1521,6 +1601,9 @@ function previewFor(step: BuilderStep): string {
       return `when ${step.step_config.subject ?? "?"}`
     case "send_webhook":
       return (step.step_config.url as string) || "no url"
+    case "create_payment_link":
+    case "send_payment_link":
+      return (step.step_config.concept as string) || "payment link"
     default:
       return ""
   }

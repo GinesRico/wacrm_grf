@@ -20,9 +20,12 @@ import {
   Zap,
   Smile,
   PenLine,
+  CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -57,7 +60,11 @@ import {
   blankButtonsPayload,
 } from "@/components/interactive/interactive-builder";
 import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
-import type { InteractiveMessagePayload, QuickReply } from "@/types";
+import {
+  buildPaymentTemplateParams,
+  type PaymentTemplateValueSource,
+} from "@/lib/integrations/payment-template-params";
+import type { Contact, InteractiveMessagePayload, QuickReply } from "@/types";
 import { QuickReplyPicker } from "./quick-reply-picker";
 import { useAppPrompt } from "@/hooks/use-app-dialog";
 
@@ -160,6 +167,7 @@ interface MessageComposerProps {
   onClearReply?: () => void;
   signatureEnabled: boolean;
   onSignatureEnabledChange: (enabled: boolean) => void;
+  contact?: Contact | null;
 }
 
 export function MessageComposer({
@@ -176,6 +184,7 @@ export function MessageComposer({
   onClearReply,
   signatureEnabled,
   onSignatureEnabledChange,
+  contact,
 }: MessageComposerProps) {
   const t = useTranslations("Inbox.composer");
   const { prompt, promptDialog } = useAppPrompt();
@@ -194,6 +203,18 @@ export function MessageComposer({
   const [slashQuickReplies, setSlashQuickReplies] = useState<QuickReply[]>([]);
   const [slashLoading, setSlashLoading] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [paymentDelivery, setPaymentDelivery] = useState<{
+    mode: "text" | "template";
+    templateName?: string;
+    templateLanguage?: string;
+    templateBodyParams?: Record<string, PaymentTemplateValueSource>;
+    templateButtonParams?: Record<string, PaymentTemplateValueSource>;
+  }>({ mode: "text" });
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentConcept, setPaymentConcept] = useState("");
+  const [paymentBusy, setPaymentBusy] = useState(false);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
@@ -326,6 +347,36 @@ export function MessageComposer({
     };
   }, [slashPickerOpen]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/integrations/apps", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const app = payload.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-payments",
+        );
+        if (!cancelled) {
+          setPaymentsEnabled(Boolean(app?.connection?.enabled));
+          const config = app?.connection?.config ?? {};
+          setPaymentDelivery({
+            mode: config.delivery_mode === "template" ? "template" : "text",
+            templateName: config.template_name,
+            templateLanguage: config.template_language,
+            templateBodyParams: config.template_body_params ?? {},
+            templateButtonParams: config.template_button_params ?? {},
+          });
+        }
+      } catch {
+        if (!cancelled) setPaymentsEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Ask the AI assistant for a suggested reply and drop it into the
   // composer for the agent to edit + send. Read-only server-side —
   // nothing is sent until the agent hits Send.
@@ -434,6 +485,89 @@ export function MessageComposer({
       setSavingQuickReply(false);
     }
   }, [interactivePayload, prompt, t]);
+
+  const sendPaymentLink = useCallback(async () => {
+    const amount = Number(paymentAmount);
+    const concept = paymentConcept.trim();
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error(t("paymentAmountRequired"));
+      return;
+    }
+    if (!concept) {
+      toast.error(t("paymentConceptRequired"));
+      return;
+    }
+    setPaymentBusy(true);
+    try {
+      const res = await fetch("/api/integrations/arvera-payments/payment-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          contact_id: contact?.id,
+          amount_eur: amount,
+          concept,
+          email: contact?.email,
+          phone: contact?.phone,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || t("paymentCreateFailed"));
+        return;
+      }
+      const paymentUrl = payload.payment_link?.payment_url;
+      if (!paymentUrl) {
+        toast.error(t("paymentCreateFailed"));
+        return;
+      }
+      if (paymentDelivery.mode === "template" && paymentDelivery.templateName) {
+        const templateParams = buildPaymentTemplateParams(
+          {
+            template_body_params: paymentDelivery.templateBodyParams ?? {},
+            template_button_params: paymentDelivery.templateButtonParams ?? {},
+          },
+          {
+            payment_url: paymentUrl,
+            order_id: payload.payment_link?.order_id ?? "",
+            amount_cents: payload.payment_link?.amount_cents ?? Math.round(amount * 100),
+            concept: payload.payment_link?.concept ?? concept,
+            email: payload.payment_link?.email ?? contact?.email,
+            phone: payload.payment_link?.phone ?? contact?.phone,
+          },
+        );
+        const sendRes = await fetch("/api/whatsapp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversation_id: conversationId,
+            message_type: "template",
+            template_name: paymentDelivery.templateName,
+            template_language: paymentDelivery.templateLanguage || "en_US",
+            template_params: templateParams.body,
+            template_message_params: {
+              body: templateParams.body,
+              buttonParams: templateParams.buttonParams,
+            },
+            content_text: paymentUrl,
+          }),
+        });
+        const sendPayload = await sendRes.json().catch(() => ({}));
+        if (!sendRes.ok) {
+          toast.error(sendPayload.error || t("paymentSendFailed"));
+          return;
+        }
+      } else {
+        onSend(`Aqui tienes tu enlace de pago: ${paymentUrl}`);
+      }
+      setPaymentOpen(false);
+      setPaymentAmount("");
+      setPaymentConcept("");
+      toast.success(t("paymentCreated"));
+    } finally {
+      setPaymentBusy(false);
+    }
+  }, [paymentAmount, paymentConcept, conversationId, contact, onSend, paymentDelivery, t]);
 
   // A picked quick reply: text fills the composer; interactive opens the
   // builder pre-filled so the agent can tweak before sending.
@@ -697,6 +831,12 @@ export function MessageComposer({
                 <Zap className="mr-2 h-4 w-4" />
                 {t("quickReplies")}
               </DropdownMenuItem>
+              {paymentsEnabled && (
+                <DropdownMenuItem onClick={() => setPaymentOpen(true)}>
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  {t("paymentLink")}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuCheckboxItem
                 checked={signatureEnabled}
                 onCheckedChange={onSignatureEnabledChange}
@@ -815,6 +955,46 @@ export function MessageComposer({
         onOpenChange={setQuickReplyOpen}
         onPick={handlePickQuickReply}
       />
+      <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("paymentLink")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>{t("paymentAmount")}</Label>
+              <Input
+                type="number"
+                min={0.01}
+                step="0.01"
+                value={paymentAmount}
+                onChange={(e) => setPaymentAmount(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t("paymentConcept")}</Label>
+              <Input
+                value={paymentConcept}
+                onChange={(e) => setPaymentConcept(e.target.value)}
+                placeholder="Factura 1074"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPaymentOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button onClick={sendPaymentLink} disabled={paymentBusy}>
+              {paymentBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CreditCard className="h-4 w-4" />
+              )}
+              {t("sendPaymentLink")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {promptDialog}
     </div>
   );

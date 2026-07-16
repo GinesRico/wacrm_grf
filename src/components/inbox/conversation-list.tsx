@@ -33,6 +33,7 @@ import {
   MapPin,
   LayoutTemplate,
   MessageSquare,
+  ExternalLink,
 } from "lucide-react";
 import { format, type Locale } from "date-fns";
 import { es } from "date-fns/locale";
@@ -50,6 +51,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/use-auth";
 import { WhatsAppText } from "./whatsapp-text";
 import { TransferChatDialog } from "./transfer-chat-dialog";
+import {
+  resolveTemplateButtonUrl,
+  toInteractiveTemplateButton,
+} from "@/lib/inbox/template-buttons";
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -1182,16 +1187,8 @@ function ConversationPreviewDialog({
       for (const row of data ?? []) {
         const buttons = Array.isArray(row.buttons) ? row.buttons : [];
         const previewButtons = buttons
-          .map((button, index) => {
-            if (!button || typeof button !== "object") return null;
-            const text = "text" in button ? button.text : null;
-            if (typeof text !== "string" || text.length === 0) return null;
-            return {
-              id: `template-${index}`,
-              title: text,
-            };
-          })
-          .filter((button): button is { id: string; title: string } =>
+          .map(toInteractiveTemplateButton)
+          .filter((button): button is NonNullable<typeof button> =>
             Boolean(button),
           );
 
@@ -1356,6 +1353,11 @@ function PreviewTemplateActions({
   payload: InteractiveMessagePayload;
   onPrimary: boolean;
 }) {
+  const buttonClass = cn(
+    "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
+    onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
+  );
+
   return (
     <div className="mt-2 overflow-hidden">
       {payload.footer ? (
@@ -1369,22 +1371,43 @@ function PreviewTemplateActions({
         </p>
       ) : null}
       {payload.kind === "buttons" ? (
-        payload.buttons.map((button, index) => (
-          <button
-            key={button.id || index}
-            type="button"
-            disabled
-            className={cn(
-              "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
-              onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
-            )}
-          >
-            <CornerDownLeft className="size-3" />
-            <span className="truncate">
-              <WhatsAppText text={button.title} />
-            </span>
-          </button>
-        ))
+        payload.buttons.map((button, index) => {
+          const href = resolveTemplateButtonUrl(button);
+          const content = (
+            <>
+              {href ? (
+                <ExternalLink className="size-3" />
+              ) : (
+                <CornerDownLeft className="size-3" />
+              )}
+              <span className="truncate">
+                <WhatsAppText text={button.title} />
+              </span>
+            </>
+          );
+
+          return href ? (
+            <a
+              key={button.id || index}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              className={buttonClass}
+            >
+              {content}
+            </a>
+          ) : (
+            <button
+              key={button.id || index}
+              type="button"
+              disabled
+              className={buttonClass}
+            >
+              {content}
+            </button>
+          );
+        })
       ) : (
         <button
           type="button"

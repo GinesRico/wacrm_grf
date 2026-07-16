@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
   Bot,
+  CreditCard,
   Crown,
   GitBranch,
   LayoutDashboard,
@@ -98,6 +99,12 @@ const navItems: NavItem[] = [
   { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
 
+const paymentsNavItem: NavItem = {
+  href: "/payments",
+  labelKey: "payments",
+  icon: CreditCard,
+};
+
 const bottomNavItems = [
   { href: "/settings", labelKey: "settings", icon: Settings },
 ];
@@ -122,6 +129,7 @@ export function Sidebar({
   const pathname = usePathname();
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -142,6 +150,38 @@ export function Sidebar({
     // Only pathname drives this — onClose identity doesn't need to re-run it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshPaymentsState = async () => {
+      try {
+        const res = await fetch("/api/integrations/apps", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const app = payload.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-payments",
+        );
+        if (!cancelled) setPaymentsEnabled(Boolean(app?.connection?.enabled));
+      } catch {
+        if (!cancelled) setPaymentsEnabled(false);
+      }
+    };
+    void refreshPaymentsState();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refreshPaymentsState();
+    };
+    const onConnectionUpdated = () => void refreshPaymentsState();
+    window.addEventListener("focus", onConnectionUpdated);
+    window.addEventListener("arvera-payments-connection-updated", onConnectionUpdated);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onConnectionUpdated);
+      window.removeEventListener("arvera-payments-connection-updated", onConnectionUpdated);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [account?.id]);
 
   // Lock body scroll and allow Escape to close while the drawer is open on
   // mobile. No-ops on desktop because the sidebar isn't positioned there.
@@ -236,7 +276,7 @@ export function Sidebar({
         {/* Main navigation */}
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {[...navItems, ...(paymentsEnabled ? [paymentsNavItem] : [])].map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));

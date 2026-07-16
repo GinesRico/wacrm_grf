@@ -20,6 +20,7 @@ import {
   ZoomOut,
   RotateCcw,
   Forward,
+  ExternalLink,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -27,6 +28,7 @@ import { MessageReactions } from "./message-reactions";
 import { InteractivePreview } from "@/components/interactive/interactive-preview";
 import { WhatsAppText } from "./whatsapp-text";
 import { useTranslations } from "next-intl";
+import { resolveTemplateButtonUrl } from "@/lib/inbox/template-buttons";
 
 interface MessageBubbleProps {
   message: Message;
@@ -445,6 +447,13 @@ function TemplateActions({
   payload: InteractiveMessagePayload;
   onPrimary: boolean;
 }) {
+  const buttonClass = cn(
+    "flex w-full items-center justify-center gap-2 border-t px-3 py-2 text-sm font-medium",
+    onPrimary
+      ? "border-primary-foreground/25 text-primary-foreground"
+      : "border-border text-primary",
+  );
+
   return (
     <div className="mt-2 overflow-hidden">
       {payload.footer ? (
@@ -458,24 +467,43 @@ function TemplateActions({
         </p>
       ) : null}
       {payload.kind === "buttons" ? (
-        payload.buttons.map((button, index) => (
-          <button
-            key={button.id || index}
-            type="button"
-            disabled
-            className={cn(
-              "flex w-full items-center justify-center gap-2 border-t px-3 py-2 text-sm font-medium",
-              onPrimary
-                ? "border-primary-foreground/25 text-primary-foreground"
-                : "border-border text-primary",
-            )}
-          >
-            <CornerDownLeft className="size-3.5" />
-            <span className="truncate">
-              <WhatsAppText text={button.title} />
-            </span>
-          </button>
-        ))
+        payload.buttons.map((button, index) => {
+          const href = resolveTemplateButtonUrl(button);
+          const content = (
+            <>
+              {href ? (
+                <ExternalLink className="size-3.5" />
+              ) : (
+                <CornerDownLeft className="size-3.5" />
+              )}
+              <span className="truncate">
+                <WhatsAppText text={button.title} />
+              </span>
+            </>
+          );
+
+          return href ? (
+            <a
+              key={button.id || index}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              className={buttonClass}
+            >
+              {content}
+            </a>
+          ) : (
+            <button
+              key={button.id || index}
+              type="button"
+              disabled
+              className={buttonClass}
+            >
+              {content}
+            </button>
+          );
+        })
       ) : (
         <button
           type="button"

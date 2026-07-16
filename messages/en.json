@@ -159,6 +159,7 @@
     "automations": "Automations",
     "flows": "Flows",
     "aiAgents": "AI Agents",
+    "payments": "Payments",
     "settings": "Settings",
     "beta": "Beta",
     "unreadConversations": "{count} unread {count, plural, =1 {conversation} other {conversations}}",
@@ -424,6 +425,15 @@
       "moreActions": "More",
       "interactiveMessage": "Interactive message",
       "quickReplies": "Quick replies",
+      "paymentLink": "Payment link",
+      "paymentAmount": "Amount EUR",
+      "paymentConcept": "Concept",
+      "sendPaymentLink": "Create and send",
+      "paymentCreated": "Payment link created.",
+      "paymentCreateFailed": "Could not create the payment link.",
+      "paymentSendFailed": "The link was created, but the template could not be sent.",
+      "paymentAmountRequired": "Enter a valid amount.",
+      "paymentConceptRequired": "Enter a concept.",
       "signMessages": "Sign messages",
       "quickRepliesEmpty": "No quick replies yet. Add some in Settings → Quick replies.",
       "saveAsQuickReply": "Save as quick reply",
@@ -1153,6 +1163,8 @@
         "assign_conversation": "Assign Conversation",
         "update_contact_field": "Update Contact Field",
         "create_deal": "Create Deal",
+        "create_payment_link": "Create payment link",
+        "send_payment_link": "Send payment link",
         "wait": "Wait",
         "condition": "Condition (If/Else)",
         "send_webhook": "Send Webhook",
@@ -1190,6 +1202,18 @@
         "time_based": {
           "label": "Time-Based",
           "hint": "On a recurring schedule"
+        },
+        "payment_link_created": {
+          "label": "Payment link created",
+          "hint": "When a payment link is created"
+        },
+        "payment_paid": {
+          "label": "Payment paid",
+          "hint": "When a payment link becomes paid"
+        },
+        "payment_failed": {
+          "label": "Payment failed",
+          "hint": "When a payment link becomes failed"
         }
       },
       "trigger": "Trigger",
@@ -1265,6 +1289,9 @@
         "agentLabel": "Agent",
         "fieldLabel": "Field",
         "valueLabel": "Value",
+        "amountEurLabel": "Amount EUR",
+        "conceptLabel": "Concept",
+        "paymentMessageLabel": "Message with link",
         "placeholderValue": "Text or {{ vars.x }} / {{ message.text }}",
         "titleLabel": "Title",
         "amountLabel": "Amount",
@@ -1950,6 +1977,7 @@
       "departments": "Departments",
       "templates": "Templates",
       "quick-replies": "Quick replies",
+      "apps": "Apps",
       "fields": "Fields & tags",
       "deals": "Deals & currency",
       "members": "Team members",

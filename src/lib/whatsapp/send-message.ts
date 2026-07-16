@@ -45,6 +45,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -111,6 +112,39 @@ function templatePreviewPayload(
       title: button.text,
     })),
   };
+}
+
+function parseTemplateMessageParams(value: unknown): SendTimeParams {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const params = value as Record<string, unknown>;
+  const buttonParams =
+    params.buttonParams && typeof params.buttonParams === 'object'
+      ? Object.fromEntries(
+          Object.entries(params.buttonParams as Record<string, unknown>)
+            .filter(([key, v]) => /^\d+$/.test(key) && typeof v === 'string')
+            .map(([key, v]) => [Number(key), v as string]),
+        )
+      : undefined;
+  return {
+    body: Array.isArray(params.body) ? params.body.map(String) : undefined,
+    headerText: typeof params.headerText === 'string' ? params.headerText : undefined,
+    headerMediaUrl:
+      typeof params.headerMediaUrl === 'string' ? params.headerMediaUrl : undefined,
+    headerMediaId:
+      typeof params.headerMediaId === 'string' ? params.headerMediaId : undefined,
+    buttonParams,
+  };
+}
+
+function renderTemplateBodyPreview(
+  template: MessageTemplate | null,
+  bodyValues: string[] | undefined,
+): string | null {
+  if (!template || !bodyValues) return null;
+  return template.body_text.replace(/\{\{(\d+)\}\}/g, (_, rawIndex) => {
+    const index = Number(rawIndex) - 1;
+    return bodyValues[index] ?? '';
+  });
 }
 
 /**
@@ -476,9 +510,20 @@ export async function sendMessageToConversation(
   // payload so the thread can re-render the buttons / rows.
   const interactiveBody =
     messageType === 'interactive' ? interactivePayload!.body : null;
+  const structuredTemplateParams =
+    messageType === 'template'
+      ? parseTemplateMessageParams(templateMessageParams)
+      : {};
+  const renderedTemplateBody =
+    messageType === 'template'
+      ? renderTemplateBodyPreview(
+          templateRow,
+          structuredTemplateParams.body ?? templateParams,
+        )
+      : null;
   const templateButtonsPayload =
     messageType === 'template'
-      ? templatePreviewPayload(templateRow, contentText)
+      ? templatePreviewPayload(templateRow, renderedTemplateBody ?? contentText)
       : null;
 
   const { data: messageRecord, error: msgError } = await db
@@ -487,7 +532,7 @@ export async function sendMessageToConversation(
       conversation_id: conversationId,
       sender_type: 'agent',
       content_type: messageType,
-      content_text: interactiveBody ?? contentText ?? null,
+      content_text: interactiveBody ?? renderedTemplateBody ?? contentText ?? null,
       media_url: mediaUrl || null,
       template_name: templateName || null,
       interactive_payload:
@@ -515,7 +560,7 @@ export async function sendMessageToConversation(
   const lastMessageText =
     messageType === 'interactive'
       ? interactivePayloadPreviewText(interactivePayload!)
-      : contentText || `[${messageType}]`;
+      : renderedTemplateBody || contentText || `[${messageType}]`;
 
   await db
     .from('conversations')

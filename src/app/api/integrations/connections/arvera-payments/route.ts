@@ -1,0 +1,164 @@
+import { NextResponse } from 'next/server';
+
+import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import {
+  ARVERA_DEFAULT_BASE_URL,
+  ARVERA_DEFAULT_MESSAGE,
+  ARVERA_PAYMENTS_SLUG,
+  encryptApiKey,
+  normalizeConfig,
+  type PaymentTemplateValueSource,
+} from '@/lib/integrations/arvera-payments';
+
+const PAYMENT_TEMPLATE_VALUE_SOURCES = new Set<PaymentTemplateValueSource>([
+  'payment_url',
+  'payment_url_token',
+  'order_id',
+  'amount_eur',
+  'amount_eur_number',
+  'amount_cents',
+  'concept',
+  'email',
+  'phone',
+]);
+
+export async function GET() {
+  try {
+    const ctx = await requireRole('admin');
+    const { data, error } = await ctx.supabase
+      .from('integration_connections')
+      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at')
+      .eq('account_id', ctx.accountId)
+      .eq('app_slug', ARVERA_PAYMENTS_SLUG)
+      .maybeSingle();
+    if (error) {
+      return NextResponse.json({ error: 'Failed to load connection' }, { status: 500 });
+    }
+    return NextResponse.json({
+      connection: data ?? {
+        app_slug: ARVERA_PAYMENTS_SLUG,
+        enabled: false,
+        config: {
+          base_url: ARVERA_DEFAULT_BASE_URL,
+          auth_header: 'authorization_bearer',
+          default_message: ARVERA_DEFAULT_MESSAGE,
+          delivery_mode: 'text',
+        },
+        status: 'not_configured',
+        last_error: null,
+      },
+      has_api_key: Boolean(data),
+    });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+export async function PUT(request: Request) {
+  try {
+    const ctx = await requireRole('admin');
+    const body = (await request.json().catch(() => null)) as {
+      enabled?: unknown;
+      base_url?: unknown;
+      api_key?: unknown;
+      auth_header?: unknown;
+      default_message?: unknown;
+      delivery_mode?: unknown;
+      template_name?: unknown;
+      template_language?: unknown;
+      template_body_params?: unknown;
+      template_button_params?: unknown;
+    } | null;
+
+    const config = normalizeConfig({
+      base_url: typeof body?.base_url === 'string' ? body.base_url : ARVERA_DEFAULT_BASE_URL,
+      auth_header:
+        body?.auth_header === 'x_api_key' ? 'x_api_key' : 'authorization_bearer',
+      default_message:
+        typeof body?.default_message === 'string' && body.default_message.trim()
+          ? body.default_message.trim()
+          : ARVERA_DEFAULT_MESSAGE,
+      delivery_mode: body?.delivery_mode === 'template' ? 'template' : 'text',
+      template_name:
+        typeof body?.template_name === 'string' && body.template_name.trim()
+          ? body.template_name.trim()
+          : undefined,
+      template_language:
+        typeof body?.template_language === 'string' && body.template_language.trim()
+          ? body.template_language.trim()
+          : undefined,
+      template_body_params: normalizeTemplateSourceMap(body?.template_body_params),
+      template_button_params: normalizeTemplateSourceMap(body?.template_button_params),
+    });
+
+    if (config.delivery_mode === 'template' && !config.template_name) {
+      return NextResponse.json(
+        { error: 'Select a Meta template before enabling template delivery' },
+        { status: 400 },
+      );
+    }
+
+    const apiKey = typeof body?.api_key === 'string' ? body.api_key.trim() : '';
+    const enabled = body?.enabled === true;
+
+    const { data: existing } = await ctx.supabase
+      .from('integration_connections')
+      .select('encrypted_credentials')
+      .eq('account_id', ctx.accountId)
+      .eq('app_slug', ARVERA_PAYMENTS_SLUG)
+      .maybeSingle();
+
+    const encrypted_credentials = apiKey
+      ? encryptApiKey(apiKey)
+      : ((existing?.encrypted_credentials as Record<string, string> | undefined) ?? {});
+
+    if (enabled && !encrypted_credentials.api_key && !process.env.PAYMENT_LINKS_API_KEY) {
+      return NextResponse.json(
+        { error: 'API key is required before enabling Pagos Arvera' },
+        { status: 400 },
+      );
+    }
+
+    const { data, error } = await ctx.supabase
+      .from('integration_connections')
+      .upsert(
+        {
+          account_id: ctx.accountId,
+          app_slug: ARVERA_PAYMENTS_SLUG,
+          enabled,
+          encrypted_credentials,
+          config,
+          status: enabled ? 'active' : 'disabled',
+          last_error: null,
+          last_checked_at: new Date().toISOString(),
+          created_by: ctx.userId,
+        },
+        { onConflict: 'account_id,app_slug' },
+      )
+      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at')
+      .single();
+
+    if (error || !data) {
+      console.error('[arvera connection] save failed:', error);
+      return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
+    }
+
+    return NextResponse.json({ connection: data, has_api_key: true });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+function normalizeTemplateSourceMap(
+  value: unknown,
+): Record<string, PaymentTemplateValueSource> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      ([key, source]) =>
+        /^\d+$/.test(key) &&
+        typeof source === 'string' &&
+        PAYMENT_TEMPLATE_VALUE_SOURCES.has(source as PaymentTemplateValueSource),
+    ),
+  ) as Record<string, PaymentTemplateValueSource>;
+}

@@ -35,6 +35,18 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Time-Based',
     pillClass: 'border-slate-500/30 bg-slate-500/10 text-muted-foreground',
   },
+  payment_link_created: {
+    label: 'Payment Link Created',
+    pillClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+  payment_paid: {
+    label: 'Payment Paid',
+    pillClass: 'border-green-500/30 bg-green-500/10 text-green-300',
+  },
+  payment_failed: {
+    label: 'Payment Failed',
+    pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
+  },
   interactive_reply: {
     label: 'Button / List Reply',
     pillClass: 'border-pink-500/30 bg-pink-500/10 text-pink-300',

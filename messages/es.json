@@ -159,6 +159,7 @@
     "automations": "Automatizaciones",
     "flows": "Flujos",
     "aiAgents": "Agentes IA",
+    "payments": "Pagos",
     "settings": "Ajustes",
     "beta": "Beta",
     "unreadConversations": "{count} {count, plural, =1 {conversación sin leer} other {conversaciones sin leer}}",
@@ -359,6 +360,15 @@
       "moreActions": "Mas",
       "interactiveMessage": "Mensaje interactivo",
       "quickReplies": "Respuestas rapidas",
+      "paymentLink": "Enlace de pago",
+      "paymentAmount": "Importe EUR",
+      "paymentConcept": "Concepto",
+      "sendPaymentLink": "Crear y enviar",
+      "paymentCreated": "Enlace de pago creado.",
+      "paymentCreateFailed": "No se pudo crear el enlace de pago.",
+      "paymentSendFailed": "El enlace se creo, pero no se pudo enviar la plantilla.",
+      "paymentAmountRequired": "Introduce un importe valido.",
+      "paymentConceptRequired": "Introduce un concepto.",
       "signMessages": "Firmar mensajes",
       "quickRepliesEmpty": "Aun no hay respuestas rapidas. Anadelas en Ajustes -> Respuestas rapidas.",
       "saveAsQuickReply": "Guardar como respuesta rapida",
@@ -583,6 +593,7 @@
       "departments": "Departamentos",
       "templates": "Plantillas",
       "quick-replies": "Respuestas rápidas",
+      "apps": "Apps",
       "fields": "Campos y etiquetas",
       "deals": "Oportunidades y moneda",
       "members": "Miembros del equipo",
@@ -1758,6 +1769,8 @@
         "assign_conversation": "Asignar conversacion",
         "update_contact_field": "Actualizar campo de contacto",
         "create_deal": "Crear oportunidad",
+        "create_payment_link": "Crear enlace de pago",
+        "send_payment_link": "Enviar enlace de pago",
         "wait": "Esperar",
         "condition": "Condicion (si/no)",
         "send_webhook": "Enviar webhook",
@@ -1795,6 +1808,18 @@
         "time_based": {
           "label": "Basada en tiempo",
           "hint": "En una programacion recurrente"
+        },
+        "payment_link_created": {
+          "label": "Enlace de pago creado",
+          "hint": "Cuando se crea un enlace de pago"
+        },
+        "payment_paid": {
+          "label": "Pago completado",
+          "hint": "Cuando un enlace de pago pasa a pagado"
+        },
+        "payment_failed": {
+          "label": "Pago fallido",
+          "hint": "Cuando un enlace de pago pasa a fallido"
         }
       },
       "trigger": "Disparador",
@@ -1870,6 +1895,9 @@
         "agentLabel": "Agente",
         "fieldLabel": "Campo",
         "valueLabel": "Valor",
+        "amountEurLabel": "Importe EUR",
+        "conceptLabel": "Concepto",
+        "paymentMessageLabel": "Mensaje con enlace",
         "placeholderValue": "Texto o {{ vars.x }} / {{ message.text }}",
         "titleLabel": "Titulo",
         "amountLabel": "Cantidad",
