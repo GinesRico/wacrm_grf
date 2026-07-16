@@ -165,6 +165,7 @@ const APPOINTMENT_SLOT_VARIABLES = [
   "{{ vars.appointment_end }}",
   "{{ vars.appointment_date }}",
   "{{ vars.appointment_time }}",
+  "{{ vars.appointment_service }}",
   "{{ vars.contact_name }}",
   "{{ vars.contact_phone }}",
   "{{ vars.contact_email }}",
@@ -222,7 +223,11 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
     case "send_appointment_availability":
       return { days_ahead: 1, service: "" }
     case "create_appointment":
-      return { startTime: "", endTime: "", service: "" }
+      return {
+        startTime: "{{ vars.appointment_start }}",
+        endTime: "{{ vars.appointment_end }}",
+        service: "{{ vars.appointment_service }}",
+      }
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":

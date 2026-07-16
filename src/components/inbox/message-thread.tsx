@@ -1089,6 +1089,8 @@ export function MessageThread({
       values: {
         body: string[];
         headerText?: string;
+        headerMediaUrl?: string;
+        headerMediaPath?: string;
         buttonParams?: Record<number, string>;
       },
     ) => {
@@ -1125,6 +1127,7 @@ export function MessageThread({
             template_message_params: {
               body: values.body,
               headerText: values.headerText,
+              headerMediaUrl: values.headerMediaUrl,
               buttonParams: values.buttonParams,
             },
             template_params: values.body,
@@ -1138,6 +1141,11 @@ export function MessageThread({
           const reason = payload?.error || `HTTP ${res.status}`;
           console.error("Failed to send template:", reason);
           toast.error(`Failed to send template: ${reason}`);
+          if (values.headerMediaPath) {
+            void deleteAccountMedia(CHAT_MEDIA_BUCKET, values.headerMediaPath).catch(
+              () => {},
+            );
+          }
           onUpdateMessage(tempId, { status: "failed" });
           return;
         }
@@ -1147,6 +1155,11 @@ export function MessageThread({
         console.error("Failed to send template:", err);
         const reason = err instanceof Error ? err.message : "network error";
         toast.error(`Failed to send template: ${reason}`);
+        if (values.headerMediaPath) {
+          void deleteAccountMedia(CHAT_MEDIA_BUCKET, values.headerMediaPath).catch(
+            () => {},
+          );
+        }
         onUpdateMessage(tempId, { status: "failed" });
       }
     },

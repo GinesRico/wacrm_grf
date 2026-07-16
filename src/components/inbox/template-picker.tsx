@@ -1,11 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  ClipboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  deleteAccountMedia,
+  MEDIA_MAX_BYTES_BY_KIND,
+  uploadAccountMedia,
+} from "@/lib/storage/upload-media";
+import { CHAT_MEDIA_BUCKET } from "./message-composer";
 import {
   Dialog,
   DialogContent,
@@ -18,15 +30,21 @@ import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   ChevronRight,
+  Image as ImageIcon,
   LayoutTemplate,
   Loader2,
+  Upload,
+  X,
 } from "lucide-react";
 import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
 import { useTranslations } from "next-intl";
+import { toast } from "sonner";
 
 export interface TemplateSendValues {
   body: string[];
   headerText?: string;
+  headerMediaUrl?: string;
+  headerMediaPath?: string;
   buttonParams?: Record<number, string>;
 }
 
@@ -58,6 +76,7 @@ interface UrlButtonSlot {
 function collectVariableSlots(template: MessageTemplate): {
   bodyVars: number[];
   headerVarCount: number;
+  needsImageHeader: boolean;
   urlButtonSlots: UrlButtonSlot[];
 } {
   const bodyVars = extractVariableIndices(template.body_text);
@@ -65,13 +84,14 @@ function collectVariableSlots(template: MessageTemplate): {
     template.header_type === "text" && template.header_content
       ? extractVariableIndices(template.header_content).length
       : 0;
+  const needsImageHeader = template.header_type === "image";
   const urlButtonSlots: UrlButtonSlot[] = [];
   (template.buttons ?? []).forEach((b, i) => {
     if (b.type === "URL" && extractVariableIndices(b.url).length > 0) {
       urlButtonSlots.push({ index: i, text: b.text, url: b.url });
     }
   });
-  return { bodyVars, headerVarCount, urlButtonSlots };
+  return { bodyVars, headerVarCount, needsImageHeader, urlButtonSlots };
 }
 
 export function TemplatePicker({
@@ -86,7 +106,81 @@ export function TemplatePicker({
   const [selected, setSelected] = useState<MessageTemplate | null>(null);
   const [params, setParams] = useState<string[]>([]);
   const [headerText, setHeaderText] = useState<string>("");
+  const [headerMediaUrl, setHeaderMediaUrl] = useState<string>("");
+  const [headerMediaPath, setHeaderMediaPath] = useState<string>("");
+  const [uploadingHeaderMedia, setUploadingHeaderMedia] = useState(false);
   const [buttonParams, setButtonParams] = useState<Record<number, string>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function removeHeaderMedia(path: string) {
+    if (!path) return;
+    await deleteAccountMedia(CHAT_MEDIA_BUCKET, path).catch(() => {});
+  }
+
+  function clearHeaderMedia() {
+    void removeHeaderMedia(headerMediaPath);
+    setHeaderMediaUrl("");
+    setHeaderMediaPath("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function stageHeaderImage(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.error(t("imageOnly"));
+      return;
+    }
+    const max = MEDIA_MAX_BYTES_BY_KIND.image;
+    if (file.size > max) {
+      toast.error(
+        t("imageTooLarge", {
+          size: (file.size / 1024 / 1024).toFixed(1),
+          max: Math.round(max / 1024 / 1024),
+        }),
+      );
+      return;
+    }
+
+    setUploadingHeaderMedia(true);
+    try {
+      const { publicUrl, path } = await uploadAccountMedia(
+        CHAT_MEDIA_BUCKET,
+        file,
+      );
+      void removeHeaderMedia(headerMediaPath);
+      setHeaderMediaUrl(publicUrl);
+      setHeaderMediaPath(path);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("uploadFailed"));
+    } finally {
+      setUploadingHeaderMedia(false);
+    }
+  }
+
+  function handleHeaderPaste(e: ClipboardEvent<HTMLDivElement>) {
+    if (uploadingHeaderMedia) return;
+    const file =
+      Array.from(e.clipboardData.files)[0] ??
+      Array.from(e.clipboardData.items)
+        .find((item) => item.kind === "file")
+        ?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    void stageHeaderImage(file);
+  }
+
+  function resetSelection(options: { keepHeaderMedia?: boolean } = {}) {
+    setSelected(null);
+    setParams([]);
+    setHeaderText("");
+    setButtonParams({});
+    if (!options.keepHeaderMedia) {
+      clearHeaderMedia();
+    } else {
+      setHeaderMediaUrl("");
+      setHeaderMediaPath("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -132,13 +226,6 @@ export function TemplatePicker({
     };
   }, [open]);
 
-  function resetSelection() {
-    setSelected(null);
-    setParams([]);
-    setHeaderText("");
-    setButtonParams({});
-  }
-
   function handleOpenChange(next: boolean) {
     if (!next) resetSelection();
     onOpenChange(next);
@@ -149,6 +236,7 @@ export function TemplatePicker({
     const noInputsNeeded =
       slots.bodyVars.length === 0 &&
       slots.headerVarCount === 0 &&
+      !slots.needsImageHeader &&
       slots.urlButtonSlots.length === 0;
     if (noInputsNeeded) {
       onSelect(template, { body: [] });
@@ -158,20 +246,28 @@ export function TemplatePicker({
     setSelected(template);
     setParams(new Array(slots.bodyVars.length).fill(""));
     setHeaderText("");
+    setHeaderMediaUrl("");
+    setHeaderMediaPath("");
     setButtonParams({});
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function confirm() {
     if (!selected) return;
     const values: TemplateSendValues = { body: params };
     if (headerText.trim()) values.headerText = headerText.trim();
+    if (headerMediaUrl) {
+      values.headerMediaUrl = headerMediaUrl;
+      if (headerMediaPath) values.headerMediaPath = headerMediaPath;
+    }
     if (Object.keys(buttonParams).length > 0) {
       values.buttonParams = Object.fromEntries(
         Object.entries(buttonParams).map(([k, v]) => [Number(k), v.trim()]),
       );
     }
     onSelect(selected, values);
-    handleOpenChange(false);
+    resetSelection({ keepHeaderMedia: true });
+    onOpenChange(false);
   }
 
   const slots = useMemo(
@@ -183,6 +279,9 @@ export function TemplatePicker({
     !!slots &&
     slots.bodyVars.every((_, i) => (params[i] ?? "").trim().length > 0) &&
     (slots.headerVarCount === 0 || headerText.trim().length > 0) &&
+    (!slots.needsImageHeader ||
+      Boolean(headerMediaUrl || selected.header_media_url)) &&
+    !uploadingHeaderMedia &&
     slots.urlButtonSlots.every(
       (s) => (buttonParams[s.index] ?? "").trim().length > 0,
     );
@@ -274,6 +373,75 @@ export function TemplatePicker({
                 />
               </div>
             )}
+            {slots?.needsImageHeader && (
+              <div
+                className="space-y-2 rounded-md border border-dashed border-border bg-background/40 p-3"
+                onPaste={handleHeaderPaste}
+                tabIndex={0}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="flex items-center gap-2 text-xs text-popover-foreground">
+                    <ImageIcon className="h-3.5 w-3.5 text-primary" />
+                    {t("headerImageLabel")}
+                  </Label>
+                  {headerMediaUrl && (
+                    <button
+                      type="button"
+                      onClick={clearHeaderMedia}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                      aria-label={t("removeImage")}
+                      title={t("removeImage")}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                {headerMediaUrl || selected.header_media_url ? (
+                  <div className="overflow-hidden rounded-md border border-border bg-muted">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- Supabase public URLs are dynamic user uploads. */}
+                    <img
+                      src={headerMediaUrl || selected.header_media_url}
+                      alt={t("headerImagePreview")}
+                      className="max-h-40 w-full object-contain"
+                    />
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    {t("headerImageHint")}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void stageHeaderImage(file);
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploadingHeaderMedia}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-border text-popover-foreground hover:bg-muted"
+                  >
+                    {uploadingHeaderMedia ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {t("chooseImage")}
+                  </Button>
+                  <span className="inline-flex items-center text-xs text-muted-foreground">
+                    {t("pasteImageHint")}
+                  </span>
+                </div>
+              </div>
+            )}
             {slots?.bodyVars.map((v, i) => (
               <div key={v} className="space-y-1">
                 <Label className="text-xs text-popover-foreground">{`Body {{${v}}}`}</Label>
@@ -318,7 +486,7 @@ export function TemplatePicker({
             <>
               <Button
                 variant="outline"
-                onClick={resetSelection}
+                onClick={() => resetSelection()}
                 className="border-border text-popover-foreground hover:bg-muted"
               >
                 <ArrowLeft className="h-4 w-4" />

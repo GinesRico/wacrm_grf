@@ -64,6 +64,7 @@ function formatLongListDate(date: string) {
     weekday: 'long',
     day: '2-digit',
     month: 'long',
+    year: 'numeric',
   }).format(parsed);
 }
 
@@ -78,11 +79,7 @@ function formatSelectedDates(dates: string[]) {
 }
 
 function formatRowDate(date: string) {
-  const parsed = new Date(`${date}T12:00:00`);
-  return new Intl.DateTimeFormat('es-ES', {
-    day: '2-digit',
-    month: '2-digit',
-  }).format(parsed);
+  return formatLongListDate(date);
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -132,8 +129,8 @@ function buildInteractivePayload(
         title: formatListDate(date),
         rows: dateRows.map((slot) => ({
           id: slotTimeId(slot.date, slot.start, slot.index),
-          title: `${formatRowDate(slot.date)} ${slot.start}`,
-          description: service || formatListDate(slot.date),
+          title: slot.start,
+          description: service ? `${formatRowDate(slot.date)} - ${service}` : formatRowDate(slot.date),
         })),
       };
     })
