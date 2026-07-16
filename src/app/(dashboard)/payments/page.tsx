@@ -166,6 +166,7 @@ export default function PaymentsPage() {
                       <Button
                         size="sm"
                         variant="outline"
+                        nativeButton={false}
                         render={
                           <a href={payment.payment_url} target="_blank" rel="noreferrer" />
                         }
@@ -176,6 +177,7 @@ export default function PaymentsPage() {
                         <Button
                           size="sm"
                           variant="outline"
+                          nativeButton={false}
                           render={<Link href={`/inbox?c=${payment.conversation_id}`} />}
                         >
                           Chat

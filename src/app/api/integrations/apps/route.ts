@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account';
+import { ARVERA_APPOINTMENTS_SLUG } from '@/lib/integrations/arvera-appointments';
 import { ARVERA_PAYMENTS_SLUG } from '@/lib/integrations/arvera-payments';
 
 export async function GET() {
@@ -35,6 +36,15 @@ export async function GET() {
         category: 'payments',
         description: 'Create Redsys payment links through the Arvera payments API.',
         connection: bySlug.get(ARVERA_PAYMENTS_SLUG) ?? null,
+      });
+    }
+    if (!rows.some((app) => app.slug === ARVERA_APPOINTMENTS_SLUG)) {
+      rows.push({
+        slug: ARVERA_APPOINTMENTS_SLUG,
+        name: 'Citas Arvera',
+        category: 'appointments',
+        description: 'Send appointment availability and receive appointment events.',
+        connection: bySlug.get(ARVERA_APPOINTMENTS_SLUG) ?? null,
       });
     }
 

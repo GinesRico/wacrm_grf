@@ -47,6 +47,26 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Payment Failed',
     pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
   },
+  appointment_availability_sent: {
+    label: 'Appointment Availability Sent',
+    pillClass: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
+  },
+  appointment_created: {
+    label: 'Appointment Created',
+    pillClass: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+  appointment_updated: {
+    label: 'Appointment Updated',
+    pillClass: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
+  },
+  appointment_cancelled: {
+    label: 'Appointment Cancelled',
+    pillClass: 'border-red-500/30 bg-red-500/10 text-red-300',
+  },
+  appointment_car_ready: {
+    label: 'Car Ready',
+    pillClass: 'border-lime-500/30 bg-lime-500/10 text-lime-300',
+  },
   interactive_reply: {
     label: 'Button / List Reply',
     pillClass: 'border-pink-500/30 bg-pink-500/10 text-pink-300',

@@ -21,6 +21,7 @@ import {
   Smile,
   PenLine,
   CreditCard,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -215,6 +216,13 @@ export function MessageComposer({
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentConcept, setPaymentConcept] = useState("");
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
+  const [appointmentOpen, setAppointmentOpen] = useState(false);
+  const [appointmentDate, setAppointmentDate] = useState(() =>
+    new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+  );
+  const [appointmentService, setAppointmentService] = useState("");
+  const [appointmentBusy, setAppointmentBusy] = useState(false);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
   // attachment; `busy` covers the upload/transcode window.
@@ -370,6 +378,29 @@ export function MessageComposer({
         }
       } catch {
         if (!cancelled) setPaymentsEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/integrations/apps", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        const app = payload.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-appointments",
+        );
+        if (!cancelled) {
+          setAppointmentsEnabled(Boolean(app?.connection?.enabled));
+          setAppointmentService(app?.connection?.config?.default_service ?? "");
+        }
+      } catch {
+        if (!cancelled) setAppointmentsEnabled(false);
       }
     })();
     return () => {
@@ -568,6 +599,35 @@ export function MessageComposer({
       setPaymentBusy(false);
     }
   }, [paymentAmount, paymentConcept, conversationId, contact, onSend, paymentDelivery, t]);
+
+  const sendAppointmentAvailability = useCallback(async () => {
+    if (!appointmentDate) {
+      toast.error(t("appointmentDateRequired"));
+      return;
+    }
+    setAppointmentBusy(true);
+    try {
+      const res = await fetch("/api/integrations/arvera-appointments/availability-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversationId,
+          contact_id: contact?.id,
+          date: appointmentDate,
+          service: appointmentService,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || t("appointmentSendFailed"));
+        return;
+      }
+      setAppointmentOpen(false);
+      toast.success(t("appointmentSent"));
+    } finally {
+      setAppointmentBusy(false);
+    }
+  }, [appointmentDate, appointmentService, contact?.id, conversationId, t]);
 
   // A picked quick reply: text fills the composer; interactive opens the
   // builder pre-filled so the agent can tweak before sending.
@@ -837,6 +897,12 @@ export function MessageComposer({
                   {t("paymentLink")}
                 </DropdownMenuItem>
               )}
+              {appointmentsEnabled && (
+                <DropdownMenuItem onClick={() => setAppointmentOpen(true)}>
+                  <CalendarClock className="mr-2 h-4 w-4" />
+                  {t("appointmentAvailability")}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuCheckboxItem
                 checked={signatureEnabled}
                 onCheckedChange={onSignatureEnabledChange}
@@ -991,6 +1057,44 @@ export function MessageComposer({
                 <CreditCard className="h-4 w-4" />
               )}
               {t("sendPaymentLink")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={appointmentOpen} onOpenChange={setAppointmentOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("appointmentAvailability")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>{t("appointmentDate")}</Label>
+              <Input
+                type="date"
+                value={appointmentDate}
+                onChange={(e) => setAppointmentDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t("appointmentService")}</Label>
+              <Input
+                value={appointmentService}
+                onChange={(e) => setAppointmentService(e.target.value)}
+                placeholder="Cita taller"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAppointmentOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button onClick={sendAppointmentAvailability} disabled={appointmentBusy}>
+              {appointmentBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CalendarClock className="h-4 w-4" />
+              )}
+              {t("sendAppointmentAvailability")}
             </Button>
           </DialogFooter>
         </DialogContent>

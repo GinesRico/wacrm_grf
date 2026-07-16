@@ -116,6 +116,25 @@ function validateOne(step: StepLike, path: string, issues: ValidationIssue[]): v
         issues.push({ path: `${path}.concept`, message: 'payment concept is required' })
       }
       break
+    case 'send_appointment_availability':
+      if (
+        c.days_ahead !== undefined &&
+        (typeof c.days_ahead !== 'number' || !Number.isFinite(c.days_ahead) || c.days_ahead < 0)
+      ) {
+        issues.push({ path: `${path}.days_ahead`, message: 'days ahead must be 0 or greater' })
+      }
+      break
+    case 'create_appointment':
+      if (!nonEmpty(c.startTime)) {
+        issues.push({ path: `${path}.startTime`, message: 'appointment start is required' })
+      }
+      if (!nonEmpty(c.endTime)) {
+        issues.push({ path: `${path}.endTime`, message: 'appointment end is required' })
+      }
+      if (!nonEmpty(c.service)) {
+        issues.push({ path: `${path}.service`, message: 'appointment service is required' })
+      }
+      break
     case 'wait':
       if (typeof c.amount !== 'number' || !Number.isFinite(c.amount) || c.amount <= 0) {
         issues.push({ path: `${path}.amount`, message: 'wait amount must be greater than 0' })

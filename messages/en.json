@@ -160,6 +160,7 @@
     "flows": "Flows",
     "aiAgents": "AI Agents",
     "payments": "Payments",
+    "appointments": "Appointments",
     "settings": "Settings",
     "beta": "Beta",
     "unreadConversations": "{count} unread {count, plural, =1 {conversation} other {conversations}}",
@@ -434,6 +435,13 @@
       "paymentSendFailed": "The link was created, but the template could not be sent.",
       "paymentAmountRequired": "Enter a valid amount.",
       "paymentConceptRequired": "Enter a concept.",
+      "appointmentAvailability": "Available appointments",
+      "appointmentDate": "Date",
+      "appointmentService": "Service",
+      "sendAppointmentAvailability": "Send appointments",
+      "appointmentSent": "Available appointments sent.",
+      "appointmentSendFailed": "Could not send available appointments.",
+      "appointmentDateRequired": "Select a date.",
       "signMessages": "Sign messages",
       "quickRepliesEmpty": "No quick replies yet. Add some in Settings → Quick replies.",
       "saveAsQuickReply": "Save as quick reply",
@@ -1165,6 +1173,8 @@
         "create_deal": "Create Deal",
         "create_payment_link": "Create payment link",
         "send_payment_link": "Send payment link",
+        "send_appointment_availability": "Send appointment availability",
+        "create_appointment": "Create appointment",
         "wait": "Wait",
         "condition": "Condition (If/Else)",
         "send_webhook": "Send Webhook",
@@ -1214,6 +1224,26 @@
         "payment_failed": {
           "label": "Payment failed",
           "hint": "When a payment link becomes failed"
+        },
+        "appointment_availability_sent": {
+          "label": "Appointment availability sent",
+          "hint": "When appointment availability is sent"
+        },
+        "appointment_created": {
+          "label": "Appointment created",
+          "hint": "When Citas Arvera creates an appointment"
+        },
+        "appointment_updated": {
+          "label": "Appointment updated",
+          "hint": "When Citas Arvera updates an appointment"
+        },
+        "appointment_cancelled": {
+          "label": "Appointment cancelled",
+          "hint": "When an appointment is cancelled"
+        },
+        "appointment_car_ready": {
+          "label": "Car ready",
+          "hint": "When Citas Arvera reports the car is ready"
         }
       },
       "trigger": "Trigger",
@@ -1292,6 +1322,11 @@
         "amountEurLabel": "Amount EUR",
         "conceptLabel": "Concept",
         "paymentMessageLabel": "Message with link",
+        "daysAheadLabel": "Days ahead",
+        "serviceLabel": "Service",
+        "startTimeLabel": "Start",
+        "endTimeLabel": "End",
+        "notesLabel": "Notes",
         "placeholderValue": "Text or {{ vars.x }} / {{ message.text }}",
         "titleLabel": "Title",
         "amountLabel": "Amount",

@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
   Bot,
+  CalendarClock,
   CreditCard,
   Crown,
   GitBranch,
@@ -105,6 +106,12 @@ const paymentsNavItem: NavItem = {
   icon: CreditCard,
 };
 
+const appointmentsNavItem: NavItem = {
+  href: "/appointments",
+  labelKey: "appointments",
+  icon: CalendarClock,
+};
+
 const bottomNavItems = [
   { href: "/settings", labelKey: "settings", icon: Settings },
 ];
@@ -130,6 +137,7 @@ export function Sidebar({
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
+  const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -158,12 +166,21 @@ export function Sidebar({
         const res = await fetch("/api/integrations/apps", { cache: "no-store" });
         if (!res.ok) return;
         const payload = await res.json();
-        const app = payload.apps?.find(
+        const paymentsApp = payload.apps?.find(
           (item: { slug: string }) => item.slug === "arvera-payments",
         );
-        if (!cancelled) setPaymentsEnabled(Boolean(app?.connection?.enabled));
+        const appointmentsApp = payload.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-appointments",
+        );
+        if (!cancelled) {
+          setPaymentsEnabled(Boolean(paymentsApp?.connection?.enabled));
+          setAppointmentsEnabled(Boolean(appointmentsApp?.connection?.enabled));
+        }
       } catch {
-        if (!cancelled) setPaymentsEnabled(false);
+        if (!cancelled) {
+          setPaymentsEnabled(false);
+          setAppointmentsEnabled(false);
+        }
       }
     };
     void refreshPaymentsState();
@@ -174,11 +191,13 @@ export function Sidebar({
     const onConnectionUpdated = () => void refreshPaymentsState();
     window.addEventListener("focus", onConnectionUpdated);
     window.addEventListener("arvera-payments-connection-updated", onConnectionUpdated);
+    window.addEventListener("arvera-appointments-connection-updated", onConnectionUpdated);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onConnectionUpdated);
       window.removeEventListener("arvera-payments-connection-updated", onConnectionUpdated);
+      window.removeEventListener("arvera-appointments-connection-updated", onConnectionUpdated);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [account?.id]);
@@ -276,7 +295,11 @@ export function Sidebar({
         {/* Main navigation */}
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <ul className="flex flex-col gap-1">
-            {[...navItems, ...(paymentsEnabled ? [paymentsNavItem] : [])].map((item) => {
+            {[
+              ...navItems,
+              ...(appointmentsEnabled ? [appointmentsNavItem] : []),
+              ...(paymentsEnabled ? [paymentsNavItem] : []),
+            ].map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));

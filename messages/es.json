@@ -160,6 +160,7 @@
     "flows": "Flujos",
     "aiAgents": "Agentes IA",
     "payments": "Pagos",
+    "appointments": "Citas",
     "settings": "Ajustes",
     "beta": "Beta",
     "unreadConversations": "{count} {count, plural, =1 {conversación sin leer} other {conversaciones sin leer}}",
@@ -369,6 +370,13 @@
       "paymentSendFailed": "El enlace se creo, pero no se pudo enviar la plantilla.",
       "paymentAmountRequired": "Introduce un importe valido.",
       "paymentConceptRequired": "Introduce un concepto.",
+      "appointmentAvailability": "Citas disponibles",
+      "appointmentDate": "Fecha",
+      "appointmentService": "Servicio",
+      "sendAppointmentAvailability": "Enviar citas",
+      "appointmentSent": "Citas disponibles enviadas.",
+      "appointmentSendFailed": "No se pudieron enviar las citas disponibles.",
+      "appointmentDateRequired": "Selecciona una fecha.",
       "signMessages": "Firmar mensajes",
       "quickRepliesEmpty": "Aun no hay respuestas rapidas. Anadelas en Ajustes -> Respuestas rapidas.",
       "saveAsQuickReply": "Guardar como respuesta rapida",
@@ -1771,6 +1779,8 @@
         "create_deal": "Crear oportunidad",
         "create_payment_link": "Crear enlace de pago",
         "send_payment_link": "Enviar enlace de pago",
+        "send_appointment_availability": "Enviar citas disponibles",
+        "create_appointment": "Crear cita",
         "wait": "Esperar",
         "condition": "Condicion (si/no)",
         "send_webhook": "Enviar webhook",
@@ -1820,6 +1830,26 @@
         "payment_failed": {
           "label": "Pago fallido",
           "hint": "Cuando un enlace de pago pasa a fallido"
+        },
+        "appointment_availability_sent": {
+          "label": "Citas disponibles enviadas",
+          "hint": "Cuando se envia disponibilidad de citas"
+        },
+        "appointment_created": {
+          "label": "Cita creada",
+          "hint": "Cuando Citas Arvera crea una cita"
+        },
+        "appointment_updated": {
+          "label": "Cita actualizada",
+          "hint": "Cuando Citas Arvera actualiza una cita"
+        },
+        "appointment_cancelled": {
+          "label": "Cita cancelada",
+          "hint": "Cuando una cita se cancela"
+        },
+        "appointment_car_ready": {
+          "label": "Coche listo",
+          "hint": "Cuando Citas Arvera avisa que el coche esta listo"
         }
       },
       "trigger": "Disparador",
@@ -1898,6 +1928,11 @@
         "amountEurLabel": "Importe EUR",
         "conceptLabel": "Concepto",
         "paymentMessageLabel": "Mensaje con enlace",
+        "daysAheadLabel": "Dias adelante",
+        "serviceLabel": "Servicio",
+        "startTimeLabel": "Inicio",
+        "endTimeLabel": "Fin",
+        "notesLabel": "Notas",
         "placeholderValue": "Texto o {{ vars.x }} / {{ message.text }}",
         "titleLabel": "Titulo",
         "amountLabel": "Cantidad",

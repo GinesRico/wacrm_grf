@@ -34,6 +34,7 @@ import {
   ArrowUp,
   MousePointerClick,
   List,
+  CalendarClock,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -110,6 +111,8 @@ const STEP_META: Record<AutomationStepType, StepMeta> = {
   create_deal: { label: "create_deal", icon: Briefcase, border: "border-l-primary" },
   create_payment_link: { label: "create_payment_link", icon: CreditCard, border: "border-l-primary" },
   send_payment_link: { label: "send_payment_link", icon: CreditCard, border: "border-l-primary" },
+  send_appointment_availability: { label: "send_appointment_availability", icon: CalendarClock, border: "border-l-primary" },
+  create_appointment: { label: "create_appointment", icon: CalendarClock, border: "border-l-primary" },
   wait: { label: "wait", icon: Hourglass, border: "border-l-border" },
   condition: { label: "condition", icon: GitBranch, border: "border-l-amber-500" },
   send_webhook: { label: "send_webhook", icon: Webhook, border: "border-l-primary" },
@@ -128,6 +131,8 @@ const ADDABLE_STEPS: AutomationStepType[] = [
   "create_deal",
   "create_payment_link",
   "send_payment_link",
+  "send_appointment_availability",
+  "create_appointment",
   "wait",
   "condition",
   "send_webhook",
@@ -146,6 +151,11 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: "payment_link_created" },
   { value: "payment_paid" },
   { value: "payment_failed" },
+  { value: "appointment_availability_sent" },
+  { value: "appointment_created" },
+  { value: "appointment_updated" },
+  { value: "appointment_cancelled" },
+  { value: "appointment_car_ready" },
 ]
 
 function cid(): string {
@@ -196,6 +206,10 @@ function blankConfig(type: AutomationStepType): Record<string, unknown> {
         concept: "",
         message: "Aqui tienes tu enlace de pago: {{payment_url}}",
       }
+    case "send_appointment_availability":
+      return { days_ahead: 1, service: "" }
+    case "create_appointment":
+      return { startTime: "", endTime: "", service: "" }
     case "wait":
       return { amount: 1, unit: "hours" }
     case "condition":
@@ -227,6 +241,7 @@ interface AutomationResources {
   pipelines: PipelineOption[]
   stages: PipelineStageOption[]
   paymentsEnabled: boolean
+  appointmentsEnabled: boolean
 }
 
 interface PipelineOption {
@@ -249,6 +264,7 @@ const ResourcesContext = createContext<AutomationResources>({
   pipelines: [],
   stages: [],
   paymentsEnabled: false,
+  appointmentsEnabled: false,
 })
 
 function useResources(): AutomationResources {
@@ -263,6 +279,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   const [pipelines, setPipelines] = useState<PipelineOption[]>([])
   const [stages, setStages] = useState<PipelineStageOption[]>([])
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const [appointmentsEnabled, setAppointmentsEnabled] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -301,12 +318,21 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
         const res = await fetch("/api/integrations/apps", { cache: "no-store" })
         if (!res.ok) return
         const json = await res.json()
-        const app = json.apps?.find(
+        const paymentsApp = json.apps?.find(
           (item: { slug: string }) => item.slug === "arvera-payments",
         )
-        if (!cancelled) setPaymentsEnabled(Boolean(app?.connection?.enabled))
+        const appointmentsApp = json.apps?.find(
+          (item: { slug: string }) => item.slug === "arvera-appointments",
+        )
+        if (!cancelled) {
+          setPaymentsEnabled(Boolean(paymentsApp?.connection?.enabled))
+          setAppointmentsEnabled(Boolean(appointmentsApp?.connection?.enabled))
+        }
       } catch {
-        if (!cancelled) setPaymentsEnabled(false)
+        if (!cancelled) {
+          setPaymentsEnabled(false)
+          setAppointmentsEnabled(false)
+        }
       }
     })()
 
@@ -331,7 +357,16 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
 
   return (
     <ResourcesContext.Provider
-      value={{ tags, members, templates, customFields, pipelines, stages, paymentsEnabled }}
+      value={{
+        tags,
+        members,
+        templates,
+        customFields,
+        pipelines,
+        stages,
+        paymentsEnabled,
+        appointmentsEnabled,
+      }}
     >
       {children}
     </ResourcesContext.Provider>
@@ -827,13 +862,21 @@ function TriggerCard({
   t: ReturnType<typeof useTranslations>
 }) {
   const [open, setOpen] = useState(false)
-  const { paymentsEnabled } = useResources()
+  const { paymentsEnabled, appointmentsEnabled } = useResources()
   const triggerOptions = TRIGGER_OPTIONS.filter((option) => {
     const isPaymentTrigger =
       option.value === "payment_link_created" ||
       option.value === "payment_paid" ||
       option.value === "payment_failed"
-    return paymentsEnabled || !isPaymentTrigger || option.value === type
+    const isAppointmentTrigger =
+      option.value === "appointment_availability_sent" ||
+      option.value === "appointment_created" ||
+      option.value === "appointment_updated" ||
+      option.value === "appointment_cancelled" ||
+      option.value === "appointment_car_ready"
+    if (isPaymentTrigger) return paymentsEnabled || option.value === type
+    if (isAppointmentTrigger) return appointmentsEnabled || option.value === type
+    return true
   })
   return (
     // Card width: full on mobile, fixed 320px on sm+. The canvas wrapper
@@ -1275,11 +1318,16 @@ function BranchColumn({
 
 function AddButton({ onPick }: { onPick: (t: AutomationStepType) => void }) {
   const t = useTranslations("Automations.builder")
-  const { paymentsEnabled } = useResources()
+  const { paymentsEnabled, appointmentsEnabled } = useResources()
   const addableSteps = ADDABLE_STEPS.filter(
-    (step) =>
-      paymentsEnabled ||
-      (step !== "create_payment_link" && step !== "send_payment_link"),
+    (step) => {
+      const paymentStep = step === "create_payment_link" || step === "send_payment_link"
+      const appointmentStep =
+        step === "send_appointment_availability" || step === "create_appointment"
+      if (paymentStep) return paymentsEnabled
+      if (appointmentStep) return appointmentsEnabled
+      return true
+    },
   )
   return (
     <div className="relative flex flex-col items-center">
@@ -1474,6 +1522,64 @@ function StepEditor({
           )}
         </>
       )
+    case "send_appointment_availability":
+      return (
+        <>
+          <FieldBlock label={t("config.daysAheadLabel")}>
+            <Input
+              type="number"
+              min={0}
+              value={(cfg.days_ahead as number) ?? 1}
+              onChange={(e) => set({ days_ahead: Math.max(0, Number(e.target.value)) })}
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t("config.serviceLabel")}>
+            <Input
+              value={(cfg.service as string) ?? ""}
+              onChange={(e) => set({ service: e.target.value })}
+              placeholder="Cambio de neumaticos"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+        </>
+      )
+    case "create_appointment":
+      return (
+        <>
+          <FieldBlock label={t("config.startTimeLabel")}>
+            <Input
+              value={(cfg.startTime as string) ?? ""}
+              onChange={(e) => set({ startTime: e.target.value })}
+              placeholder="{{ vars.appointment_start }}"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t("config.endTimeLabel")}>
+            <Input
+              value={(cfg.endTime as string) ?? ""}
+              onChange={(e) => set({ endTime: e.target.value })}
+              placeholder="{{ vars.appointment_end }}"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t("config.serviceLabel")}>
+            <Input
+              value={(cfg.service as string) ?? ""}
+              onChange={(e) => set({ service: e.target.value })}
+              placeholder="Cambio de neumaticos"
+              className="bg-muted text-foreground"
+            />
+          </FieldBlock>
+          <FieldBlock label={t("config.notesLabel")}>
+            <Textarea
+              value={(cfg.notes as string) ?? ""}
+              onChange={(e) => set({ notes: e.target.value })}
+              className="min-h-20 bg-muted text-foreground"
+            />
+          </FieldBlock>
+        </>
+      )
     case "wait":
       return (
         <div className="grid grid-cols-2 gap-2">
@@ -1604,6 +1710,10 @@ function previewFor(step: BuilderStep): string {
     case "create_payment_link":
     case "send_payment_link":
       return (step.step_config.concept as string) || "payment link"
+    case "send_appointment_availability":
+      return `availability +${step.step_config.days_ahead ?? 1}d`
+    case "create_appointment":
+      return (step.step_config.service as string) || "appointment"
     default:
       return ""
   }

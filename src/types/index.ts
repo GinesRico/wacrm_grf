@@ -468,6 +468,11 @@ export type AutomationTriggerType =
   | 'payment_link_created'
   | 'payment_paid'
   | 'payment_failed'
+  | 'appointment_availability_sent'
+  | 'appointment_created'
+  | 'appointment_updated'
+  | 'appointment_cancelled'
+  | 'appointment_car_ready'
   /** Customer tapped a reply button / list row whose id matches; lets
    *  multi-step menus be chained across automations. */
   | 'interactive_reply';
@@ -484,6 +489,8 @@ export type AutomationStepType =
   | 'create_deal'
   | 'create_payment_link'
   | 'send_payment_link'
+  | 'send_appointment_availability'
+  | 'create_appointment'
   | 'wait'
   | 'condition'
   | 'send_webhook'
@@ -576,6 +583,26 @@ export interface PaymentLinkStepConfig {
   message?: string;
 }
 
+export interface AppointmentAvailabilityStepConfig {
+  date?: string;
+  days_ahead?: number;
+  duracion?: number;
+  timezone?: string;
+  service?: string;
+}
+
+export interface CreateAppointmentStepConfig {
+  startTime: string;
+  endTime: string;
+  service: string;
+  name?: string;
+  phone?: string;
+  email?: string;
+  plate?: string;
+  model?: string;
+  notes?: string;
+}
+
 export interface WaitStepConfig {
   amount: number;
   unit: 'minutes' | 'hours' | 'days';
@@ -611,6 +638,8 @@ export type AutomationStepConfig =
   | UpdateContactFieldStepConfig
   | CreateDealStepConfig
   | PaymentLinkStepConfig
+  | AppointmentAvailabilityStepConfig
+  | CreateAppointmentStepConfig
   | WaitStepConfig
   | ConditionStepConfig
   | SendWebhookStepConfig

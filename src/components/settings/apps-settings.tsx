@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { CreditCard, Loader2, PlugZap, Save } from "lucide-react";
+import { CalendarClock, Copy, CreditCard, Loader2, PlugZap, Save } from "lucide-react";
 
 import { RequireRole } from "@/components/auth/require-role";
 import { Badge } from "@/components/ui/badge";
@@ -36,9 +36,20 @@ interface AppsResponse {
         template_language?: string;
         template_body_params?: Record<string, PaymentTemplateValueSource>;
         template_button_params?: Record<string, PaymentTemplateValueSource>;
+        iframe_url?: string;
+        public_booking_url?: string;
+        default_send_mode?: "booking_link" | "interactive_list";
+        default_days_ahead?: number;
+        duracion?: number;
+        timezone?: string;
+        default_service?: string;
       };
     } | null;
   }>;
+}
+
+interface AppointmentsConnectionResponse {
+  webhook_url?: string | null;
 }
 
 type PaymentTemplateValueSource =
@@ -54,6 +65,10 @@ type PaymentTemplateValueSource =
 
 const DEFAULT_BASE_URL = "https://pagos.arvera.es/api";
 const DEFAULT_MESSAGE = "Aqui tienes tu enlace de pago: {{payment_url}}";
+const APPOINTMENTS_DEFAULT_BASE_URL = "https://citas.arvera.es";
+const APPOINTMENTS_DEFAULT_IFRAME_URL = "https://citas.arvera.es/index.html";
+const APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL = "https://citas.arvera.es/reservas.html";
+const APPOINTMENTS_DEFAULT_MESSAGE = "{{mensaje}}";
 const TEMPLATE_VALUE_SOURCES: Array<{
   value: PaymentTemplateValueSource;
   label: string;
@@ -89,6 +104,25 @@ export function AppsSettings() {
   >({});
   const [status, setStatus] = useState("not_configured");
   const [lastError, setLastError] = useState<string | null>(null);
+  const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
+  const [appointmentsBaseUrl, setAppointmentsBaseUrl] = useState(APPOINTMENTS_DEFAULT_BASE_URL);
+  const [appointmentsApiToken, setAppointmentsApiToken] = useState("");
+  const [appointmentsIframeUrl, setAppointmentsIframeUrl] = useState(
+    APPOINTMENTS_DEFAULT_IFRAME_URL,
+  );
+  const [appointmentsPublicBookingUrl, setAppointmentsPublicBookingUrl] = useState(
+    APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
+  );
+  const [appointmentsDaysAhead, setAppointmentsDaysAhead] = useState(1);
+  const [appointmentsDuration, setAppointmentsDuration] = useState(45);
+  const [appointmentsTimezone, setAppointmentsTimezone] = useState("Europe/Madrid");
+  const [appointmentsService, setAppointmentsService] = useState("Cita taller");
+  const [appointmentsMessage, setAppointmentsMessage] = useState(
+    APPOINTMENTS_DEFAULT_MESSAGE,
+  );
+  const [appointmentsStatus, setAppointmentsStatus] = useState("not_configured");
+  const [appointmentsLastError, setAppointmentsLastError] = useState<string | null>(null);
+  const [appointmentsWebhookUrl, setAppointmentsWebhookUrl] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +149,39 @@ export function AppsSettings() {
       );
       setBodyParamMap(conn?.config?.template_body_params ?? {});
       setButtonParamMap(conn?.config?.template_button_params ?? {});
+      const appointmentsApp = payload.apps.find(
+        (item) => item.slug === "arvera-appointments",
+      );
+      const appointmentsConn = appointmentsApp?.connection;
+      setAppointmentsEnabled(Boolean(appointmentsConn?.enabled));
+      setAppointmentsStatus(appointmentsConn?.status ?? "not_configured");
+      setAppointmentsLastError(appointmentsConn?.last_error ?? null);
+      setAppointmentsBaseUrl(
+        appointmentsConn?.config?.base_url ?? APPOINTMENTS_DEFAULT_BASE_URL,
+      );
+      setAppointmentsIframeUrl(
+        appointmentsConn?.config?.iframe_url ?? APPOINTMENTS_DEFAULT_IFRAME_URL,
+      );
+      setAppointmentsPublicBookingUrl(
+        appointmentsConn?.config?.public_booking_url ??
+          APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
+      );
+      setAppointmentsDaysAhead(appointmentsConn?.config?.default_days_ahead ?? 1);
+      setAppointmentsDuration(appointmentsConn?.config?.duracion ?? 45);
+      setAppointmentsTimezone(appointmentsConn?.config?.timezone ?? "Europe/Madrid");
+      setAppointmentsService(appointmentsConn?.config?.default_service ?? "Cita taller");
+      setAppointmentsMessage(
+        appointmentsConn?.config?.default_message ?? APPOINTMENTS_DEFAULT_MESSAGE,
+      );
+      const appointmentsRes = await fetch(
+        "/api/integrations/connections/arvera-appointments",
+        { cache: "no-store" },
+      );
+      if (appointmentsRes.ok) {
+        const appointmentsPayload =
+          (await appointmentsRes.json().catch(() => ({}))) as AppointmentsConnectionResponse;
+        setAppointmentsWebhookUrl(appointmentsPayload.webhook_url ?? null);
+      }
     } finally {
       setLoading(false);
     }
@@ -238,6 +305,41 @@ export function AppsSettings() {
       setApiKey("");
       toast.success("Pagos Arvera guardado");
       window.dispatchEvent(new Event("arvera-payments-connection-updated"));
+      void load();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAppointments() {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/integrations/connections/arvera-appointments", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: appointmentsEnabled,
+          base_url: appointmentsBaseUrl,
+          api_token: appointmentsApiToken || undefined,
+          iframe_url: appointmentsIframeUrl,
+          public_booking_url: appointmentsPublicBookingUrl,
+          default_send_mode: "booking_link",
+          default_days_ahead: appointmentsDaysAhead,
+          duracion: appointmentsDuration,
+          timezone: appointmentsTimezone,
+          default_service: appointmentsService,
+          default_message: appointmentsMessage,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || "No se pudo guardar Citas Arvera");
+        return;
+      }
+      setAppointmentsApiToken("");
+      setAppointmentsWebhookUrl(payload.webhook_url ?? null);
+      toast.success("Citas Arvera guardado");
+      window.dispatchEvent(new Event("arvera-appointments-connection-updated"));
       void load();
     } finally {
       setSaving(false);
@@ -436,6 +538,155 @@ export function AppsSettings() {
             </div>
             <div className="flex justify-end">
               <Button onClick={save} disabled={saving}>
+                {saving ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Save className="size-4" />
+                )}
+                Guardar app
+              </Button>
+            </div>
+          </RequireRole>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-5 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex gap-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                <CalendarClock className="size-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-semibold text-foreground">
+                    Citas Arvera
+                  </h2>
+                  <Badge className="border-border bg-muted text-muted-foreground">
+                    {appointmentsEnabled ? "Activa" : "Inactiva"}
+                  </Badge>
+                  {appointmentsStatus === "error" && (
+                    <Badge className="border-red-500/40 bg-red-500/10 text-red-300">
+                      Error
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Envia citas disponibles, recibe eventos y muestra el panel original.
+                </p>
+                {appointmentsLastError && (
+                  <p className="mt-1 text-xs text-red-300">{appointmentsLastError}</p>
+                )}
+              </div>
+            </div>
+            <RequireRole min="admin">
+              <div className="flex items-center gap-2">
+                <PlugZap className="size-4 text-muted-foreground" />
+                <Switch
+                  checked={appointmentsEnabled}
+                  onCheckedChange={setAppointmentsEnabled}
+                />
+              </div>
+            </RequireRole>
+          </div>
+
+          <RequireRole min="admin">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Base URL</Label>
+                <Input
+                  value={appointmentsBaseUrl}
+                  onChange={(e) => setAppointmentsBaseUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>API token</Label>
+                <Input
+                  type="password"
+                  value={appointmentsApiToken}
+                  onChange={(e) => setAppointmentsApiToken(e.target.value)}
+                  placeholder="Dejar vacio para mantener el actual"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>URL iframe panel</Label>
+                <Input
+                  value={appointmentsIframeUrl}
+                  onChange={(e) => setAppointmentsIframeUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>URL reservas publicas</Label>
+                <Input
+                  value={appointmentsPublicBookingUrl}
+                  onChange={(e) => setAppointmentsPublicBookingUrl(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Dias adelante por defecto</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={appointmentsDaysAhead}
+                  onChange={(e) => setAppointmentsDaysAhead(Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Duracion cita</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={appointmentsDuration}
+                  onChange={(e) => setAppointmentsDuration(Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Timezone</Label>
+                <Input
+                  value={appointmentsTimezone}
+                  onChange={(e) => setAppointmentsTimezone(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Servicio por defecto</Label>
+                <Input
+                  value={appointmentsService}
+                  onChange={(e) => setAppointmentsService(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label>Mensaje por defecto</Label>
+                <Textarea
+                  value={appointmentsMessage}
+                  onChange={(e) => setAppointmentsMessage(e.target.value)}
+                  className="min-h-20"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Variables: {"{{mensaje}}"}, {"{{short_url}}"}, {"{{fecha_texto}}"},{" "}
+                  {"{{service}}"}.
+                </p>
+              </div>
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label>Webhook para Citas Web</Label>
+                <div className="flex gap-2">
+                  <Input readOnly value={appointmentsWebhookUrl ?? "Guarda la app para generarlo"} />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!appointmentsWebhookUrl}
+                    onClick={() => {
+                      if (!appointmentsWebhookUrl) return;
+                      void navigator.clipboard.writeText(appointmentsWebhookUrl);
+                      toast.success("Webhook copiado");
+                    }}
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={saveAppointments} disabled={saving}>
                 {saving ? (
                   <Loader2 className="size-4 animate-spin" />
                 ) : (

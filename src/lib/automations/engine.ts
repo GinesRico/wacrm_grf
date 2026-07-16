@@ -17,6 +17,8 @@ import type {
   CreateDealStepConfig,
   AssignConversationStepConfig,
   PaymentLinkStepConfig,
+  AppointmentAvailabilityStepConfig,
+  CreateAppointmentStepConfig,
 } from '@/types'
 import { supabaseAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
@@ -32,6 +34,13 @@ import {
   requireActiveArveraConnection,
   responseToPaymentRecord,
 } from '@/lib/integrations/arvera-payments'
+import {
+  createAppointment,
+  fetchAvailabilityMessage,
+  fetchAvailabilitySlots,
+  renderAppointmentsMessage,
+  requireActiveArveraAppointmentsConnection,
+} from '@/lib/integrations/arvera-appointments'
 
 // ------------------------------------------------------------
 // Public API
@@ -698,6 +707,142 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       return `payment link created (${link.order_id})`
     }
 
+    case 'send_appointment_availability': {
+      const cfg = step.step_config as AppointmentAvailabilityStepConfig
+      if (!args.contactId) throw new Error('send_appointment_availability needs a contact')
+      const conversationId = await resolveConversationId(args)
+      const { config, apiToken } = await requireActiveArveraAppointmentsConnection(
+        db,
+        args.automation.account_id,
+      )
+      const date = resolveAppointmentDate(cfg, args, config.default_days_ahead)
+      const messagePayload = await fetchAvailabilityMessage({ config, date })
+      const service = cfg.service ? interpolate(cfg.service, args) : config.default_service
+      const text = renderAppointmentsMessage(config.default_message, {
+        mensaje: messagePayload.mensaje,
+        short_url: messagePayload.short_url ?? '',
+        fecha_texto: messagePayload.fecha_texto ?? '',
+        service,
+      })
+      const availability = await fetchAvailabilitySlots({
+        config,
+        apiToken,
+        startDate: date,
+        endDate: date,
+        duracion: cfg.duracion ?? config.duracion,
+        timezone: cfg.timezone ?? config.timezone,
+      }).catch(() => ({ disponibles: [] }))
+
+      const { data: audit, error } = await db
+        .from('appointment_availability_messages')
+        .insert({
+          account_id: args.automation.account_id,
+          contact_id: args.contactId,
+          conversation_id: conversationId,
+          date,
+          send_mode: 'booking_link',
+          service,
+          slots: availability.disponibles,
+          short_url: messagePayload.short_url ?? null,
+          message_text: text,
+          raw_response: messagePayload,
+          created_by: args.automation.user_id,
+        })
+        .select('*')
+        .single()
+      if (error || !audit) {
+        throw new Error(`availability message save failed: ${error?.message ?? 'unknown error'}`)
+      }
+
+      const { whatsapp_message_id } = await engineSendText({
+        accountId: args.automation.account_id,
+        userId: args.automation.user_id,
+        conversationId,
+        contactId: args.contactId,
+        text,
+      })
+      args.context.vars = {
+        ...(args.context.vars ?? {}),
+        appointment_availability_message_id: audit.id,
+        appointment_date: date,
+        appointment_short_url: messagePayload.short_url,
+        appointment_service: service,
+      }
+      return `appointment availability sent (${date}, ${whatsapp_message_id})`
+    }
+
+    case 'create_appointment': {
+      const cfg = step.step_config as CreateAppointmentStepConfig
+      if (!args.contactId) throw new Error('create_appointment needs a contact')
+      if (!cfg.startTime || !cfg.endTime) throw new Error('create_appointment needs start/end')
+      if (!cfg.service) throw new Error('create_appointment needs service')
+
+      const { data: contact } = await db
+        .from('contacts')
+        .select('id, name, email, phone')
+        .eq('id', args.contactId)
+        .eq('account_id', args.automation.account_id)
+        .maybeSingle()
+      if (!contact) throw new Error('contact not found for appointment')
+
+      const { config, apiToken } = await requireActiveArveraAppointmentsConnection(
+        db,
+        args.automation.account_id,
+      )
+      const appointment = await createAppointment({
+        config,
+        apiToken,
+        input: {
+          Nombre: cfg.name ? interpolate(cfg.name, args) : contact.name || contact.phone,
+          Telefono: cfg.phone ? interpolate(cfg.phone, args) : contact.phone,
+          Email: cfg.email ? interpolate(cfg.email, args) : contact.email,
+          Servicio: interpolate(cfg.service, args),
+          startTime: interpolate(cfg.startTime, args),
+          endTime: interpolate(cfg.endTime, args),
+          Matricula: cfg.plate ? interpolate(cfg.plate, args) : null,
+          Modelo: cfg.model ? interpolate(cfg.model, args) : null,
+          Notas: cfg.notes ? interpolate(cfg.notes, args) : null,
+        },
+      })
+
+      const { data: record, error } = await db
+        .from('appointment_records')
+        .upsert(
+          {
+            account_id: args.automation.account_id,
+            contact_id: args.contactId,
+            external_id: appointment.Id,
+            status: appointment.Estado ?? null,
+            service: appointment.Servicio ?? null,
+            customer_name: appointment.Nombre ?? null,
+            phone: appointment.Telefono ?? null,
+            email: appointment.Email ?? null,
+            start_time: appointment.startTime ?? null,
+            end_time: appointment.endTime ?? null,
+            cancel_url: appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? null,
+            raw_payload: appointment,
+          },
+          { onConflict: 'account_id,provider,external_id' },
+        )
+        .select('*')
+        .single()
+      if (error || !record) {
+        throw new Error(`appointment record save failed: ${error?.message ?? 'unknown error'}`)
+      }
+      args.context.vars = {
+        ...(args.context.vars ?? {}),
+        appointment_record_id: record.id,
+        appointment_id: appointment.Id,
+        appointment_status: appointment.Estado,
+        appointment_start: appointment.startTime,
+        appointment_end: appointment.endTime,
+        appointment_service: appointment.Servicio,
+        appointment_cancel_url:
+          appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? '',
+      }
+      return `appointment created (${appointment.Id})`
+    }
+
     case 'close_conversation': {
       if (!args.contactId) throw new Error('close_conversation needs a contact')
       await db
@@ -831,6 +976,21 @@ function interpolate(s: string, args: ExecuteArgs): string {
     if (ns === 'vars' && prop) return String(args.context.vars?.[prop] ?? '')
     return ''
   })
+}
+
+function resolveAppointmentDate(
+  cfg: AppointmentAvailabilityStepConfig,
+  args: ExecuteArgs,
+  defaultDaysAhead: number,
+): string {
+  if (cfg.date) return interpolate(cfg.date, args)
+  const daysAhead =
+    typeof cfg.days_ahead === 'number' && Number.isFinite(cfg.days_ahead)
+      ? cfg.days_ahead
+      : defaultDaysAhead
+  const date = new Date()
+  date.setDate(date.getDate() + daysAhead)
+  return date.toISOString().slice(0, 10)
 }
 
 async function appendResults(
