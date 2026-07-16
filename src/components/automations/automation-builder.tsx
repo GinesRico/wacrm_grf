@@ -156,6 +156,7 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: "appointment_updated" },
   { value: "appointment_cancelled" },
   { value: "appointment_car_ready" },
+  { value: "appointment_slot_selected" },
 ]
 
 function cid(): string {
@@ -873,7 +874,8 @@ function TriggerCard({
       option.value === "appointment_created" ||
       option.value === "appointment_updated" ||
       option.value === "appointment_cancelled" ||
-      option.value === "appointment_car_ready"
+      option.value === "appointment_car_ready" ||
+      option.value === "appointment_slot_selected"
     if (isPaymentTrigger) return paymentsEnabled || option.value === type
     if (isAppointmentTrigger) return appointmentsEnabled || option.value === type
     return true

@@ -473,6 +473,7 @@ export type AutomationTriggerType =
   | 'appointment_updated'
   | 'appointment_cancelled'
   | 'appointment_car_ready'
+  | 'appointment_slot_selected'
   /** Customer tapped a reply button / list row whose id matches; lets
    *  multi-step menus be chained across automations. */
   | 'interactive_reply';

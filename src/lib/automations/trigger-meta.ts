@@ -67,6 +67,10 @@ export const TRIGGER_META: Record<AutomationTriggerType, TriggerMeta> = {
     label: 'Car Ready',
     pillClass: 'border-lime-500/30 bg-lime-500/10 text-lime-300',
   },
+  appointment_slot_selected: {
+    label: 'Appointment Slot Selected',
+    pillClass: 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300',
+  },
   interactive_reply: {
     label: 'Button / List Reply',
     pillClass: 'border-pink-500/30 bg-pink-500/10 text-pink-300',

@@ -437,11 +437,15 @@
       "paymentConceptRequired": "Enter a concept.",
       "appointmentAvailability": "Available appointments",
       "appointmentDate": "Date",
+      "appointmentDates": "Days",
       "appointmentService": "Service",
+      "appointmentSendMode": "Send mode",
+      "appointmentModeMessages": "Messages by day",
+      "appointmentModeInteractive": "Interactive list",
       "sendAppointmentAvailability": "Send appointments",
       "appointmentSent": "Available appointments sent.",
       "appointmentSendFailed": "Could not send available appointments.",
-      "appointmentDateRequired": "Select a date.",
+      "appointmentDateRequired": "Select at least one day.",
       "signMessages": "Sign messages",
       "quickRepliesEmpty": "No quick replies yet. Add some in Settings → Quick replies.",
       "saveAsQuickReply": "Save as quick reply",
@@ -1244,6 +1248,10 @@
         "appointment_car_ready": {
           "label": "Car ready",
           "hint": "When Citas Arvera reports the car is ready"
+        },
+        "appointment_slot_selected": {
+          "label": "Appointment slot selected",
+          "hint": "When a customer chooses a time in the appointments interactive list"
         }
       },
       "trigger": "Trigger",
@@ -1259,6 +1267,7 @@
       "activeAria": "Active",
       "save": "Save",
       "saveDraft": "Save Draft",
+      "delete": "Delete",
       "untitled": "Untitled automation",
       "backToAutomations": "Back to automations",
       "toasts": {

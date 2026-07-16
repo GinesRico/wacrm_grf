@@ -372,11 +372,15 @@
       "paymentConceptRequired": "Introduce un concepto.",
       "appointmentAvailability": "Citas disponibles",
       "appointmentDate": "Fecha",
+      "appointmentDates": "Dias",
       "appointmentService": "Servicio",
+      "appointmentSendMode": "Modo de envio",
+      "appointmentModeMessages": "Mensajes por dia",
+      "appointmentModeInteractive": "Lista interactiva",
       "sendAppointmentAvailability": "Enviar citas",
       "appointmentSent": "Citas disponibles enviadas.",
       "appointmentSendFailed": "No se pudieron enviar las citas disponibles.",
-      "appointmentDateRequired": "Selecciona una fecha.",
+      "appointmentDateRequired": "Selecciona al menos un dia.",
       "signMessages": "Firmar mensajes",
       "quickRepliesEmpty": "Aun no hay respuestas rapidas. Anadelas en Ajustes -> Respuestas rapidas.",
       "saveAsQuickReply": "Guardar como respuesta rapida",
@@ -1850,6 +1854,10 @@
         "appointment_car_ready": {
           "label": "Coche listo",
           "hint": "Cuando Citas Arvera avisa que el coche esta listo"
+        },
+        "appointment_slot_selected": {
+          "label": "Hora de cita seleccionada",
+          "hint": "Cuando un cliente elige una hora en la lista interactiva de citas"
         }
       },
       "trigger": "Disparador",
@@ -1865,6 +1873,7 @@
       "activeAria": "Activa",
       "save": "Guardar",
       "saveDraft": "Guardar borrador",
+      "delete": "Eliminar",
       "untitled": "Automatizacion sin titulo",
       "backToAutomations": "Volver a automatizaciones",
       "toasts": {

@@ -10,6 +10,10 @@ import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
 import {
+  getArveraAppointmentsConnection,
+  normalizeAppointmentsConfig,
+} from '@/lib/integrations/arvera-appointments'
+import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
@@ -31,6 +35,61 @@ function supabaseAdmin() {
     )
   }
   return _adminClient
+}
+
+interface AppointmentSlotSelection {
+  reply_id: string
+  appointment_date: string
+  appointment_time: string
+  appointment_start: string
+  appointment_end: string
+}
+
+function parseAppointmentSlotReplyId(replyId: string | null): {
+  date: string
+  time: string
+} | null {
+  const match = replyId?.match(/^appt_slot_(\d{4}-\d{2}-\d{2})_(\d{4})_\d+$/)
+  if (!match) return null
+  const [, date, rawTime] = match
+  return { date, time: `${rawTime.slice(0, 2)}:${rawTime.slice(2)}` }
+}
+
+function addMinutesToLocalDateTime(date: string, time: string, minutes: number): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const parsed = new Date(year, month - 1, day, hour, minute + minutes, 0)
+  const yyyy = parsed.getFullYear()
+  const mm = String(parsed.getMonth() + 1).padStart(2, '0')
+  const dd = String(parsed.getDate()).padStart(2, '0')
+  const hh = String(parsed.getHours()).padStart(2, '0')
+  const mi = String(parsed.getMinutes()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:00`
+}
+
+async function buildAppointmentSlotSelection(
+  accountId: string,
+  replyId: string | null,
+): Promise<AppointmentSlotSelection | null> {
+  const parsed = parseAppointmentSlotReplyId(replyId)
+  if (!parsed || !replyId) return null
+
+  let duration = 45
+  try {
+    const connection = await getArveraAppointmentsConnection(supabaseAdmin(), accountId)
+    duration = normalizeAppointmentsConfig(connection?.config).duracion
+  } catch (error) {
+    console.warn('[webhook] could not load appointments duration for slot reply:', error)
+  }
+
+  const appointmentStart = `${parsed.date}T${parsed.time}:00`
+  return {
+    reply_id: replyId,
+    appointment_date: parsed.date,
+    appointment_time: parsed.time,
+    appointment_start: appointmentStart,
+    appointment_end: addMinutesToLocalDateTime(parsed.date, parsed.time, duration),
+  }
 }
 
 interface WhatsAppMessage {
@@ -774,12 +833,17 @@ async function processMessage(
   // Fire-and-forget: a slow or failing automation must not block the
   // webhook's 200 OK response to Meta.
   const inboundText = unsupportedInbound ? '' : contentText ?? message.text?.body ?? ''
+  const appointmentSlotSelection = await buildAppointmentSlotSelection(
+    accountId,
+    interactiveReplyId,
+  )
   const automationTriggers: (
     | 'new_contact_created'
     | 'first_inbound_message'
     | 'new_message_received'
     | 'keyword_match'
     | 'interactive_reply'
+    | 'appointment_slot_selected'
   )[] = []
   // Content-level triggers are suppressed when a flow consumed the
   // message — see the comment block above.
@@ -792,6 +856,11 @@ async function processMessage(
     if (interactiveReplyId) {
       automationTriggers.push('interactive_reply')
     }
+  }
+  // Appointment slot selections are domain events, so they should fire
+  // even if a Flow consumed the interactive reply first.
+  if (appointmentSlotSelection) {
+    automationTriggers.push('appointment_slot_selected')
   }
   // new_contact_created fires only when the webhook just auto-created the
   // contact row. first_inbound_message fires whenever this is the contact's
@@ -812,6 +881,12 @@ async function processMessage(
         // Only set on interactive taps; drives the interactive_reply
         // trigger's exact-id match.
         interactive_reply_id: interactiveReplyId ?? undefined,
+        vars: {
+          contact_name: contactRecord.name ?? '',
+          contact_phone: contactRecord.phone ?? senderPhone,
+          contact_email: contactRecord.email ?? '',
+          ...(appointmentSlotSelection ?? {}),
+        },
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
   }

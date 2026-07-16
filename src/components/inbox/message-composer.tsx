@@ -137,6 +137,38 @@ const PICKER_ACCEPT: Record<ComposerMediaKind, string> = {
 };
 
 const ATTACH_ACCEPT = Object.values(PICKER_ACCEPT).join(",");
+const APPOINTMENT_DAY_COUNT = 5;
+
+type AppointmentSendMode = "booking_link" | "interactive_list";
+
+function formatLocalDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getNextWeekdayDates(count = APPOINTMENT_DAY_COUNT) {
+  const dates: string[] = [];
+  const cursor = new Date();
+  cursor.setHours(12, 0, 0, 0);
+  while (dates.length < count) {
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) {
+      dates.push(formatLocalDateInput(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
+}
+
+function formatAppointmentDay(date: string) {
+  return new Intl.DateTimeFormat("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(new Date(`${date}T12:00:00`));
+}
 
 function mediaKindFromFile(file: File): ComposerMediaKind {
   if (file.type.startsWith("image/")) return "image";
@@ -218,9 +250,12 @@ export function MessageComposer({
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
   const [appointmentOpen, setAppointmentOpen] = useState(false);
-  const [appointmentDate, setAppointmentDate] = useState(() =>
-    new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+  const [appointmentDateOptions, setAppointmentDateOptions] = useState(() =>
+    getNextWeekdayDates(),
   );
+  const [appointmentDates, setAppointmentDates] = useState<string[]>([]);
+  const [appointmentSendMode, setAppointmentSendMode] =
+    useState<AppointmentSendMode>("booking_link");
   const [appointmentService, setAppointmentService] = useState("");
   const [appointmentBusy, setAppointmentBusy] = useState(false);
 
@@ -398,6 +433,11 @@ export function MessageComposer({
         if (!cancelled) {
           setAppointmentsEnabled(Boolean(app?.connection?.enabled));
           setAppointmentService(app?.connection?.config?.default_service ?? "");
+          setAppointmentSendMode(
+            app?.connection?.config?.default_send_mode === "interactive_list"
+              ? "interactive_list"
+              : "booking_link",
+          );
         }
       } catch {
         if (!cancelled) setAppointmentsEnabled(false);
@@ -601,7 +641,7 @@ export function MessageComposer({
   }, [paymentAmount, paymentConcept, conversationId, contact, onSend, paymentDelivery, t]);
 
   const sendAppointmentAvailability = useCallback(async () => {
-    if (!appointmentDate) {
+    if (appointmentDates.length === 0) {
       toast.error(t("appointmentDateRequired"));
       return;
     }
@@ -613,8 +653,9 @@ export function MessageComposer({
         body: JSON.stringify({
           conversation_id: conversationId,
           contact_id: contact?.id,
-          date: appointmentDate,
+          dates: appointmentDates,
           service: appointmentService,
+          send_mode: appointmentSendMode,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -627,7 +668,28 @@ export function MessageComposer({
     } finally {
       setAppointmentBusy(false);
     }
-  }, [appointmentDate, appointmentService, contact?.id, conversationId, t]);
+  }, [
+    appointmentDates,
+    appointmentSendMode,
+    appointmentService,
+    contact?.id,
+    conversationId,
+    t,
+  ]);
+
+  const toggleAppointmentDate = useCallback((date: string) => {
+    setAppointmentDates((current) =>
+      current.includes(date)
+        ? current.filter((item) => item !== date)
+        : [...current, date].sort(),
+    );
+  }, []);
+
+  const refreshAppointmentDays = useCallback(() => {
+    const nextDates = getNextWeekdayDates();
+    setAppointmentDateOptions(nextDates);
+    setAppointmentDates((current) => current.filter((date) => nextDates.includes(date)));
+  }, []);
 
   // A picked quick reply: text fills the composer; interactive opens the
   // builder pre-filled so the agent can tweak before sending.
@@ -898,7 +960,12 @@ export function MessageComposer({
                 </DropdownMenuItem>
               )}
               {appointmentsEnabled && (
-                <DropdownMenuItem onClick={() => setAppointmentOpen(true)}>
+                <DropdownMenuItem
+                  onClick={() => {
+                    refreshAppointmentDays();
+                    setAppointmentOpen(true);
+                  }}
+                >
                   <CalendarClock className="mr-2 h-4 w-4" />
                   {t("appointmentAvailability")}
                 </DropdownMenuItem>
@@ -1068,12 +1135,23 @@ export function MessageComposer({
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>{t("appointmentDate")}</Label>
-              <Input
-                type="date"
-                value={appointmentDate}
-                onChange={(e) => setAppointmentDate(e.target.value)}
-              />
+              <Label>{t("appointmentDates")}</Label>
+              <div className="rounded-md border border-border">
+                {appointmentDateOptions.map((date) => (
+                  <label
+                    key={date}
+                    className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 text-sm last:border-b-0 hover:bg-muted/60"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={appointmentDates.includes(date)}
+                      onChange={() => toggleAppointmentDate(date)}
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                    />
+                    <span className="capitalize">{formatAppointmentDay(date)}</span>
+                  </label>
+                ))}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>{t("appointmentService")}</Label>
@@ -1083,12 +1161,44 @@ export function MessageComposer({
                 placeholder="Cita taller"
               />
             </div>
+            <div className="space-y-1.5">
+              <Label>{t("appointmentSendMode")}</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAppointmentSendMode("booking_link")}
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                    appointmentSendMode === "booking_link"
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-muted",
+                  )}
+                >
+                  {t("appointmentModeMessages")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAppointmentSendMode("interactive_list")}
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                    appointmentSendMode === "interactive_list"
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-muted",
+                  )}
+                >
+                  {t("appointmentModeInteractive")}
+                </button>
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAppointmentOpen(false)}>
               {t("cancel")}
             </Button>
-            <Button onClick={sendAppointmentAvailability} disabled={appointmentBusy}>
+            <Button
+              onClick={sendAppointmentAvailability}
+              disabled={appointmentBusy || appointmentDates.length === 0}
+            >
               {appointmentBusy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
