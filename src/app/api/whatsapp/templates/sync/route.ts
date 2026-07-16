@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+﻿import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config'
@@ -6,7 +6,7 @@ import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 
 /**
- * Sync message templates from Meta → local message_templates table.
+ * Sync message templates from Meta â†’ local message_templates table.
  *
  * The local catalog stores Meta's status enum verbatim (APPROVED /
  * PENDING / REJECTED / PAUSED / DISABLED / IN_APPEAL / PENDING_DELETION)
@@ -14,7 +14,7 @@ import type { TemplateButton, TemplateSampleValues } from '@/types'
  * states (PAUSED) from terminal ones (DISABLED) and so webhook events
  * land 1:1 without a translation table.
  *
- * Locally-created templates (no Meta counterpart) are NOT deleted —
+ * Locally-created templates (no Meta counterpart) are NOT deleted â€”
  * they remain visible so the user can notice drift and clean up.
  */
 
@@ -49,6 +49,21 @@ interface MetaTemplate {
   category: string
   components?: MetaTemplateComponent[]
   quality_score?: { score?: string } | string
+}
+
+async function readJsonResponse<T>(
+  response: Response,
+): Promise<{ data?: T; error?: string }> {
+  const text = await response.text()
+  if (!text) return {}
+
+  try {
+    return { data: JSON.parse(text) as T }
+  } catch {
+    return {
+      error: text.trim().slice(0, 500) || `HTTP ${response.status}`,
+    }
+  }
 }
 
 function normalizeCategory(
@@ -102,7 +117,7 @@ function parseButtons(metaButtons: MetaButton[] | undefined): TemplateButton[] {
           example: Array.isArray(b.example) ? b.example[0] ?? '' : b.example ?? '',
         })
         break
-      // OTP, FLOW, etc — out of scope for v1; drop silently.
+      // OTP, FLOW, etc â€” out of scope for v1; drop silently.
     }
   }
   return out
@@ -112,7 +127,7 @@ function extractSampleValues(
   body: MetaTemplateComponent | undefined,
   header: MetaTemplateComponent | undefined,
 ): TemplateSampleValues | null {
-  // Meta returns body_text as a 2D array — one row per example set.
+  // Meta returns body_text as a 2D array â€” one row per example set.
   // We take the first row (most templates have exactly one).
   const bodySample = body?.example?.body_text?.[0]
   const headerSample = header?.example?.header_text
@@ -136,7 +151,7 @@ export async function POST() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Resolve the caller's account_id — both whatsapp_config and
+    // Resolve the caller's account_id â€” both whatsapp_config and
     // the message_templates we sync into are account-scoped.
     const { data: profile } = await supabase
       .from('profiles')
@@ -190,19 +205,28 @@ export async function POST() {
 
       if (!metaRes.ok) {
         let metaErr = `Meta API error: ${metaRes.status}`
-        try {
-          const body = await metaRes.json()
-          if (body?.error?.message) metaErr = body.error.message
-        } catch {
-          // response wasn't JSON — keep the fallback
+        const body = await readJsonResponse<{ error?: { message?: string } }>(
+          metaRes,
+        )
+        if (body.data?.error?.message) {
+          metaErr = body.data.error.message
+        } else if (body.error) {
+          metaErr = body.error
         }
         return NextResponse.json({ error: metaErr }, { status: 502 })
       }
 
-      const metaBody: {
+      const parsed = await readJsonResponse<{
         data?: MetaTemplate[]
         paging?: { next?: string }
-      } = await metaRes.json()
+      }>(metaRes)
+      if (!parsed.data) {
+        return NextResponse.json(
+          { error: parsed.error || 'Meta returned an invalid response.' },
+          { status: 502 },
+        )
+      }
+      const metaBody = parsed.data
       if (metaBody.data) metaTemplates.push(...metaBody.data)
       nextUrl = metaBody.paging?.next ?? null
     }

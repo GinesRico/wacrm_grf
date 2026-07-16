@@ -124,6 +124,19 @@ function emptyButton(type: TemplateButton['type']): TemplateButton {
   }
 }
 
+async function readApiResponse(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return {
+      error: text.trim().slice(0, 500) || `HTTP ${res.status}`,
+    };
+  }
+}
+
 export function TemplateManager() {
   const t = useTranslations('Settings.templates');
   const supabase = createClient();
@@ -272,10 +285,11 @@ export function TemplateManager() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildSubmitPayload()),
       });
-      const data = await res.json();
+      const data = await readApiResponse(res);
       if (!res.ok) {
+        const error = typeof data.error === 'string' ? data.error : null;
         throw new Error(
-          data?.error || `${isEdit ? 'Edit' : 'Submit'} failed (HTTP ${res.status})`,
+          error || `${isEdit ? 'Edit' : 'Submit'} failed (HTTP ${res.status})`,
         );
       }
       // Refresh first, then close — re-opening the dialog
@@ -302,27 +316,34 @@ export function TemplateManager() {
   }
 
   async function handleSyncFromMeta() {
-    if (!user) return;
+    if (!user || syncing) return;
     setSyncing(true);
     try {
       const res = await fetch('/api/whatsapp/templates/sync', { method: 'POST' });
-      const data = await res.json();
+      const data = await readApiResponse(res);
       if (!res.ok) {
-        throw new Error(data?.error || `Sync failed (HTTP ${res.status})`);
+        const error = typeof data.error === 'string' ? data.error : null;
+        throw new Error(error || `Sync failed (HTTP ${res.status})`);
       }
+      const total = typeof data.total === 'number' ? data.total : 0;
+      const inserted = typeof data.inserted === 'number' ? data.inserted : 0;
+      const updated = typeof data.updated === 'number' ? data.updated : 0;
+      const errors = Array.isArray(data.errors)
+        ? (data.errors as { name: string; language: string; message: string }[])
+        : [];
       toast.success(
-        t('toastSyncCount', { total: data.total }) +
-          (data.inserted || data.updated
-            ? t('toastSyncDetails', { inserted: data.inserted, updated: data.updated })
+        t('toastSyncCount', { total }) +
+          (inserted || updated
+            ? t('toastSyncDetails', { inserted, updated })
             : ''),
       );
-      if (Array.isArray(data.errors) && data.errors.length > 0) {
-        const preview = data.errors.slice(0, 3).map(
+      if (errors.length > 0) {
+        const preview = errors.slice(0, 3).map(
           (e: { name: string; language: string; message: string }) =>
             `${e.name} (${e.language})`,
         );
         const suffix =
-          data.errors.length > 3 ? `, +${data.errors.length - 3} more` : '';
+          errors.length > 3 ? `, +${errors.length - 3} more` : '';
         toast.error(t('toastSyncFailed', { preview: preview.join(', ') + suffix }));
       }
       if (data.truncated) {
