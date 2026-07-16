@@ -775,7 +775,6 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as CreateAppointmentStepConfig
       if (!args.contactId) throw new Error('create_appointment needs a contact')
       if (!cfg.startTime || !cfg.endTime) throw new Error('create_appointment needs start/end')
-      if (!cfg.service) throw new Error('create_appointment needs service')
 
       const { data: contact } = await db
         .from('contacts')
@@ -789,6 +788,10 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         db,
         args.automation.account_id,
       )
+      const configuredService = cfg.service ? interpolate(cfg.service, args).trim() : ''
+      const service =
+        configuredService ||
+        String(args.context.vars?.appointment_service ?? config.default_service)
       const appointment = await createAppointment({
         config,
         apiToken,
@@ -796,7 +799,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           Nombre: cfg.name ? interpolate(cfg.name, args) : contact.name || contact.phone,
           Telefono: cfg.phone ? interpolate(cfg.phone, args) : contact.phone,
           Email: cfg.email ? interpolate(cfg.email, args) : contact.email,
-          Servicio: interpolate(cfg.service, args),
+          Servicio: service,
           startTime: interpolate(cfg.startTime, args),
           endTime: interpolate(cfg.endTime, args),
           Matricula: cfg.plate ? interpolate(cfg.plate, args) : null,

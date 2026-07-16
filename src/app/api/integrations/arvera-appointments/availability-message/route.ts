@@ -14,6 +14,7 @@ import { sendMessageToConversation, SendMessageError } from '@/lib/whatsapp/send
 
 const MAX_INTERACTIVE_DAYS = 10;
 const MAX_INTERACTIVE_ROWS = 10;
+const APPOINTMENT_SERVICES = ['Neumaticos', 'Alineacion', 'Neumaticos + Alineacion'];
 
 function parseRequestedDates(body: Record<string, unknown>): string[] {
   const rawDates = Array.isArray(body.dates) ? body.dates : [body.date];
@@ -33,6 +34,20 @@ function resolveSendMode(body: Record<string, unknown>, fallback: AppointmentSen
   return body.send_mode === 'interactive_list' ? 'interactive_list' : fallback;
 }
 
+function normalizeAppointmentService(value: unknown, fallback: string) {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    const service = APPOINTMENT_SERVICES.find(
+      (item) => item.toLowerCase() === normalized.toLowerCase(),
+    );
+    if (service) return service;
+  }
+  const fallbackService = APPOINTMENT_SERVICES.find(
+    (item) => item.toLowerCase() === fallback.trim().toLowerCase(),
+  );
+  return fallbackService ?? APPOINTMENT_SERVICES[0];
+}
+
 function formatListDate(date: string) {
   const parsed = new Date(`${date}T12:00:00`);
   const formatted = new Intl.DateTimeFormat('es-ES', {
@@ -41,6 +56,25 @@ function formatListDate(date: string) {
     month: 'short',
   }).format(parsed);
   return formatted.replace(/\.$/, '').slice(0, 24);
+}
+
+function formatLongListDate(date: string) {
+  const parsed = new Date(`${date}T12:00:00`);
+  return new Intl.DateTimeFormat('es-ES', {
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+  }).format(parsed);
+}
+
+function formatSelectedDates(dates: string[]) {
+  if (dates.length === 1) return `el ${formatLongListDate(dates[0])}`;
+  if (dates.length === 2) {
+    return `los dias ${formatLongListDate(dates[0])} y ${formatLongListDate(dates[1])}`;
+  }
+  const visible = dates.slice(0, 3).map(formatLongListDate).join(', ');
+  const rest = dates.length > 3 ? ` y ${dates.length - 3} mas` : '';
+  return `los dias ${visible}${rest}`;
 }
 
 function formatRowDate(date: string) {
@@ -130,8 +164,8 @@ function buildInteractivePayload(
     header: 'Citas disponibles',
     body:
       rows.length > MAX_INTERACTIVE_ROWS
-        ? `Elige una hora para ${service || 'tu cita'}. Mostramos las primeras 10 disponibles.`
-        : `Elige una hora para ${service || 'tu cita'}.`,
+        ? `Elige una hora para ${service} ${formatSelectedDates(dates)}. Mostramos las primeras 10 disponibles.`
+        : `Elige una hora para ${service} ${formatSelectedDates(dates)}.`,
     footer: 'Responderas con la hora elegida.',
     button_label: 'Ver citas',
     sections,
@@ -188,10 +222,7 @@ export async function POST(request: Request) {
       ctx.accountId,
     );
     const sendMode = resolveSendMode(body, config.default_send_mode);
-    const service =
-      typeof body.service === 'string' && body.service.trim()
-        ? body.service.trim()
-        : config.default_service;
+    const service = normalizeAppointmentService(body.service, config.default_service);
 
     const audits = [];
     const sentMessages = [];

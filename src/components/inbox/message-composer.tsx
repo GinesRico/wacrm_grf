@@ -141,6 +141,12 @@ const APPOINTMENT_DAY_COUNT = 5;
 
 type AppointmentSendMode = "booking_link" | "interactive_list";
 
+const APPOINTMENT_SERVICES = [
+  "Neumaticos",
+  "Alineacion",
+  "Neumaticos + Alineacion",
+];
+
 function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -432,7 +438,12 @@ export function MessageComposer({
         );
         if (!cancelled) {
           setAppointmentsEnabled(Boolean(app?.connection?.enabled));
-          setAppointmentService(app?.connection?.config?.default_service ?? "");
+          const defaultService = app?.connection?.config?.default_service;
+          setAppointmentService(
+            APPOINTMENT_SERVICES.includes(defaultService)
+              ? defaultService
+              : APPOINTMENT_SERVICES[0],
+          );
           setAppointmentSendMode(
             app?.connection?.config?.default_send_mode === "interactive_list"
               ? "interactive_list"
@@ -1155,11 +1166,17 @@ export function MessageComposer({
             </div>
             <div className="space-y-1.5">
               <Label>{t("appointmentService")}</Label>
-              <Input
+              <select
                 value={appointmentService}
                 onChange={(e) => setAppointmentService(e.target.value)}
-                placeholder="Cita taller"
-              />
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+              >
+                {APPOINTMENT_SERVICES.map((service) => (
+                  <option key={service} value={service}>
+                    {service}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="space-y-1.5">
               <Label>{t("appointmentSendMode")}</Label>

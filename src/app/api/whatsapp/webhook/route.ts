@@ -43,6 +43,7 @@ interface AppointmentSlotSelection {
   appointment_time: string
   appointment_start: string
   appointment_end: string
+  appointment_service: string
 }
 
 function parseAppointmentSlotReplyId(replyId: string | null): {
@@ -107,10 +108,10 @@ async function resolveSlotTimes(args: {
   conversationId: string
   date: string
   time: string
-}): Promise<{ startTime: string; endTime: string } | null> {
+}): Promise<{ startTime: string; endTime: string; service: string | null } | null> {
   const { data, error } = await supabaseAdmin()
     .from('appointment_availability_messages')
-    .select('slots')
+    .select('slots, service')
     .eq('account_id', args.accountId)
     .eq('conversation_id', args.conversationId)
     .eq('date', args.date)
@@ -129,7 +130,11 @@ async function resolveSlotTimes(args: {
       const start = extractSlotTime(slot.hora_inicio ?? slot.startTime)
       if (start !== args.time) continue
       if (typeof slot.startTime === 'string' && typeof slot.endTime === 'string') {
-        return { startTime: slot.startTime, endTime: slot.endTime }
+        return {
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          service: typeof row.service === 'string' ? row.service : null,
+        }
       }
     }
   }
@@ -172,6 +177,7 @@ async function buildAppointmentSlotSelection(
     appointment_time: parsed.time,
     appointment_start: appointmentStart,
     appointment_end: appointmentEnd,
+    appointment_service: resolvedSlot?.service ?? '',
   }
 }
 
