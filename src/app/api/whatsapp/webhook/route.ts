@@ -55,7 +55,29 @@ function parseAppointmentSlotReplyId(replyId: string | null): {
   return { date, time: `${rawTime.slice(0, 2)}:${rawTime.slice(2)}` }
 }
 
-function addMinutesToLocalDateTime(date: string, time: string, minutes: number): string {
+function getTimeZoneOffset(date: string, timeZone: string): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0))
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'longOffset',
+  })
+  const offset = formatter
+    .formatToParts(probe)
+    .find((part) => part.type === 'timeZoneName')?.value
+    ?.replace('GMT', '')
+  if (!offset) return 'Z'
+  if (offset === '') return 'Z'
+  const match = offset.match(/^([+-])(\d{1,2})(?::?(\d{2}))?$/)
+  if (!match) return 'Z'
+  const [, sign, hours, minutes = '00'] = match
+  return `${sign}${hours.padStart(2, '0')}:${minutes}`
+}
+
+function addMinutesToLocalDateTime(date: string, time: string, minutes: number): {
+  date: string
+  time: string
+} {
   const [year, month, day] = date.split('-').map(Number)
   const [hour, minute] = time.split(':').map(Number)
   const parsed = new Date(year, month - 1, day, hour, minute + minutes, 0)
@@ -64,31 +86,92 @@ function addMinutesToLocalDateTime(date: string, time: string, minutes: number):
   const dd = String(parsed.getDate()).padStart(2, '0')
   const hh = String(parsed.getHours()).padStart(2, '0')
   const mi = String(parsed.getMinutes()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:00`
+  return { date: `${yyyy}-${mm}-${dd}`, time: `${hh}:${mi}` }
+}
+
+function localDateTimeWithOffset(date: string, time: string, timeZone: string): string {
+  return `${date}T${time}:00${getTimeZoneOffset(date, timeZone)}`
+}
+
+function slotRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+function extractSlotTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  return value.match(/(\d{2}:\d{2})/)?.[1] ?? null
+}
+
+async function resolveSlotTimes(args: {
+  accountId: string
+  conversationId: string
+  date: string
+  time: string
+}): Promise<{ startTime: string; endTime: string } | null> {
+  const { data, error } = await supabaseAdmin()
+    .from('appointment_availability_messages')
+    .select('slots')
+    .eq('account_id', args.accountId)
+    .eq('conversation_id', args.conversationId)
+    .eq('date', args.date)
+    .order('created_at', { ascending: false })
+    .limit(5)
+
+  if (error) {
+    console.warn('[webhook] could not load availability slots for reply:', error.message)
+    return null
+  }
+
+  for (const row of data ?? []) {
+    const slots = Array.isArray(row.slots) ? row.slots : []
+    for (const rawSlot of slots) {
+      const slot = slotRecord(rawSlot)
+      const start = extractSlotTime(slot.hora_inicio ?? slot.startTime)
+      if (start !== args.time) continue
+      if (typeof slot.startTime === 'string' && typeof slot.endTime === 'string') {
+        return { startTime: slot.startTime, endTime: slot.endTime }
+      }
+    }
+  }
+  return null
 }
 
 async function buildAppointmentSlotSelection(
   accountId: string,
+  conversationId: string,
   replyId: string | null,
 ): Promise<AppointmentSlotSelection | null> {
   const parsed = parseAppointmentSlotReplyId(replyId)
   if (!parsed || !replyId) return null
 
   let duration = 45
+  let timeZone = 'Europe/Madrid'
   try {
     const connection = await getArveraAppointmentsConnection(supabaseAdmin(), accountId)
-    duration = normalizeAppointmentsConfig(connection?.config).duracion
+    const config = normalizeAppointmentsConfig(connection?.config)
+    duration = config.duracion
+    timeZone = config.timezone
   } catch (error) {
     console.warn('[webhook] could not load appointments duration for slot reply:', error)
   }
 
-  const appointmentStart = `${parsed.date}T${parsed.time}:00`
+  const resolvedSlot = await resolveSlotTimes({
+    accountId,
+    conversationId,
+    date: parsed.date,
+    time: parsed.time,
+  })
+  const end = addMinutesToLocalDateTime(parsed.date, parsed.time, duration)
+  const appointmentStart =
+    resolvedSlot?.startTime ?? localDateTimeWithOffset(parsed.date, parsed.time, timeZone)
+  const appointmentEnd =
+    resolvedSlot?.endTime ?? localDateTimeWithOffset(end.date, end.time, timeZone)
   return {
     reply_id: replyId,
     appointment_date: parsed.date,
     appointment_time: parsed.time,
     appointment_start: appointmentStart,
-    appointment_end: addMinutesToLocalDateTime(parsed.date, parsed.time, duration),
+    appointment_end: appointmentEnd,
   }
 }
 
@@ -830,11 +913,13 @@ async function processMessage(
   // Fire any automations that react to this webhook event. All dispatches
   // run here (not earlier) so the contact, conversation, and inbound
   // message all exist before any step — including send_message — runs.
-  // Fire-and-forget: a slow or failing automation must not block the
-  // webhook's 200 OK response to Meta.
+  // This runs inside Next's `after()` callback; detached promises can be
+  // frozen before they write logs or send messages, so keep the dispatches
+  // in the awaited work graph.
   const inboundText = unsupportedInbound ? '' : contentText ?? message.text?.body ?? ''
   const appointmentSlotSelection = await buildAppointmentSlotSelection(
     accountId,
+    conversation.id,
     interactiveReplyId,
   )
   const automationTriggers: (
@@ -870,7 +955,7 @@ async function processMessage(
   // listens to only one trigger runs only when that trigger matches.
   if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
-  for (const triggerType of automationTriggers) {
+  const automationDispatches = automationTriggers.map((triggerType) =>
     runAutomationsForTrigger({
       accountId,
       triggerType,
@@ -888,7 +973,13 @@ async function processMessage(
           ...(appointmentSlotSelection ?? {}),
         },
       },
-    }).catch((err) => console.error('[automations] dispatch failed:', err))
+    }),
+  )
+  const automationResults = await Promise.allSettled(automationDispatches)
+  for (const result of automationResults) {
+    if (result.status === 'rejected') {
+      console.error('[automations] dispatch failed:', result.reason)
+    }
   }
 
   // AI auto-reply. Runs only for plain-text inbound the deterministic

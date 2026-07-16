@@ -43,6 +43,14 @@ function formatListDate(date: string) {
   return formatted.replace(/\.$/, '').slice(0, 24);
 }
 
+function formatRowDate(date: string) {
+  const parsed = new Date(`${date}T12:00:00`);
+  return new Intl.DateTimeFormat('es-ES', {
+    day: '2-digit',
+    month: '2-digit',
+  }).format(parsed);
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -90,8 +98,8 @@ function buildInteractivePayload(
         title: formatListDate(date),
         rows: dateRows.map((slot) => ({
           id: slotTimeId(slot.date, slot.start, slot.index),
-          title: slot.start,
-          description: service || 'Cita disponible',
+          title: `${formatRowDate(slot.date)} ${slot.start}`,
+          description: service || formatListDate(slot.date),
         })),
       };
     })

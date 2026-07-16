@@ -35,6 +35,7 @@ import {
   MousePointerClick,
   List,
   CalendarClock,
+  Copy,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -157,6 +158,17 @@ const TRIGGER_OPTIONS: { value: AutomationTriggerType }[] = [
   { value: "appointment_cancelled" },
   { value: "appointment_car_ready" },
   { value: "appointment_slot_selected" },
+]
+
+const APPOINTMENT_SLOT_VARIABLES = [
+  "{{ vars.appointment_start }}",
+  "{{ vars.appointment_end }}",
+  "{{ vars.appointment_date }}",
+  "{{ vars.appointment_time }}",
+  "{{ vars.contact_name }}",
+  "{{ vars.contact_phone }}",
+  "{{ vars.contact_email }}",
+  "{{ vars.reply_id }}",
 ]
 
 function cid(): string {
@@ -934,6 +946,9 @@ function TriggerCard({
             {type === "interactive_reply" && (
               <InteractiveReplyConfig config={config} onChange={onConfigChange} t={t} />
             )}
+            {type === "appointment_slot_selected" && (
+              <AppointmentSlotVariablesHelp t={t} />
+            )}
             {type === "tag_added" && (
               <div>
                 <label className="mb-1 block text-xs font-medium text-muted-foreground">
@@ -966,6 +981,48 @@ function TriggerCard({
             )}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function AppointmentSlotVariablesHelp({
+  t,
+}: {
+  t: ReturnType<typeof useTranslations>
+}) {
+  async function copyVariable(value: string) {
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(t("variableCopied"))
+    } catch {
+      toast.error(t("variableCopyFailed"))
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-3">
+      <div className="mb-2">
+        <p className="text-xs font-medium text-foreground">
+          {t("availableVariables")}
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          {t("availableVariablesHint")}
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {APPOINTMENT_SLOT_VARIABLES.map((variable) => (
+          <button
+            key={variable}
+            type="button"
+            onClick={() => void copyVariable(variable)}
+            className="inline-flex items-center gap-1 rounded border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground hover:border-primary/50 hover:bg-primary/10"
+            title={t("copyVariable")}
+          >
+            <Copy className="h-3 w-3 text-muted-foreground" />
+            {variable}
+          </button>
+        ))}
       </div>
     </div>
   )

@@ -273,7 +273,7 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
   }
   if (!steps || steps.length === 0) {
     if (args.parentStepId === null && args.logId) {
-      await finalizeLog(args.logId, 'success', null)
+      await finalizeLog(args.logId, 'failed', 'No automation steps configured')
     }
     return
   }
