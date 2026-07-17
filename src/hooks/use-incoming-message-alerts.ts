@@ -57,6 +57,7 @@ function playIncomingMessageSound(audioContext: AudioContext | null) {
 export function useIncomingMessageAlerts(enabled: boolean) {
   const router = useRouter();
   const audioContextRef = useRef<AudioContext | null>(null);
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!enabled) return;
@@ -73,14 +74,29 @@ export function useIncomingMessageAlerts(enabled: boolean) {
       ) {
         void window.Notification.requestPermission().catch(() => undefined);
       }
+
+      const audioReady = audioContextRef.current?.state === "running";
+      const notificationSettled =
+        !isNotificationSupported() ||
+        window.Notification.permission !== "default";
+      if (audioReady && notificationSettled) {
+        window.removeEventListener("pointerdown", unlockAlerts);
+        window.removeEventListener("click", unlockAlerts);
+        window.removeEventListener("keydown", unlockAlerts);
+        window.removeEventListener("touchstart", unlockAlerts);
+      }
     };
 
-    window.addEventListener("pointerdown", unlockAlerts, { once: true });
-    window.addEventListener("keydown", unlockAlerts, { once: true });
+    window.addEventListener("pointerdown", unlockAlerts);
+    window.addEventListener("click", unlockAlerts);
+    window.addEventListener("keydown", unlockAlerts);
+    window.addEventListener("touchstart", unlockAlerts);
 
     return () => {
       window.removeEventListener("pointerdown", unlockAlerts);
+      window.removeEventListener("click", unlockAlerts);
       window.removeEventListener("keydown", unlockAlerts);
+      window.removeEventListener("touchstart", unlockAlerts);
       void audioContextRef.current?.close().catch(() => undefined);
       audioContextRef.current = null;
     };
@@ -93,6 +109,8 @@ export function useIncomingMessageAlerts(enabled: boolean) {
 
     const showAlert = async (message: Message) => {
       if (message.sender_type !== "customer") return;
+      if (seenMessageIdsRef.current.has(message.id)) return;
+      seenMessageIdsRef.current.add(message.id);
 
       playIncomingMessageSound(audioContextRef.current);
 
@@ -136,7 +154,14 @@ export function useIncomingMessageAlerts(enabled: boolean) {
           void showAlert(payload.new as Message);
         },
       )
-      .subscribe();
+      .subscribe((status, error) => {
+        if (error) {
+          console.warn("[incoming-message-alerts] realtime failed:", error);
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("[incoming-message-alerts] realtime status:", status);
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
