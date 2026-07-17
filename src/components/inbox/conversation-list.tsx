@@ -248,8 +248,11 @@ export function ConversationList({
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable identity across parent rerenders.
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
+  const conversationsCountRef = useRef(conversations.length);
+  const fetchKeyRef = useRef("");
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
+    conversationsCountRef.current = conversations.length;
   });
 
   useEffect(() => {
@@ -261,7 +264,11 @@ export function ConversationList({
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
+      const fetchKey = [tab, subtab, effectiveScope, debouncedSearch].join("|");
+      const shouldShowLoading =
+        fetchKey !== fetchKeyRef.current || conversationsCountRef.current === 0;
+      fetchKeyRef.current = fetchKey;
+      if (shouldShowLoading) setLoading(true);
       const params = new URLSearchParams({ tab, subtab, scope: effectiveScope });
       if (debouncedSearch) params.set("search", debouncedSearch);
 
@@ -280,7 +287,7 @@ export function ConversationList({
       setCounts(
         payload.counts ?? { inboxOpen: 0, inboxPending: 0, resolved: 0 },
       );
-      setLoading(false);
+      if (shouldShowLoading) setLoading(false);
     })();
 
     return () => {

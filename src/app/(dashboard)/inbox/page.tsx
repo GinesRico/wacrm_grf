@@ -22,6 +22,23 @@ import { cn } from "@/lib/utils";
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
+const INBOX_RESYNC_INTERVAL_MS = 4_000;
+
+function conversationSortTime(conversation: Conversation) {
+  return conversation.last_message_at ?? conversation.updated_at ?? "";
+}
+
+function sortConversationsByActivity(conversations: Conversation[]) {
+  return [...conversations].sort((a, b) =>
+    conversationSortTime(b).localeCompare(conversationSortTime(a)),
+  );
+}
+
+function previewTextForMessage(message: Message) {
+  const text = message.content_text?.trim();
+  if (text) return text;
+  return `[${message.content_type}]`;
+}
 
 export default function InboxPage() {
   const t = useTranslations("Inbox.page");
@@ -239,18 +256,21 @@ export default function InboxPage() {
         // always read false here.
         if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === newMsg.conversation_id
-                ? {
-                    ...c,
-                    last_message_text: newMsg.content_text ?? "",
-                    last_message_at: newMsg.created_at,
-                    unread_count:
-                      activeConversation?.id === newMsg.conversation_id
-                        ? 0
-                        : c.unread_count + 1,
-                  }
-                : c,
+            sortConversationsByActivity(
+              prev.map((c) =>
+                c.id === newMsg.conversation_id
+                  ? {
+                      ...c,
+                      last_message_text: previewTextForMessage(newMsg),
+                      last_message_at: newMsg.created_at,
+                      updated_at: newMsg.created_at,
+                      unread_count:
+                        activeConversation?.id === newMsg.conversation_id
+                          ? 0
+                          : c.unread_count + 1,
+                    }
+                  : c,
+              ),
             ),
           );
         } else {
@@ -306,14 +326,16 @@ export default function InboxPage() {
           // UPDATE to round-trip. Non-active convs take the value as-is.
           const isActive = activeConversation?.id === conv.id;
           setConversations((prev) =>
-            prev.map((c) =>
-              c.id === conv.id
-                ? {
-                    ...c,
-                    ...conv,
-                    unread_count: isActive ? 0 : conv.unread_count,
-                  }
-                : c,
+            sortConversationsByActivity(
+              prev.map((c) =>
+                c.id === conv.id
+                  ? {
+                      ...c,
+                      ...conv,
+                      unread_count: isActive ? 0 : conv.unread_count,
+                    }
+                  : c,
+              ),
             ),
           );
         } else {
@@ -436,6 +458,16 @@ export default function InboxPage() {
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
     };
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setResyncToken((n) => n + 1);
+      }
+    }, INBOX_RESYNC_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
   }, []);
 
   /**
@@ -573,11 +605,7 @@ export default function InboxPage() {
   const handleConversationUpdated = useCallback((conversation: Conversation) => {
     setConversations((prev) => {
       const withoutExisting = prev.filter((c) => c.id !== conversation.id);
-      return [conversation, ...withoutExisting].sort((a, b) => {
-        const aTime = a.last_message_at ?? a.updated_at ?? "";
-        const bTime = b.last_message_at ?? b.updated_at ?? "";
-        return bTime.localeCompare(aTime);
-      });
+      return sortConversationsByActivity([conversation, ...withoutExisting]);
     });
     setActiveConversation((prev) =>
       prev?.id === conversation.id ? { ...prev, ...conversation } : prev,

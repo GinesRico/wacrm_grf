@@ -645,8 +645,11 @@ export function MessageThread({
   // during render (React 19 refs rule); consumers only read `.current`
   // inside the async fetch completion, which runs after the render.
   const onMessagesLoadedRef = useRef(onMessagesLoaded);
+  const messagesCountRef = useRef(messages.length);
+  const fetchConversationIdRef = useRef<string | null>(null);
   useEffect(() => {
     onMessagesLoadedRef.current = onMessagesLoaded;
+    messagesCountRef.current = messages.length;
   });
 
   const conversationId = conversation?.id;
@@ -663,8 +666,14 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
-      setSessionCheckedConversationId(null);
+      const shouldShowLoading =
+        fetchConversationIdRef.current !== conversationId ||
+        messagesCountRef.current === 0;
+      fetchConversationIdRef.current = conversationId;
+      if (shouldShowLoading) {
+        setLoading(true);
+        setSessionCheckedConversationId(null);
+      }
 
       const { data, error } = await supabase
         .from("messages")
@@ -681,7 +690,7 @@ export function MessageThread({
         setSessionCheckedConversationId(conversationId);
       }
 
-      if (!cancelled) setLoading(false);
+      if (!cancelled && shouldShowLoading) setLoading(false);
     })();
 
     return () => {
