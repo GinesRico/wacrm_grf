@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { ForbiddenError, UnauthorizedError } from '@/lib/auth/account'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export interface PlatformAdminContext {
   supabase: Awaited<ReturnType<typeof createClient>>
@@ -7,16 +8,47 @@ export interface PlatformAdminContext {
   email: string
 }
 
-export function platformAdminEmails(): readonly string[] {
-  return (process.env.PLATFORM_ADMIN_EMAILS ?? '')
+export function bootstrapPlatformAdminEmails(): readonly string[] {
+  return (process.env.PLATFORM_BOOTSTRAP_ADMIN_EMAILS ?? process.env.PLATFORM_ADMIN_EMAILS ?? '')
     .split(',')
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean)
 }
 
-export function isPlatformAdminEmail(email: string | null | undefined): boolean {
+export function isBootstrapPlatformAdminEmail(email: string | null | undefined): boolean {
   if (!email) return false
-  return platformAdminEmails().includes(email.trim().toLowerCase())
+  return bootstrapPlatformAdminEmails().includes(email.trim().toLowerCase())
+}
+
+export async function isPlatformAdmin(email: string, userId: string): Promise<boolean> {
+  const normalized = email.trim().toLowerCase()
+  const admin = supabaseAdmin()
+
+  const { count, error } = await admin
+    .from('platform_admins')
+    .select('id', { count: 'exact', head: true })
+
+  if (error) {
+    console.error('[isPlatformAdmin] platform_admins count error:', error)
+    throw new ForbiddenError('Could not verify platform admin access')
+  }
+
+  if ((count ?? 0) === 0 && isBootstrapPlatformAdminEmail(normalized)) {
+    return true
+  }
+
+  const { data, error: lookupError } = await admin
+    .from('platform_admins')
+    .select('id')
+    .or(`email.eq.${normalized},user_id.eq.${userId}`)
+    .maybeSingle()
+
+  if (lookupError) {
+    console.error('[isPlatformAdmin] platform_admins lookup error:', lookupError)
+    throw new ForbiddenError('Could not verify platform admin access')
+  }
+
+  return !!data
 }
 
 export async function requirePlatformAdmin(): Promise<PlatformAdminContext> {
@@ -27,7 +59,7 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminContext> {
   } = await supabase.auth.getUser()
 
   if (error || !user) throw new UnauthorizedError()
-  if (!isPlatformAdminEmail(user.email)) {
+  if (!(await isPlatformAdmin(user.email!, user.id))) {
     throw new ForbiddenError('This action requires platform admin access')
   }
 

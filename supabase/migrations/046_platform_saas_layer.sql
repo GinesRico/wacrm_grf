@@ -81,8 +81,8 @@ CREATE INDEX IF NOT EXISTS idx_platform_account_invites_pending
 ALTER TABLE platform_account_invites ENABLE ROW LEVEL SECURITY;
 
 -- Platform routes use the service-role client after an explicit
--- PLATFORM_ADMIN_EMAILS check. No browser/session RLS policies are
--- exposed for this table.
+-- platform admin check. No browser/session RLS policies are exposed
+-- for this table.
 
 -- Flows and automations are now settings-class surfaces: readable by
 -- members, mutable only by account admins+.
