@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Building2, Copy, Loader2, Plus, RefreshCw, Shield } from "lucide-react";
+import { Building2, Copy, Loader2, Plus, RefreshCw, Shield, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,6 +142,29 @@ export default function PlatformPage() {
     toast.success("Empresa actualizada.");
   }
 
+  async function deleteAccount(account: AccountRow) {
+    const confirmation = window.prompt(
+      `Para eliminar "${account.name}" y todos sus datos, escribe el nombre exacto de la empresa.`,
+    );
+    if (confirmation !== account.name) {
+      if (confirmation !== null) toast.error("El nombre no coincide. No se elimino la empresa.");
+      return;
+    }
+
+    const res = await fetch(`/api/platform/accounts/${account.id}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm_name: confirmation }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(body.error ?? "No se pudo eliminar la empresa.");
+      return;
+    }
+    toast.success("Empresa eliminada.");
+    void load();
+  }
+
   async function addPlatformAdmin() {
     const email = adminEmail.trim().toLowerCase();
     if (!email) return;
@@ -157,6 +180,20 @@ export default function PlatformPage() {
     }
     setAdminEmail("");
     toast.success("Superadmin de plataforma guardado.");
+    void load();
+  }
+
+  async function deletePlatformAdmin(admin: PlatformAdminRow) {
+    const confirmed = window.confirm(`Eliminar el superadmin ${admin.email}?`);
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/platform/admins/${admin.id}`, { method: "DELETE" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(body.error ?? "No se pudo eliminar el superadmin.");
+      return;
+    }
+    toast.success("Superadmin eliminado.");
     void load();
   }
 
@@ -239,7 +276,12 @@ export default function PlatformPage() {
               </div>
               <div className="divide-y divide-border">
                 {accounts.map((account) => (
-                  <AccountRowView key={account.id} account={account} onPatch={(patch) => updateAccount(account, patch)} />
+                  <AccountRowView
+                    key={account.id}
+                    account={account}
+                    onPatch={(patch) => updateAccount(account, patch)}
+                    onDelete={() => deleteAccount(account)}
+                  />
                 ))}
                 {accounts.length === 0 ? <p className="p-4 text-sm text-muted-foreground">Todavia no hay empresas.</p> : null}
               </div>
@@ -289,9 +331,21 @@ export default function PlatformPage() {
                   {admins.map((admin) => (
                     <div key={admin.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
                       <span className="font-medium">{admin.email}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {admin.user_id ? "Usuario vinculado" : "Pendiente de registro"}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          {admin.user_id ? "Usuario vinculado" : "Pendiente de registro"}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="icon-sm"
+                          onClick={() => deletePlatformAdmin(admin)}
+                          aria-label={`Eliminar superadmin ${admin.email}`}
+                          title="Eliminar superadmin"
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
                     </div>
                   ))}
                   {admins.length === 0 ? (
@@ -327,7 +381,15 @@ function FeatureToggle({ label, checked, onChange }: { label: string; checked: b
   );
 }
 
-function AccountRowView({ account, onPatch }: { account: AccountRow; onPatch: (patch: Partial<AccountRow>) => void }) {
+function AccountRowView({
+  account,
+  onPatch,
+  onDelete,
+}: {
+  account: AccountRow;
+  onPatch: (patch: Partial<AccountRow>) => void;
+  onDelete: () => void;
+}) {
   const [name, setName] = useState(account.name);
 
   function saveName() {
@@ -340,8 +402,8 @@ function AccountRowView({ account, onPatch }: { account: AccountRow; onPatch: (p
   }
 
   return (
-    <div className="grid gap-3 p-4 text-sm xl:grid-cols-[minmax(180px,1fr)_140px_220px_220px] xl:items-center">
-      <div className="min-w-0">
+    <div className="flex flex-wrap items-center gap-3 p-4 text-sm">
+      <div className="min-w-[150px] flex-1">
         <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -358,24 +420,35 @@ function AccountRowView({ account, onPatch }: { account: AccountRow; onPatch: (p
       <select
         value={account.status}
         onChange={(e) => onPatch({ status: e.target.value as AccountRow["status"] })}
-        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+        className="h-9 w-[140px] rounded-md border border-input bg-background px-2 text-sm"
       >
         <option value="trial">prueba</option>
         <option value="active">activa</option>
         <option value="suspended">suspendida</option>
         <option value="cancelled">cancelada</option>
       </select>
-      <div className="grid grid-cols-4 gap-2">
-        <LimitControl label="U" used={account.usage.users} max={account.max_users} onChange={(value) => onPatch({ max_users: value })} />
-        <LimitControl label="F" used={account.usage.flows} max={account.max_flows} onChange={(value) => onPatch({ max_flows: value })} />
-        <LimitControl label="A" used={account.usage.automations} max={account.max_automations} onChange={(value) => onPatch({ max_automations: value })} />
-        <LimitControl label="W" used={account.usage.whatsapp_lines} max={account.max_whatsapp_lines} onChange={(value) => onPatch({ max_whatsapp_lines: value })} />
+      <div className="flex flex-wrap gap-2">
+        <LimitControl label="Usuarios" used={account.usage.users} max={account.max_users} min={1} onChange={(value) => onPatch({ max_users: value })} />
+        <LimitControl label="Flujos" used={account.usage.flows} max={account.max_flows} onChange={(value) => onPatch({ max_flows: value })} />
+        <LimitControl label="Autos" title="Automatizaciones" used={account.usage.automations} max={account.max_automations} onChange={(value) => onPatch({ max_automations: value })} />
+        <LimitControl label="WA" title="Lineas WhatsApp" used={account.usage.whatsapp_lines} max={account.max_whatsapp_lines} onChange={(value) => onPatch({ max_whatsapp_lines: value })} />
       </div>
       <div className="flex flex-wrap gap-2">
         <MiniToggle label="IA" checked={account.allow_ai} onChange={(v) => onPatch({ allow_ai: v })} />
         <MiniToggle label="API" checked={account.allow_api} onChange={(v) => onPatch({ allow_api: v })} />
         <MiniToggle label="BC" checked={account.allow_broadcasts} onChange={(v) => onPatch({ allow_broadcasts: v })} />
       </div>
+      <Button
+        type="button"
+        variant="destructive"
+        size="icon-sm"
+        className="ml-auto"
+        onClick={onDelete}
+        aria-label={`Eliminar empresa ${account.name}`}
+        title="Eliminar empresa"
+      >
+        <Trash2 className="size-4" />
+      </Button>
     </div>
   );
 }
@@ -393,17 +466,35 @@ function statusLabel(status: AccountRow["status"]): string {
   }
 }
 
-function LimitControl({ label, used, max, onChange }: { label: string; used: number; max: number; onChange: (value: number) => void }) {
+function LimitControl({
+  label,
+  title,
+  used,
+  max,
+  min = 0,
+  onChange,
+}: {
+  label: string;
+  title?: string;
+  used: number;
+  max: number;
+  min?: number;
+  onChange: (value: number) => void;
+}) {
+  const tooltip = `${title ?? label}: ${used} usados de ${max}`;
   return (
-    <label className="rounded-md border border-border px-2 py-1 text-center text-xs text-muted-foreground" title={label}>
-      <span>{label} {used}/</span>
-      <input
-        className="ml-1 w-8 bg-transparent text-foreground outline-none"
-        type="number"
-        min={label === "U" ? 1 : 0}
-        value={max}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
+    <label className="flex h-9 items-center justify-between gap-2 rounded-md border border-border px-2.5 text-xs text-muted-foreground" title={tooltip}>
+      <span className="shrink-0">{label}</span>
+      <span className="flex shrink-0 items-center whitespace-nowrap text-foreground">
+        <span className="text-muted-foreground">{used}/</span>
+        <input
+          className="w-8 appearance-none bg-transparent text-left tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          type="number"
+          min={min}
+          value={max}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+      </span>
     </label>
   );
 }

@@ -134,7 +134,7 @@ export function Sidebar({
 }: SidebarProps) {
   const t = useTranslations("Sidebar");
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, canEditSettings, signOut } = useAuth();
+  const { profile, account, accountRole, canEditSettings, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
@@ -146,10 +146,7 @@ export function Sidebar({
   // name diverges and the strip becomes meaningful — that's the signal
   // we gate on. Wait for the profile fetch to settle first, otherwise
   // the strip flashes in once the row resolves (a layout jump).
-  const showAccountStrip =
-    !profileLoading &&
-    !!account?.name &&
-    account.name !== profile?.full_name;
+  const showAccountStrip = false;
 
   // Close the drawer when route changes — users opened it to navigate,
   // so once they pick a destination the drawer should get out of the way.

@@ -36,7 +36,7 @@ export function SettingsOverview({
 }: {
   onSelect: (section: SettingsSection) => void;
 }) {
-  const { user, profile, accountId, accountRole, defaultCurrency, canManageMembers } =
+  const { user, profile, account, accountId, accountRole, defaultCurrency, canManageMembers } =
     useAuth();
   const { mode, theme } = useTheme();
   const t = useTranslations('Settings.overview');
@@ -141,7 +141,7 @@ export function SettingsOverview({
     return () => {
       cancelled = true;
     };
-  }, [user?.id, accountId, canManageMembers]);
+  }, [user, accountId, canManageMembers]);
 
   const displayName = profile?.full_name || profile?.email || t('yourAccount');
   const initial = (profile?.full_name || profile?.email || 'U').charAt(0).toUpperCase();
@@ -242,6 +242,11 @@ export function SettingsOverview({
           {profile?.email ? (
             <div className="truncate text-sm text-muted-foreground">
               {profile.email}
+            </div>
+          ) : null}
+          {account?.name ? (
+            <div className="mt-1 truncate text-xs text-muted-foreground">
+              Empresa: <span className="text-foreground">{account.name}</span>
             </div>
           ) : null}
         </div>

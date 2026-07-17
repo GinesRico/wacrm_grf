@@ -36,6 +36,7 @@ function LoginPageInner() {
   // account. After a successful sign-in we send them to the join
   // page to accept rather than to /dashboard.
   const inviteToken = searchParams.get("invite");
+  const nextPath = searchParams.get("next");
   const t = useTranslations("LoginPage");
 
   const [email, setEmail] = useState("");
@@ -63,6 +64,8 @@ function LoginPageInner() {
 
     if (inviteToken) {
       router.push(`/join/${encodeURIComponent(inviteToken)}`);
+    } else if (nextPath?.startsWith("/") && !nextPath.startsWith("//")) {
+      router.push(nextPath);
     } else {
       router.push("/dashboard");
     }
@@ -149,6 +152,8 @@ function LoginPageInner() {
               href={
                 inviteToken
                   ? `/signup?invite=${encodeURIComponent(inviteToken)}`
+                  : nextPath
+                    ? `/signup?next=${encodeURIComponent(nextPath)}`
                   : "/signup"
               }
               className="text-primary hover:text-primary/80"

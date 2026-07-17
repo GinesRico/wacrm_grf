@@ -20,6 +20,44 @@ export function isBootstrapPlatformAdminEmail(email: string | null | undefined):
   return bootstrapPlatformAdminEmails().includes(email.trim().toLowerCase())
 }
 
+export async function getPlatformAdminUserIds(): Promise<Set<string>> {
+  const admin = supabaseAdmin()
+  const { data: platformAdmins, error } = await admin
+    .from('platform_admins')
+    .select('email, user_id')
+
+  if (error) {
+    console.error('[getPlatformAdminUserIds] platform_admins lookup error:', error)
+    throw new ForbiddenError('Could not verify platform admin accounts')
+  }
+
+  const userIds = new Set<string>()
+  const emails = new Set<string>()
+
+  for (const platformAdmin of platformAdmins ?? []) {
+    if (platformAdmin.user_id) userIds.add(platformAdmin.user_id)
+    if (platformAdmin.email) emails.add(platformAdmin.email.toLowerCase())
+  }
+
+  if (emails.size > 0) {
+    const { data: profiles, error: profilesError } = await admin
+      .from('profiles')
+      .select('user_id, email')
+      .in('email', Array.from(emails))
+
+    if (profilesError) {
+      console.error('[getPlatformAdminUserIds] profiles lookup error:', profilesError)
+      throw new ForbiddenError('Could not verify platform admin accounts')
+    }
+
+    for (const profile of profiles ?? []) {
+      if (profile.user_id) userIds.add(profile.user_id)
+    }
+  }
+
+  return userIds
+}
+
 export async function isPlatformAdmin(email: string, userId: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase()
   const admin = supabaseAdmin()

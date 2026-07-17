@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-import { requirePlatformAdmin } from '@/lib/platform/admin'
+import { getPlatformAdminUserIds, requirePlatformAdmin } from '@/lib/platform/admin'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { toErrorResponse } from '@/lib/auth/account'
 
@@ -34,15 +34,19 @@ export async function GET() {
       return NextResponse.json({ error: 'Failed to load accounts' }, { status: 500 })
     }
 
-    const [members, flows, automations, whatsappLines] = await Promise.all([
+    const [platformAdminUserIds, members, flows, automations, whatsappLines] = await Promise.all([
+      getPlatformAdminUserIds(),
       countByAccount('profiles'),
       countByAccount('flows'),
       countByAccount('automations'),
       countByAccount('whatsapp_config'),
     ])
+    const customerAccounts = (accounts ?? []).filter(
+      (account) => !platformAdminUserIds.has(account.owner_user_id),
+    )
 
     return NextResponse.json({
-      accounts: (accounts ?? []).map((account) => ({
+      accounts: customerAccounts.map((account) => ({
         ...account,
         usage: {
           users: members.get(account.id) ?? 0,

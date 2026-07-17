@@ -55,12 +55,16 @@ export async function middleware(request: NextRequest) {
   )) {
     const url = request.nextUrl.clone()
     const inviteToken = request.nextUrl.searchParams.get('invite')
+    const nextPath = request.nextUrl.searchParams.get('next')
     if (
       inviteToken &&
       (request.nextUrl.pathname === '/login' ||
         request.nextUrl.pathname === '/signup')
     ) {
       url.pathname = `/join/${encodeURIComponent(inviteToken)}`
+      url.search = ''
+    } else if (nextPath?.startsWith('/') && !nextPath.startsWith('//')) {
+      url.pathname = nextPath
       url.search = ''
     } else {
       url.pathname = '/dashboard'
@@ -74,6 +78,7 @@ export async function middleware(request: NextRequest) {
   if (!user && protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    url.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`)
     return withRefreshedCookies(NextResponse.redirect(url))
   }
 
