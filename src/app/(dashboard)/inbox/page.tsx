@@ -335,6 +335,55 @@ export default function InboxPage() {
     [activeConversation, hydrateConversation]
   );
 
+  const handleContactEvent = useCallback(
+    (event: { eventType: string; new: Contact; old: Partial<Contact> }) => {
+      if (event.eventType === "DELETE") {
+        const deletedId = event.old.id;
+        if (!deletedId) return;
+        setConversations((prev) =>
+          prev.map((conversation) =>
+            conversation.contact?.id === deletedId
+              ? { ...conversation, contact: undefined }
+              : conversation,
+          ),
+        );
+        setActiveContact((prev) => (prev?.id === deletedId ? null : prev));
+        return;
+      }
+
+      const contact = event.new;
+      setConversations((prev) =>
+        prev.map((conversation) =>
+          conversation.contact_id === contact.id ||
+          conversation.contact?.id === contact.id
+            ? {
+                ...conversation,
+                contact: {
+                  ...(conversation.contact ?? contact),
+                  ...contact,
+                },
+              }
+            : conversation,
+        ),
+      );
+      setActiveContact((prev) =>
+        prev?.id === contact.id ? { ...prev, ...contact } : prev,
+      );
+      setActiveConversation((prev) =>
+        prev?.contact_id === contact.id || prev?.contact?.id === contact.id
+          ? {
+              ...prev,
+              contact: {
+                ...(prev.contact ?? contact),
+                ...contact,
+              },
+            }
+          : prev,
+      );
+    },
+    [],
+  );
+
   // Subscribe to realtime. The `isConnected` flag below feeds the
   // reconnect resync: realtime is best-effort and events sent while the
   // WS was disconnected (laptop sleep, network blip, background-tab
@@ -343,6 +392,7 @@ export default function InboxPage() {
     channelName: "inbox-realtime",
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
+    onContactEvent: handleContactEvent,
     enabled: true,
   });
 

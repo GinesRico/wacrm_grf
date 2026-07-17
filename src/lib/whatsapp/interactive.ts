@@ -76,9 +76,19 @@ export interface InteractiveListPayload {
   sections: InteractiveListSection[]
 }
 
+export interface InteractiveCtaUrlPayload {
+  kind: 'cta_url'
+  body: string
+  header?: string
+  footer?: string
+  button_label: string
+  url: string
+}
+
 export type InteractiveMessagePayload =
   | InteractiveButtonsPayload
   | InteractiveListPayload
+  | InteractiveCtaUrlPayload
 
 export type InteractiveValidation =
   | { ok: true }
@@ -231,7 +241,34 @@ export function validateInteractivePayload(
     return ok()
   }
 
-  return fail('Interactive message must be reply buttons or a list.')
+  if (p.kind === 'cta_url') {
+    const cta = p as Partial<InteractiveCtaUrlPayload>
+    if (
+      typeof cta.button_label !== 'string' ||
+      cta.button_label.trim() === ''
+    ) {
+      return fail('The URL button needs a label.')
+    }
+    if (cta.button_label.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+      return fail(
+        `URL button label exceeds the ${INTERACTIVE_LIMITS.buttonTitleMaxLength}-character limit.`,
+      )
+    }
+    if (typeof cta.url !== 'string' || cta.url.trim() === '') {
+      return fail('The URL button needs a URL.')
+    }
+    try {
+      const url = new URL(cta.url)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return fail('The URL button must use http or https.')
+      }
+    } catch {
+      return fail('The URL button must be a valid URL.')
+    }
+    return ok()
+  }
+
+  return fail('Interactive message must be reply buttons, a list, or a URL button.')
 }
 
 /**
@@ -243,5 +280,9 @@ export function interactivePayloadPreviewText(
 ): string {
   const body = payload.body?.trim()
   if (body) return body
-  return payload.kind === 'buttons' ? '[buttons]' : '[list]'
+  return payload.kind === 'buttons'
+    ? '[buttons]'
+    : payload.kind === 'list'
+      ? '[list]'
+      : '[url button]'
 }

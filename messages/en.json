@@ -556,6 +556,7 @@
       "contactInfo": "Contact info",
       "contactDetails": "Contact details",
       "closeDetails": "Close details",
+      "editContact": "Edit contact",
       "info": "Info",
       "tags": "Tags",
       "notes": "Notes",
@@ -669,6 +670,7 @@
     "detailView": {
       "tabs": {
         "details": "Details",
+        "tags": "Tags",
         "activity": "Activity",
         "notes": "Notes",
         "custom": "Custom Fields",
@@ -687,6 +689,7 @@
       "contactDetailsDesc": "Contact details",
       "phone": "Phone",
       "email": "Email",
+      "name": "Name",
       "company": "Company",
       "createdAt": "Created At",
       "customFields": "Custom Fields",
@@ -1654,6 +1657,7 @@
   "InteractiveBuilder": {
     "replyButtons": "Reply buttons",
     "list": "List",
+    "ctaUrl": "URL button",
     "body": "Body",
     "bodyPlaceholder": "What the customer reads above the options",
     "header": "Header (optional)",
@@ -1662,6 +1666,8 @@
     "preview": "Preview",
     "buttons": "Buttons ({count}/{max})",
     "buttonLabel": "Button label",
+    "buttonUrl": "Button URL",
+    "ctaButtonPlaceholder": "Button text",
     "addButton": "Add button",
     "listButtonLabel": "List button label",
     "rows": "Rows ({count}/{max})",

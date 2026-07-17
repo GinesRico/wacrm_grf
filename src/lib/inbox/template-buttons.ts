@@ -25,9 +25,10 @@ export function resolveTemplateButtonUrl(
   button: Pick<InteractiveButton, "type" | "url" | "example">,
 ): string | null {
   if (button.type?.toUpperCase() !== "URL" || !button.url) return null;
+  if (/\{\{\s*1\s*\}\}/.test(button.url) && !button.example) return null;
 
   const example = button.example ?? "";
-  const resolved = button.url.replace(/\{\{\s*1\s*\}\}/g, encodeURIComponent(example));
+  const resolved = button.url.replace(/\{\{\s*1\s*\}\}/g, example);
   if (/\{\{\s*\d+\s*\}\}/.test(resolved)) return null;
 
   try {

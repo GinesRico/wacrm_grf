@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import {
   ARVERA_DEFAULT_BASE_URL,
+  ARVERA_DEFAULT_CTA_BUTTON_LABEL,
+  ARVERA_DEFAULT_CTA_URL_TEMPLATE,
   ARVERA_DEFAULT_MESSAGE,
   ARVERA_PAYMENTS_SLUG,
   encryptApiKey,
@@ -43,6 +45,8 @@ export async function GET() {
           auth_header: 'authorization_bearer',
           default_message: ARVERA_DEFAULT_MESSAGE,
           delivery_mode: 'text',
+          cta_button_label: ARVERA_DEFAULT_CTA_BUTTON_LABEL,
+          cta_url_template: ARVERA_DEFAULT_CTA_URL_TEMPLATE,
         },
         status: 'not_configured',
         last_error: null,
@@ -64,6 +68,8 @@ export async function PUT(request: Request) {
       auth_header?: unknown;
       default_message?: unknown;
       delivery_mode?: unknown;
+      cta_button_label?: unknown;
+      cta_url_template?: unknown;
       template_name?: unknown;
       template_language?: unknown;
       template_body_params?: unknown;
@@ -78,7 +84,18 @@ export async function PUT(request: Request) {
         typeof body?.default_message === 'string' && body.default_message.trim()
           ? body.default_message.trim()
           : ARVERA_DEFAULT_MESSAGE,
-      delivery_mode: body?.delivery_mode === 'template' ? 'template' : 'text',
+      delivery_mode:
+        body?.delivery_mode === 'template' || body?.delivery_mode === 'cta_url'
+          ? body.delivery_mode
+          : 'text',
+      cta_button_label:
+        typeof body?.cta_button_label === 'string' && body.cta_button_label.trim()
+          ? body.cta_button_label.trim()
+          : ARVERA_DEFAULT_CTA_BUTTON_LABEL,
+      cta_url_template:
+        typeof body?.cta_url_template === 'string' && body.cta_url_template.trim()
+          ? body.cta_url_template.trim()
+          : ARVERA_DEFAULT_CTA_URL_TEMPLATE,
       template_name:
         typeof body?.template_name === 'string' && body.template_name.trim()
           ? body.template_name.trim()
@@ -96,6 +113,21 @@ export async function PUT(request: Request) {
         { error: 'Select a Meta template before enabling template delivery' },
         { status: 400 },
       );
+    }
+
+    if (config.delivery_mode === 'cta_url') {
+      if (config.cta_button_label.length > 20) {
+        return NextResponse.json(
+          { error: 'El texto del boton CTA no puede superar 20 caracteres' },
+          { status: 400 },
+        );
+      }
+      if (!config.cta_url_template.includes('{{payment_url}}')) {
+        return NextResponse.json(
+          { error: 'La URL del boton debe incluir {{payment_url}}' },
+          { status: 400 },
+        );
+      }
     }
 
     const apiKey = typeof body?.api_key === 'string' ? body.api_key.trim() : '';

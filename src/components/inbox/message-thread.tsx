@@ -838,11 +838,30 @@ export function MessageThread({
     onJumpHandled?.();
   }, [jumpToMessageId, onJumpHandled, messages, jumpToMessage]);
 
+  const contactDisplayName = contact?.name || contact?.phone || "Customer";
+
+  const resolveReplyToId = useCallback(
+    (candidate?: string | null) => {
+      if (!candidate || candidate.startsWith("temp-")) return undefined;
+      const quoted = messages.find((message) => message.id === candidate);
+      if (!quoted || quoted.conversation_id !== conversationId) return undefined;
+      return quoted.id;
+    },
+    [conversationId, messages],
+  );
+
+  useEffect(() => {
+    if (replyTo && !resolveReplyToId(replyTo.id)) {
+      setReplyTo(null);
+    }
+  }, [replyTo, resolveReplyToId]);
+
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
       if (!conversation) return;
 
       const tempId = `temp-${Date.now()}`;
+      const safeReplyToId = resolveReplyToId(replyToId);
 
       // Optimistic update — shows the message immediately with "sending" status
       const signedText = signMessageText(text);
@@ -855,7 +874,7 @@ export function MessageThread({
         content_text: signedText,
         status: "sending",
         created_at: new Date().toISOString(),
-        reply_to_message_id: replyToId,
+        reply_to_message_id: safeReplyToId,
       };
       onNewMessage(optimisticMsg);
       setReplyTo(null);
@@ -868,7 +887,7 @@ export function MessageThread({
             conversation_id: conversation.id,
             message_type: "text",
             content_text: signedText,
-            reply_to_message_id: replyToId,
+            reply_to_message_id: safeReplyToId,
           }),
         });
 
@@ -894,12 +913,13 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, signMessageText]
+    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText]
   );
 
   const handleSendMedia = useCallback(
     async (payload: SendMediaPayload) => {
       if (!conversation) return;
+      const safeReplyToId = resolveReplyToId(payload.replyToId);
 
       // Documents show their filename in our own bubble (and to the
       // recipient as the Meta caption when no caption was typed); other
@@ -922,7 +942,7 @@ export function MessageThread({
         media_url: payload.mediaUrl,
         status: "sending",
         created_at: new Date().toISOString(),
-        reply_to_message_id: payload.replyToId,
+        reply_to_message_id: safeReplyToId,
       };
       onNewMessage(optimisticMsg);
       setReplyTo(null);
@@ -937,7 +957,7 @@ export function MessageThread({
             media_url: payload.mediaUrl,
             content_text: contentText,
             filename: payload.filename,
-            reply_to_message_id: payload.replyToId,
+            reply_to_message_id: safeReplyToId,
           }),
         });
 
@@ -963,7 +983,7 @@ export function MessageThread({
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, signMessageText],
+    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText],
   );
 
   const handleSendInteractive = useCallback(
@@ -971,6 +991,7 @@ export function MessageThread({
       if (!conversation) return;
 
       const tempId = `temp-${Date.now()}`;
+      const safeReplyToId = resolveReplyToId(replyToId);
       const signedPayload = { ...payload, body: signMessageText(payload.body) };
       // Optimistic bubble — renders the buttons/list immediately via the
       // interactive_payload, same as the persisted row will.
@@ -983,7 +1004,7 @@ export function MessageThread({
         interactive_payload: signedPayload,
         status: "sending",
         created_at: new Date().toISOString(),
-        reply_to_message_id: replyToId,
+        reply_to_message_id: safeReplyToId,
       };
       onNewMessage(optimisticMsg);
 
@@ -995,7 +1016,7 @@ export function MessageThread({
             conversation_id: conversation.id,
             message_type: "interactive",
             interactive_payload: signedPayload,
-            reply_to_message_id: replyToId,
+            reply_to_message_id: safeReplyToId,
           }),
         });
 
@@ -1017,7 +1038,7 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, signMessageText],
+    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText],
   );
 
   const patchConversation = useCallback(
@@ -1105,6 +1126,7 @@ export function MessageThread({
         sender_type: "agent",
         content_type: "template",
         content_text: renderedBody,
+        media_url: values.headerMediaUrl || template.header_media_url || undefined,
         template_name: template.name,
         status: "sending",
         created_at: new Date().toISOString(),
@@ -1185,8 +1207,6 @@ export function MessageThread({
     return map;
   }, [reactions]);
 
-  const contactDisplayName = contact?.name || contact?.phone || "Customer";
-
   // Author label for a quoted message: "You" when we sent the parent,
   // contact name when the customer sent it.
   const authorLabelFor = useCallback(
@@ -1200,13 +1220,18 @@ export function MessageThread({
 
   const handleStartReply = useCallback(
     (msg: Message) => {
+      const safeReplyToId = resolveReplyToId(msg.id);
+      if (!safeReplyToId) {
+        toast.error(t("waitForMessage"));
+        return;
+      }
       setReplyTo({
-        id: msg.id,
+        id: safeReplyToId,
         authorLabel: authorLabelFor(msg),
         preview: buildReplyPreview(msg, tQuote),
       });
     },
-    [authorLabelFor, tQuote],
+    [authorLabelFor, resolveReplyToId, t, tQuote],
   );
 
   const handleAiReplyToMessage = useCallback(

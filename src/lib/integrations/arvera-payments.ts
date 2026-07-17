@@ -15,6 +15,9 @@ export const ARVERA_PAYMENTS_SLUG = 'arvera-payments';
 export const ARVERA_DEFAULT_BASE_URL = 'https://pagos.arvera.es/api';
 export const ARVERA_DEFAULT_MESSAGE =
   'Aqui tienes tu enlace de pago: {{payment_url}}';
+export const ARVERA_DEFAULT_CTA_MESSAGE = 'Aqui tienes tu enlace de pago.';
+export const ARVERA_DEFAULT_CTA_BUTTON_LABEL = 'Pagar ahora';
+export const ARVERA_DEFAULT_CTA_URL_TEMPLATE = '{{payment_url}}';
 
 export type PaymentStatus =
   | 'pending'
@@ -27,7 +30,9 @@ export interface ArveraConnectionConfig {
   base_url: string;
   auth_header: 'authorization_bearer' | 'x_api_key';
   default_message: string;
-  delivery_mode: 'text' | 'template';
+  delivery_mode: 'text' | 'template' | 'cta_url';
+  cta_button_label: string;
+  cta_url_template: string;
   template_name?: string;
   template_language?: string;
   template_body_params?: Record<string, PaymentTemplateValueSource>;
@@ -98,11 +103,17 @@ export function normalizeAmountCents(input: {
 export function normalizeConfig(
   config: Partial<ArveraConnectionConfig> | null | undefined,
 ): ArveraConnectionConfig {
+  const deliveryMode =
+    config?.delivery_mode === 'template' || config?.delivery_mode === 'cta_url'
+      ? config.delivery_mode
+      : 'text';
   return {
     base_url: trimTrailingSlash(config?.base_url || ARVERA_DEFAULT_BASE_URL),
     auth_header: config?.auth_header || 'authorization_bearer',
     default_message: config?.default_message || ARVERA_DEFAULT_MESSAGE,
-    delivery_mode: config?.delivery_mode === 'template' ? 'template' : 'text',
+    delivery_mode: deliveryMode,
+    cta_button_label: config?.cta_button_label || ARVERA_DEFAULT_CTA_BUTTON_LABEL,
+    cta_url_template: config?.cta_url_template || ARVERA_DEFAULT_CTA_URL_TEMPLATE,
     template_name: config?.template_name || undefined,
     template_language: config?.template_language || undefined,
     template_body_params: config?.template_body_params ?? {},

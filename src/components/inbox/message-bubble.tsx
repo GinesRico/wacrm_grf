@@ -523,6 +523,33 @@ function TemplateActions({
   );
 }
 
+function mergeTemplatePayload(
+  payload?: InteractiveMessagePayload | null,
+  fallback?: InteractiveMessagePayload | null,
+) {
+  if (!payload) return fallback ?? null;
+  if (
+    payload.kind !== "buttons" ||
+    fallback?.kind !== "buttons" ||
+    payload.buttons.some((button) => button.url)
+  ) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    footer: payload.footer ?? fallback.footer,
+    buttons: payload.buttons.map((button, index) => ({
+      ...fallback.buttons[index],
+      ...button,
+      type: button.type ?? fallback.buttons[index]?.type,
+      url: button.url ?? fallback.buttons[index]?.url,
+      example: button.example ?? fallback.buttons[index]?.example,
+      phone_number: button.phone_number ?? fallback.buttons[index]?.phone_number,
+    })),
+  } satisfies InteractiveMessagePayload;
+}
+
 function MessageContent({
   message,
   t,
@@ -625,6 +652,8 @@ function MessageContent({
               <InteractivePreview
                 payload={{ ...message.interactive_payload, body: "" }}
                 hideEmptyBody
+                embedded
+                onPrimary={onPrimary}
               />
             </div>
           ) : null}
@@ -649,6 +678,8 @@ function MessageContent({
               <InteractivePreview
                 payload={{ ...message.interactive_payload, body: "" }}
                 hideEmptyBody
+                embedded
+                onPrimary={onPrimary}
               />
             </div>
           ) : null}
@@ -685,9 +716,21 @@ function MessageContent({
       );
 
     case "template": {
-      const templatePayload = message.interactive_payload ?? templateFallbackPayload;
+      const templatePayload = mergeTemplatePayload(
+        message.interactive_payload,
+        templateFallbackPayload,
+      );
       return (
         <div>
+          {message.media_url ? (
+            <div className="mb-2">
+              <MediaImage
+                url={message.media_url}
+                alt={t("sharedImageAlt")}
+                t={t}
+              />
+            </div>
+          ) : null}
           {message.content_text && (
             <p className="whitespace-pre-wrap break-words text-sm">
               <WhatsAppText text={message.content_text} />
@@ -721,7 +764,13 @@ function MessageContent({
       //    migration 035 backfilled the column): show the body text plainly —
       //    it is our own message, NOT a customer tap.
       if (message.interactive_payload) {
-        return <InteractivePreview payload={message.interactive_payload} />;
+        return (
+          <InteractivePreview
+            payload={message.interactive_payload}
+            embedded
+            onPrimary={onPrimary}
+          />
+        );
       }
       if (message.sender_type === "customer") {
         return (

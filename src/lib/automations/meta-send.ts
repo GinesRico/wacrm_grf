@@ -96,6 +96,9 @@ export async function engineSendInteractive(
       buttons: payload.buttons,
     })
   }
+  if (payload.kind !== 'list') {
+    throw new Error('CTA URL interactive messages are not supported by automations yet.')
+  }
   return engineSendInteractiveList({
     ...common,
     bodyText: payload.body,

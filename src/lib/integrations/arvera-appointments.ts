@@ -10,8 +10,20 @@ export const ARVERA_APPOINTMENTS_DEFAULT_IFRAME_URL =
 export const ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL =
   'https://citas.arvera.es/reservas.html';
 export const ARVERA_APPOINTMENTS_DEFAULT_MESSAGE = '{{mensaje}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL = 'Reservar cita';
+export const ARVERA_APPOINTMENTS_DEFAULT_CTA_URL_TEMPLATE = '{{short_url}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_HEADER =
+  'Citas disponibles para {{dates_short}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_BODY =
+  'Haz click en el boton de abajo y selecciona una hora para agendar tu cita de {{service}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_FOOTER = 'Autorecambios Vera S.L';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL = 'Ver disponibles';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE =
+  '{{weekday_upper}} {{day}} DE {{month_upper}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_TITLE = '{{time}}';
+export const ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION = '{{service}}';
 
-export type AppointmentSendMode = 'booking_link' | 'interactive_list';
+export type AppointmentSendMode = 'booking_link' | 'interactive_list' | 'cta_url';
 
 export interface ArveraAppointmentsConfig {
   base_url: string;
@@ -23,6 +35,15 @@ export interface ArveraAppointmentsConfig {
   timezone: string;
   default_service: string;
   default_message: string;
+  cta_button_label: string;
+  cta_url_template: string;
+  list_header: string;
+  list_body: string;
+  list_footer: string;
+  list_button_label: string;
+  list_section_title: string;
+  list_row_title: string;
+  list_row_description: string;
 }
 
 export interface ArveraAppointmentsConnection {
@@ -93,12 +114,32 @@ export function normalizeAppointmentsConfig(
     public_booking_url:
       config?.public_booking_url || ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
     default_send_mode:
-      config?.default_send_mode === 'interactive_list' ? 'interactive_list' : 'booking_link',
+      config?.default_send_mode === 'interactive_list' || config?.default_send_mode === 'cta_url'
+        ? config.default_send_mode
+        : 'booking_link',
     default_days_ahead: normalizePositiveInteger(config?.default_days_ahead, 1),
     duracion: normalizePositiveInteger(config?.duracion, 45),
     timezone: config?.timezone || 'Europe/Madrid',
     default_service: config?.default_service || 'Cita taller',
     default_message: config?.default_message || ARVERA_APPOINTMENTS_DEFAULT_MESSAGE,
+    cta_button_label:
+      config?.cta_button_label || ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL,
+    cta_url_template:
+      config?.cta_url_template || ARVERA_APPOINTMENTS_DEFAULT_CTA_URL_TEMPLATE,
+    list_header:
+      config?.list_header || ARVERA_APPOINTMENTS_DEFAULT_LIST_HEADER,
+    list_body:
+      config?.list_body || ARVERA_APPOINTMENTS_DEFAULT_LIST_BODY,
+    list_footer:
+      config?.list_footer || ARVERA_APPOINTMENTS_DEFAULT_LIST_FOOTER,
+    list_button_label:
+      config?.list_button_label || ARVERA_APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
+    list_section_title:
+      config?.list_section_title || ARVERA_APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
+    list_row_title:
+      config?.list_row_title || ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_TITLE,
+    list_row_description:
+      config?.list_row_description || ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION,
   };
 }
 
@@ -268,6 +309,7 @@ export function renderAppointmentsMessage(
     short_url: string;
     fecha_texto: string;
     service: string;
+    slots?: string;
   },
 ): string {
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {

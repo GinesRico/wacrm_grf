@@ -63,6 +63,8 @@ import {
 import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
 import {
   buildPaymentTemplateParams,
+  resolvePaymentTemplateValue,
+  type PaymentTemplateValueInput,
   type PaymentTemplateValueSource,
 } from "@/lib/integrations/payment-template-params";
 import type { Contact, InteractiveMessagePayload, QuickReply } from "@/types";
@@ -139,13 +141,22 @@ const PICKER_ACCEPT: Record<ComposerMediaKind, string> = {
 const ATTACH_ACCEPT = Object.values(PICKER_ACCEPT).join(",");
 const APPOINTMENT_DAY_COUNT = 5;
 
-type AppointmentSendMode = "booking_link" | "interactive_list";
+type AppointmentSendMode = "booking_link" | "interactive_list" | "cta_url";
 
 const APPOINTMENT_SERVICES = [
   "Neumaticos",
   "Alineacion",
   "Neumaticos + Alineacion",
 ];
+
+function renderPaymentMessageTemplate(
+  template: string,
+  values: PaymentTemplateValueInput,
+) {
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, rawKey: string) =>
+    resolvePaymentTemplateValue(rawKey as PaymentTemplateValueSource, values),
+  );
+}
 
 function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
@@ -244,7 +255,10 @@ export function MessageComposer({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [paymentDelivery, setPaymentDelivery] = useState<{
-    mode: "text" | "template";
+    mode: "text" | "template" | "cta_url";
+    defaultMessage?: string;
+    ctaButtonLabel?: string;
+    ctaUrlTemplate?: string;
     templateName?: string;
     templateLanguage?: string;
     templateBodyParams?: Record<string, PaymentTemplateValueSource>;
@@ -410,7 +424,13 @@ export function MessageComposer({
           setPaymentsEnabled(Boolean(app?.connection?.enabled));
           const config = app?.connection?.config ?? {};
           setPaymentDelivery({
-            mode: config.delivery_mode === "template" ? "template" : "text",
+            mode:
+              config.delivery_mode === "template" || config.delivery_mode === "cta_url"
+                ? config.delivery_mode
+                : "text",
+            defaultMessage: config.default_message,
+            ctaButtonLabel: config.cta_button_label,
+            ctaUrlTemplate: config.cta_url_template,
             templateName: config.template_name,
             templateLanguage: config.template_language,
             templateBodyParams: config.template_body_params ?? {},
@@ -445,8 +465,9 @@ export function MessageComposer({
               : APPOINTMENT_SERVICES[0],
           );
           setAppointmentSendMode(
-            app?.connection?.config?.default_send_mode === "interactive_list"
-              ? "interactive_list"
+            app?.connection?.config?.default_send_mode === "interactive_list" ||
+              app?.connection?.config?.default_send_mode === "cta_url"
+              ? app.connection.config.default_send_mode
               : "booking_link",
           );
         }
@@ -603,20 +624,21 @@ export function MessageComposer({
         toast.error(t("paymentCreateFailed"));
         return;
       }
+      const paymentValues: PaymentTemplateValueInput = {
+        payment_url: paymentUrl,
+        order_id: payload.payment_link?.order_id ?? "",
+        amount_cents: payload.payment_link?.amount_cents ?? Math.round(amount * 100),
+        concept: payload.payment_link?.concept ?? concept,
+        email: payload.payment_link?.email ?? contact?.email,
+        phone: payload.payment_link?.phone ?? contact?.phone,
+      };
       if (paymentDelivery.mode === "template" && paymentDelivery.templateName) {
         const templateParams = buildPaymentTemplateParams(
           {
             template_body_params: paymentDelivery.templateBodyParams ?? {},
             template_button_params: paymentDelivery.templateButtonParams ?? {},
           },
-          {
-            payment_url: paymentUrl,
-            order_id: payload.payment_link?.order_id ?? "",
-            amount_cents: payload.payment_link?.amount_cents ?? Math.round(amount * 100),
-            concept: payload.payment_link?.concept ?? concept,
-            email: payload.payment_link?.email ?? contact?.email,
-            phone: payload.payment_link?.phone ?? contact?.phone,
-          },
+          paymentValues,
         );
         const sendRes = await fetch("/api/whatsapp/send", {
           method: "POST",
@@ -639,8 +661,27 @@ export function MessageComposer({
           toast.error(sendPayload.error || t("paymentSendFailed"));
           return;
         }
+      } else if (paymentDelivery.mode === "cta_url") {
+        const body = renderPaymentMessageTemplate(
+          paymentDelivery.defaultMessage || "Aqui tienes tu enlace de pago.",
+          paymentValues,
+        ).trim();
+        const buttonUrl = renderPaymentMessageTemplate(
+          paymentDelivery.ctaUrlTemplate || "{{payment_url}}",
+          paymentValues,
+        ).trim();
+        onSendInteractive({
+          kind: "cta_url",
+          body: body || "Aqui tienes tu enlace de pago.",
+          button_label: paymentDelivery.ctaButtonLabel || "Pagar ahora",
+          url: buttonUrl || paymentUrl,
+        });
       } else {
-        onSend(`Aqui tienes tu enlace de pago: ${paymentUrl}`);
+        const body = renderPaymentMessageTemplate(
+          paymentDelivery.defaultMessage || "Aqui tienes tu enlace de pago: {{payment_url}}",
+          paymentValues,
+        ).trim();
+        onSend(body || `Aqui tienes tu enlace de pago: ${paymentUrl}`);
       }
       setPaymentOpen(false);
       setPaymentAmount("");
@@ -649,7 +690,16 @@ export function MessageComposer({
     } finally {
       setPaymentBusy(false);
     }
-  }, [paymentAmount, paymentConcept, conversationId, contact, onSend, paymentDelivery, t]);
+  }, [
+    paymentAmount,
+    paymentConcept,
+    conversationId,
+    contact,
+    onSend,
+    onSendInteractive,
+    paymentDelivery,
+    t,
+  ]);
 
   const sendAppointmentAvailability = useCallback(async () => {
     if (appointmentDates.length === 0) {

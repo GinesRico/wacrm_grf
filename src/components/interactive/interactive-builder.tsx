@@ -13,6 +13,7 @@ import { INTERACTIVE_LIMITS } from "@/lib/whatsapp/meta-api";
 import {
   validateInteractivePayload,
   type InteractiveButtonsPayload,
+  type InteractiveCtaUrlPayload,
   type InteractiveListPayload,
   type InteractiveMessagePayload,
 } from "@/lib/whatsapp/interactive";
@@ -53,6 +54,15 @@ export function blankListPayload(): InteractiveListPayload {
   };
 }
 
+export function blankCtaUrlPayload(): InteractiveCtaUrlPayload {
+  return {
+    kind: "cta_url",
+    body: "",
+    button_label: "",
+    url: "",
+  };
+}
+
 interface InteractiveBuilderProps {
   value: InteractiveMessagePayload;
   onChange: (payload: InteractiveMessagePayload) => void;
@@ -61,8 +71,8 @@ interface InteractiveBuilderProps {
 }
 
 /**
- * Controlled builder for a WhatsApp interactive message (reply buttons
- * or list). Enforces Meta's char limits inline (maxLength + counters)
+ * Controlled builder for a WhatsApp interactive message (reply buttons,
+ * list, or CTA URL). Enforces Meta's char limits inline (maxLength + counters)
  * and surfaces a single validation error via `validateInteractivePayload`
  * — the same check the server runs before sending. Shared by the inbox
  * composer, the automation Send node, and the quick-replies manager.
@@ -79,13 +89,15 @@ export function InteractiveBuilder({
   const setField = (patch: Partial<InteractiveMessagePayload>) =>
     onChange({ ...value, ...patch } as InteractiveMessagePayload);
 
-  const switchKind = (kind: "buttons" | "list") => {
+  const switchKind = (kind: InteractiveMessagePayload["kind"]) => {
     if (kind === value.kind) return;
     const shared = { body: value.body, header: value.header, footer: value.footer };
     onChange(
       kind === "buttons"
         ? { ...blankButtonsPayload(), ...shared }
-        : { ...blankListPayload(), ...shared },
+        : kind === "list"
+          ? { ...blankListPayload(), ...shared }
+          : { ...blankCtaUrlPayload(), ...shared },
     );
   };
 
@@ -103,6 +115,11 @@ export function InteractiveBuilder({
             active={value.kind === "list"}
             label={t("list")}
             onClick={() => switchKind("list")}
+          />
+          <KindButton
+            active={value.kind === "cta_url"}
+            label={t("ctaUrl")}
+            onClick={() => switchKind("cta_url")}
           />
         </div>
 
@@ -143,8 +160,10 @@ export function InteractiveBuilder({
 
         {value.kind === "buttons" ? (
           <ButtonsEditor value={value} onChange={onChange} advanced={advanced} />
-        ) : (
+        ) : value.kind === "list" ? (
           <ListEditor value={value} onChange={onChange} advanced={advanced} />
+        ) : (
+          <CtaUrlEditor value={value} onChange={onChange} />
         )}
 
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -255,6 +274,41 @@ function ButtonsEditor({
           {t("addButton")}
         </Button>
       )}
+    </div>
+  );
+}
+
+function CtaUrlEditor({
+  value,
+  onChange,
+}: {
+  value: InteractiveCtaUrlPayload;
+  onChange: (p: InteractiveMessagePayload) => void;
+}) {
+  const t = useTranslations("InteractiveBuilder");
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Field
+        label={t("buttonLabel")}
+        counter={`${value.button_label.length}/${INTERACTIVE_LIMITS.buttonTitleMaxLength}`}
+      >
+        <Input
+          value={value.button_label}
+          maxLength={INTERACTIVE_LIMITS.buttonTitleMaxLength}
+          onChange={(e) => onChange({ ...value, button_label: e.target.value })}
+          placeholder={t("ctaButtonPlaceholder")}
+          className="bg-muted text-foreground"
+        />
+      </Field>
+      <Field label={t("buttonUrl")}>
+        <Input
+          value={value.url}
+          onChange={(e) => onChange({ ...value, url: e.target.value })}
+          placeholder="https://example.com"
+          className="bg-muted text-foreground"
+        />
+      </Field>
     </div>
   );
 }

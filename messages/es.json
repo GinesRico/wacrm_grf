@@ -491,6 +491,7 @@
       "contactInfo": "Informacion del contacto",
       "contactDetails": "Detalles del contacto",
       "closeDetails": "Cerrar detalles",
+      "editContact": "Editar contacto",
       "info": "Informacion",
       "tags": "Etiquetas",
       "notes": "Notas",
@@ -1275,6 +1276,7 @@
     "detailView": {
       "tabs": {
         "details": "Detalles",
+        "tags": "Etiquetas",
         "activity": "Actividad",
         "notes": "Notas",
         "custom": "Campos personalizados",
@@ -1293,6 +1295,7 @@
       "contactDetailsDesc": "Datos del contacto",
       "phone": "Telefono",
       "email": "Email",
+      "name": "Nombre",
       "company": "Empresa",
       "createdAt": "Creado el",
       "customFields": "Campos personalizados",
@@ -2260,6 +2263,7 @@
   "InteractiveBuilder": {
     "replyButtons": "Botones de respuesta",
     "list": "Lista",
+    "ctaUrl": "Boton URL",
     "body": "Cuerpo",
     "bodyPlaceholder": "Lo que el cliente lee encima de las opciones",
     "header": "Encabezado (opcional)",
@@ -2268,6 +2272,8 @@
     "preview": "Vista previa",
     "buttons": "Botones ({count}/{max})",
     "buttonLabel": "Etiqueta del boton",
+    "buttonUrl": "URL del boton",
+    "ctaButtonPlaceholder": "Texto del boton",
     "addButton": "Anadir boton",
     "listButtonLabel": "Etiqueta del boton de lista",
     "rows": "Filas ({count}/{max})",

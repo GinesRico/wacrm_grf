@@ -27,6 +27,7 @@ import {
   sendMediaMessage,
   sendInteractiveButtons,
   sendInteractiveList,
+  sendInteractiveCtaUrl,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
 import {
@@ -100,6 +101,7 @@ export interface SendMessageResult {
 function templatePreviewPayload(
   template: MessageTemplate | null,
   body: string | null | undefined,
+  params: SendTimeParams = {},
 ): InteractiveMessagePayload | null {
   if (!template?.buttons?.length) return null;
 
@@ -110,8 +112,32 @@ function templatePreviewPayload(
     buttons: template.buttons.map((button, index) => ({
       id: `template-${index}`,
       title: button.text,
+      type: button.type,
+      url: button.type === 'URL' ? button.url : undefined,
+      example:
+        button.type === 'URL'
+          ? params.buttonParams?.[index] ?? button.example
+          : button.type === 'COPY_CODE'
+            ? params.buttonParams?.[index] ?? button.example
+            : undefined,
+      phone_number:
+        button.type === 'PHONE_NUMBER' ? button.phone_number : undefined,
     })),
   };
+}
+
+function templateHeaderMediaUrl(
+  template: MessageTemplate | null,
+  params: SendTimeParams,
+): string | null {
+  if (
+    template?.header_type !== 'image' &&
+    template?.header_type !== 'video' &&
+    template?.header_type !== 'document'
+  ) {
+    return null;
+  }
+  return params.headerMediaUrl ?? template.header_media_url ?? null;
 }
 
 function parseTemplateMessageParams(value: unknown): SendTimeParams {
@@ -435,15 +461,29 @@ export async function sendMessageToConversation(
         });
         return result.messageId;
       }
-      const result = await sendInteractiveList({
+      if (p.kind === 'list') {
+        const result = await sendInteractiveList({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          bodyText: p.body,
+          buttonLabel: p.button_label,
+          headerText: p.header || undefined,
+          footerText: p.footer || undefined,
+          sections: p.sections,
+          contextMessageId,
+        });
+        return result.messageId;
+      }
+      const result = await sendInteractiveCtaUrl({
         phoneNumberId: config.phone_number_id,
         accessToken,
         to: phone,
         bodyText: p.body,
         buttonLabel: p.button_label,
+        url: p.url,
         headerText: p.header || undefined,
         footerText: p.footer || undefined,
-        sections: p.sections,
         contextMessageId,
       });
       return result.messageId;
@@ -523,7 +563,15 @@ export async function sendMessageToConversation(
       : null;
   const templateButtonsPayload =
     messageType === 'template'
-      ? templatePreviewPayload(templateRow, renderedTemplateBody ?? contentText)
+      ? templatePreviewPayload(
+          templateRow,
+          renderedTemplateBody ?? contentText,
+          structuredTemplateParams,
+        )
+      : null;
+  const templateMediaUrl =
+    messageType === 'template'
+      ? templateHeaderMediaUrl(templateRow, structuredTemplateParams)
       : null;
 
   const { data: messageRecord, error: msgError } = await db
@@ -533,7 +581,7 @@ export async function sendMessageToConversation(
       sender_type: 'agent',
       content_type: messageType,
       content_text: interactiveBody ?? renderedTemplateBody ?? contentText ?? null,
-      media_url: mediaUrl || null,
+      media_url: templateMediaUrl || mediaUrl || null,
       template_name: templateName || null,
       interactive_payload:
         messageType === 'interactive'

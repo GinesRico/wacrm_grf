@@ -1425,6 +1425,33 @@ function PreviewTemplateActions({
   );
 }
 
+function mergePreviewTemplatePayload(
+  payload?: InteractiveMessagePayload | null,
+  fallback?: InteractiveMessagePayload | null,
+) {
+  if (!payload) return fallback ?? null;
+  if (
+    payload.kind !== "buttons" ||
+    fallback?.kind !== "buttons" ||
+    payload.buttons.some((button) => button.url)
+  ) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    footer: payload.footer ?? fallback.footer,
+    buttons: payload.buttons.map((button, index) => ({
+      ...fallback.buttons[index],
+      ...button,
+      type: button.type ?? fallback.buttons[index]?.type,
+      url: button.url ?? fallback.buttons[index]?.url,
+      example: button.example ?? fallback.buttons[index]?.example,
+      phone_number: button.phone_number ?? fallback.buttons[index]?.phone_number,
+    })),
+  } satisfies InteractiveMessagePayload;
+}
+
 function PreviewMessageBubble({
   message,
   templateFallbackPayload,
@@ -1434,7 +1461,10 @@ function PreviewMessageBubble({
 }) {
   const tBubble = useTranslations("Inbox.bubble");
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
-  const templatePayload = message.interactive_payload ?? templateFallbackPayload;
+  const templatePayload = mergePreviewTemplatePayload(
+    message.interactive_payload,
+    templateFallbackPayload,
+  );
   const isDeleted = Boolean(message.deleted_at);
   const fallback =
     message.content_type === "image"
@@ -1483,6 +1513,16 @@ function PreviewMessageBubble({
               >
                 <Forward className="size-3" />
                 {tBubble("forwarded")}
+              </div>
+            ) : null}
+            {message.content_type === "template" && message.media_url ? (
+              <div className="mb-2 overflow-hidden rounded-md bg-muted">
+                {/* eslint-disable-next-line @next/next/no-img-element -- Template header media uses dynamic public URLs. */}
+                <img
+                  src={message.media_url}
+                  alt={tBubble("sharedImageAlt")}
+                  className="max-h-52 w-full object-contain"
+                />
               </div>
             ) : null}
             <p className="whitespace-pre-wrap break-words">

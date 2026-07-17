@@ -19,12 +19,14 @@ import {
   Video,
   Mic,
   X,
+  Pencil,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
+import { ContactDetailView } from "@/components/contacts/contact-detail-view";
 
 type ContactSidebarTab = "info" | "starred" | "media";
 
@@ -96,9 +98,17 @@ export function ContactSidebar({
   const [mediaMessages, setMediaMessages] = useState<Message[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  const [editingOpen, setEditingOpen] = useState(false);
+  const [localContact, setLocalContact] = useState<Contact | null>(contact);
+
+  useEffect(() => {
+    setLocalContact(contact);
+  }, [contact]);
+
+  const displayedContact = localContact ?? contact;
 
   const fetchContactData = useCallback(async () => {
-    if (!contact) return;
+    if (!displayedContact) return;
 
     const supabase = createClient();
     const mediaTypes = Array.from(MEDIA_TYPES);
@@ -107,17 +117,17 @@ export function ContactSidebar({
       supabase
         .from("deals")
         .select("*, stage:pipeline_stages(*)")
-        .eq("contact_id", contact.id)
+        .eq("contact_id", displayedContact.id)
         .order("created_at", { ascending: false }),
       supabase
         .from("contact_notes")
         .select("*")
-        .eq("contact_id", contact.id)
+        .eq("contact_id", displayedContact.id)
         .order("created_at", { ascending: false }),
       supabase
         .from("contact_tags")
         .select("id, tag_id, tags(*)")
-        .eq("contact_id", contact.id),
+        .eq("contact_id", displayedContact.id),
       conversation
         ? supabase
             .from("messages")
@@ -150,22 +160,36 @@ export function ContactSidebar({
     }
     if (starredRes.data) setStarredMessages((starredRes.data as Message[]) ?? []);
     if (mediaRes.data) setMediaMessages((mediaRes.data as Message[]) ?? []);
-  }, [contact, conversation]);
+  }, [displayedContact, conversation]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchContactData();
   }, [fetchContactData]);
 
   const handleCopyPhone = useCallback(async () => {
-    if (!contact?.phone) return;
-    await navigator.clipboard.writeText(contact.phone);
+    if (!displayedContact?.phone) return;
+    await navigator.clipboard.writeText(displayedContact.phone);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  }, [contact]);
+  }, [displayedContact]);
+
+  const refreshContactAfterEdit = useCallback(async () => {
+    if (!displayedContact) return;
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("contacts")
+      .select("*")
+      .eq("id", displayedContact.id)
+      .single();
+
+    if (data) {
+      setLocalContact(data as Contact);
+    }
+    await fetchContactData();
+  }, [displayedContact, fetchContactData]);
 
   const handleAddNote = useCallback(async () => {
-    if (!contact || !newNote.trim()) return;
+    if (!displayedContact || !newNote.trim()) return;
     if (!accountId) return;
     setAddingNote(true);
 
@@ -178,7 +202,7 @@ export function ContactSidebar({
     const { data, error } = await supabase
       .from("contact_notes")
       .insert({
-        contact_id: contact.id,
+        contact_id: displayedContact.id,
         account_id: accountId,
         user_id: user?.id,
         note_text: newNote.trim(),
@@ -191,7 +215,7 @@ export function ContactSidebar({
       setNewNote("");
     }
     setAddingNote(false);
-  }, [contact, newNote, accountId]);
+  }, [displayedContact, newNote, accountId]);
 
   const displayedStarredMessages = useMemo(
     () =>
@@ -213,7 +237,7 @@ export function ContactSidebar({
     [liveMessages, mediaMessages],
   );
 
-  if (!contact) {
+  if (!displayedContact) {
     return (
       <div className="flex h-full w-72 items-center justify-center border-l border-border bg-card">
         <p className="text-sm text-muted-foreground">{tThread("selectConversation")}</p>
@@ -221,7 +245,7 @@ export function ContactSidebar({
     );
   }
 
-  const displayName = contact.name || contact.phone;
+  const displayName = displayedContact.name || displayedContact.phone;
   const initials = displayName.charAt(0).toUpperCase();
 
   const tabs: Array<{
@@ -235,21 +259,33 @@ export function ContactSidebar({
   ];
 
   return (
+    <>
     <div className="flex h-full w-72 flex-col border-l border-border bg-card">
       <div className="border-b border-border bg-card">
         <div className="flex items-center justify-between gap-2 px-4 py-3">
           <div className="text-sm font-semibold text-foreground">
             {tSidebar("contactDetails")}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            title={tSidebar("closeDetails")}
-            aria-label={tSidebar("closeDetails")}
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setEditingOpen(true)}
+              title={tSidebar("editContact")}
+              aria-label={tSidebar("editContact")}
+              className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              title={tSidebar("closeDetails")}
+              aria-label={tSidebar("closeDetails")}
+              className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-3">
           {tabs.map((tab) => {
@@ -282,10 +318,10 @@ export function ContactSidebar({
             <div className="rounded-lg border border-border bg-background p-4">
               <div className="flex flex-col items-center text-center">
                 <div className="flex h-28 w-28 items-center justify-center rounded-full bg-muted text-xl font-semibold text-foreground">
-                  {contact.avatar_url ? (
+                  {displayedContact.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={contact.avatar_url}
+                      src={displayedContact.avatar_url}
                       alt={displayName}
                       className="h-28 w-28 rounded-full object-cover"
                     />
@@ -296,14 +332,14 @@ export function ContactSidebar({
                 <h3 className="mt-3 text-sm font-semibold text-foreground">
                   {displayName}
                 </h3>
-                {contact.company && (
-                  <p className="text-xs text-muted-foreground">{contact.company}</p>
+                {displayedContact.company && (
+                  <p className="text-xs text-muted-foreground">{displayedContact.company}</p>
                 )}
                 <button
                   onClick={handleCopyPhone}
                   className="mt-2 inline-flex items-center gap-1 text-sm text-primary underline-offset-2 hover:underline"
                 >
-                  {contact.phone}
+                  {displayedContact.phone}
                   {copied ? (
                     <Check className="h-3 w-3" />
                   ) : (
@@ -311,10 +347,10 @@ export function ContactSidebar({
                   )}
                 </button>
               </div>
-              {contact.email && (
+              {displayedContact.email && (
                 <div className="mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
                   <Mail className="h-4 w-4 text-muted-foreground" />
-                  <span className="truncate">{contact.email}</span>
+                  <span className="truncate">{displayedContact.email}</span>
                 </div>
               )}
             </div>
@@ -426,6 +462,13 @@ export function ContactSidebar({
         )}
       </ScrollArea>
     </div>
+    <ContactDetailView
+      open={editingOpen}
+      onOpenChange={setEditingOpen}
+      contactId={displayedContact.id}
+      onUpdated={() => void refreshContactAfterEdit()}
+    />
+    </>
   );
 }
 

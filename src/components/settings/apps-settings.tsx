@@ -31,18 +31,27 @@ interface AppsResponse {
         base_url?: string;
         auth_header?: "authorization_bearer" | "x_api_key";
         default_message?: string;
-        delivery_mode?: "text" | "template";
+        delivery_mode?: "text" | "template" | "cta_url";
+        cta_button_label?: string;
+        cta_url_template?: string;
         template_name?: string;
         template_language?: string;
         template_body_params?: Record<string, PaymentTemplateValueSource>;
         template_button_params?: Record<string, PaymentTemplateValueSource>;
         iframe_url?: string;
         public_booking_url?: string;
-        default_send_mode?: "booking_link" | "interactive_list";
+        default_send_mode?: "booking_link" | "interactive_list" | "cta_url";
         default_days_ahead?: number;
         duracion?: number;
         timezone?: string;
         default_service?: string;
+        list_header?: string;
+        list_body?: string;
+        list_footer?: string;
+        list_button_label?: string;
+        list_section_title?: string;
+        list_row_title?: string;
+        list_row_description?: string;
       };
     } | null;
   }>;
@@ -65,10 +74,25 @@ type PaymentTemplateValueSource =
 
 const DEFAULT_BASE_URL = "https://pagos.arvera.es/api";
 const DEFAULT_MESSAGE = "Aqui tienes tu enlace de pago: {{payment_url}}";
+const DEFAULT_PAYMENT_CTA_MESSAGE = "Aqui tienes tu enlace de pago.";
+const DEFAULT_PAYMENT_CTA_BUTTON = "Pagar ahora";
+const DEFAULT_PAYMENT_CTA_URL = "{{payment_url}}";
 const APPOINTMENTS_DEFAULT_BASE_URL = "https://citas.arvera.es";
 const APPOINTMENTS_DEFAULT_IFRAME_URL = "https://citas.arvera.es/index.html";
 const APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL = "https://citas.arvera.es/reservas.html";
 const APPOINTMENTS_DEFAULT_MESSAGE = "{{mensaje}}";
+const APPOINTMENTS_DEFAULT_CTA_MESSAGE =
+  "*Citas disponibles para {{fecha_texto}}*\n\nHoras libres:\n{{slots}}\n\nPulsa el boton para reservar.";
+const APPOINTMENTS_DEFAULT_CTA_BUTTON = "Reservar cita";
+const APPOINTMENTS_DEFAULT_CTA_URL = "{{short_url}}";
+const APPOINTMENTS_DEFAULT_LIST_HEADER = "Citas disponibles para {{dates_short}}";
+const APPOINTMENTS_DEFAULT_LIST_BODY =
+  "Haz click en el boton de abajo y selecciona una hora para agendar tu cita de {{service}}";
+const APPOINTMENTS_DEFAULT_LIST_FOOTER = "Autorecambios Vera S.L";
+const APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL = "Ver disponibles";
+const APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE = "{{weekday_upper}} {{day}} DE {{month_upper}}";
+const APPOINTMENTS_DEFAULT_LIST_ROW_TITLE = "{{time}}";
+const APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION = "{{service}}";
 const TEMPLATE_VALUE_SOURCES: Array<{
   value: PaymentTemplateValueSource;
   label: string;
@@ -93,7 +117,11 @@ export function AppsSettings() {
   const [authHeader, setAuthHeader] =
     useState<"authorization_bearer" | "x_api_key">("authorization_bearer");
   const [defaultMessage, setDefaultMessage] = useState(DEFAULT_MESSAGE);
-  const [deliveryMode, setDeliveryMode] = useState<"text" | "template">("text");
+  const [deliveryMode, setDeliveryMode] = useState<"text" | "template" | "cta_url">("text");
+  const [paymentCtaButtonLabel, setPaymentCtaButtonLabel] =
+    useState(DEFAULT_PAYMENT_CTA_BUTTON);
+  const [paymentCtaUrlTemplate, setPaymentCtaUrlTemplate] =
+    useState(DEFAULT_PAYMENT_CTA_URL);
   const [templateValue, setTemplateValue] = useState("");
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [bodyParamMap, setBodyParamMap] = useState<
@@ -120,6 +148,35 @@ export function AppsSettings() {
   const [appointmentsMessage, setAppointmentsMessage] = useState(
     APPOINTMENTS_DEFAULT_MESSAGE,
   );
+  const [appointmentsSendMode, setAppointmentsSendMode] =
+    useState<"booking_link" | "interactive_list" | "cta_url">("booking_link");
+  const [appointmentsCtaButtonLabel, setAppointmentsCtaButtonLabel] = useState(
+    APPOINTMENTS_DEFAULT_CTA_BUTTON,
+  );
+  const [appointmentsCtaUrlTemplate, setAppointmentsCtaUrlTemplate] = useState(
+    APPOINTMENTS_DEFAULT_CTA_URL,
+  );
+  const [appointmentsListHeader, setAppointmentsListHeader] = useState(
+    APPOINTMENTS_DEFAULT_LIST_HEADER,
+  );
+  const [appointmentsListBody, setAppointmentsListBody] = useState(
+    APPOINTMENTS_DEFAULT_LIST_BODY,
+  );
+  const [appointmentsListFooter, setAppointmentsListFooter] = useState(
+    APPOINTMENTS_DEFAULT_LIST_FOOTER,
+  );
+  const [appointmentsListButtonLabel, setAppointmentsListButtonLabel] = useState(
+    APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
+  );
+  const [appointmentsListSectionTitle, setAppointmentsListSectionTitle] = useState(
+    APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
+  );
+  const [appointmentsListRowTitle, setAppointmentsListRowTitle] = useState(
+    APPOINTMENTS_DEFAULT_LIST_ROW_TITLE,
+  );
+  const [appointmentsListRowDescription, setAppointmentsListRowDescription] = useState(
+    APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION,
+  );
   const [appointmentsStatus, setAppointmentsStatus] = useState("not_configured");
   const [appointmentsLastError, setAppointmentsLastError] = useState<string | null>(null);
   const [appointmentsWebhookUrl, setAppointmentsWebhookUrl] = useState<string | null>(null);
@@ -140,8 +197,21 @@ export function AppsSettings() {
       setLastError(conn?.last_error ?? null);
       setBaseUrl(conn?.config?.base_url ?? DEFAULT_BASE_URL);
       setAuthHeader(conn?.config?.auth_header ?? "authorization_bearer");
-      setDefaultMessage(conn?.config?.default_message ?? DEFAULT_MESSAGE);
-      setDeliveryMode(conn?.config?.delivery_mode === "template" ? "template" : "text");
+      const loadedDeliveryMode =
+        conn?.config?.delivery_mode === "template" || conn?.config?.delivery_mode === "cta_url"
+          ? conn.config.delivery_mode
+          : "text";
+      setDefaultMessage(
+        conn?.config?.default_message ??
+          (loadedDeliveryMode === "cta_url" ? DEFAULT_PAYMENT_CTA_MESSAGE : DEFAULT_MESSAGE),
+      );
+      setDeliveryMode(loadedDeliveryMode);
+      setPaymentCtaButtonLabel(
+        conn?.config?.cta_button_label ?? DEFAULT_PAYMENT_CTA_BUTTON,
+      );
+      setPaymentCtaUrlTemplate(
+        conn?.config?.cta_url_template ?? DEFAULT_PAYMENT_CTA_URL,
+      );
       setTemplateValue(
         conn?.config?.template_name
           ? `${conn.config.template_name}::${conn.config.template_language ?? "en_US"}`
@@ -172,6 +242,39 @@ export function AppsSettings() {
       setAppointmentsService(appointmentsConn?.config?.default_service ?? "Cita taller");
       setAppointmentsMessage(
         appointmentsConn?.config?.default_message ?? APPOINTMENTS_DEFAULT_MESSAGE,
+      );
+      setAppointmentsSendMode(
+        appointmentsConn?.config?.default_send_mode === "interactive_list" ||
+          appointmentsConn?.config?.default_send_mode === "cta_url"
+          ? appointmentsConn.config.default_send_mode
+          : "booking_link",
+      );
+      setAppointmentsCtaButtonLabel(
+        appointmentsConn?.config?.cta_button_label ?? APPOINTMENTS_DEFAULT_CTA_BUTTON,
+      );
+      setAppointmentsCtaUrlTemplate(
+        appointmentsConn?.config?.cta_url_template ?? APPOINTMENTS_DEFAULT_CTA_URL,
+      );
+      setAppointmentsListHeader(
+        appointmentsConn?.config?.list_header ?? APPOINTMENTS_DEFAULT_LIST_HEADER,
+      );
+      setAppointmentsListBody(
+        appointmentsConn?.config?.list_body ?? APPOINTMENTS_DEFAULT_LIST_BODY,
+      );
+      setAppointmentsListFooter(
+        appointmentsConn?.config?.list_footer ?? APPOINTMENTS_DEFAULT_LIST_FOOTER,
+      );
+      setAppointmentsListButtonLabel(
+        appointmentsConn?.config?.list_button_label ?? APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
+      );
+      setAppointmentsListSectionTitle(
+        appointmentsConn?.config?.list_section_title ?? APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
+      );
+      setAppointmentsListRowTitle(
+        appointmentsConn?.config?.list_row_title ?? APPOINTMENTS_DEFAULT_LIST_ROW_TITLE,
+      );
+      setAppointmentsListRowDescription(
+        appointmentsConn?.config?.list_row_description ?? APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION,
       );
       const appointmentsRes = await fetch(
         "/api/integrations/connections/arvera-appointments",
@@ -283,6 +386,8 @@ export function AppsSettings() {
           auth_header: authHeader,
           default_message: defaultMessage,
           delivery_mode: deliveryMode,
+          cta_button_label: deliveryMode === "cta_url" ? paymentCtaButtonLabel : undefined,
+          cta_url_template: deliveryMode === "cta_url" ? paymentCtaUrlTemplate : undefined,
           template_name: deliveryMode === "template" ? templateName : undefined,
           template_language:
             deliveryMode === "template" ? templateLanguage || "en_US" : undefined,
@@ -323,12 +428,23 @@ export function AppsSettings() {
           api_token: appointmentsApiToken || undefined,
           iframe_url: appointmentsIframeUrl,
           public_booking_url: appointmentsPublicBookingUrl,
-          default_send_mode: "booking_link",
+          default_send_mode: appointmentsSendMode,
           default_days_ahead: appointmentsDaysAhead,
           duracion: appointmentsDuration,
           timezone: appointmentsTimezone,
           default_service: appointmentsService,
           default_message: appointmentsMessage,
+          cta_button_label:
+            appointmentsSendMode === "cta_url" ? appointmentsCtaButtonLabel : undefined,
+          cta_url_template:
+            appointmentsSendMode === "cta_url" ? appointmentsCtaUrlTemplate : undefined,
+          list_header: appointmentsListHeader,
+          list_body: appointmentsListBody,
+          list_footer: appointmentsListFooter,
+          list_button_label: appointmentsListButtonLabel,
+          list_section_title: appointmentsListSectionTitle,
+          list_row_title: appointmentsListRowTitle,
+          list_row_description: appointmentsListRowDescription,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -434,12 +550,20 @@ export function AppsSettings() {
                 <Label>Forma de envio</Label>
                 <select
                   value={deliveryMode}
-                  onChange={(e) =>
-                    setDeliveryMode(e.target.value === "template" ? "template" : "text")
-                  }
+                  onChange={(e) => {
+                    const mode =
+                      e.target.value === "template" || e.target.value === "cta_url"
+                        ? e.target.value
+                        : "text";
+                    setDeliveryMode(mode);
+                    if (mode === "cta_url" && defaultMessage === DEFAULT_MESSAGE) {
+                      setDefaultMessage(DEFAULT_PAYMENT_CTA_MESSAGE);
+                    }
+                  }}
                   className="h-10 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground"
                 >
                   <option value="text">Mensaje de texto</option>
+                  <option value="cta_url">Boton con URL</option>
                   <option value="template">Plantilla de Meta</option>
                 </select>
               </div>
@@ -533,7 +657,35 @@ export function AppsSettings() {
                     onChange={(e) => setDefaultMessage(e.target.value)}
                     className="min-h-24"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Variables: {"{{payment_url}}"}, {"{{order_id}}"}, {"{{amount_eur}}"},{" "}
+                    {"{{amount_eur_number}}"}, {"{{concept}}"}.
+                  </p>
                 </div>
+              )}
+              {deliveryMode === "cta_url" && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Texto del boton</Label>
+                    <Input
+                      value={paymentCtaButtonLabel}
+                      maxLength={20}
+                      onChange={(e) => setPaymentCtaButtonLabel(e.target.value)}
+                      placeholder={DEFAULT_PAYMENT_CTA_BUTTON}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>URL del boton</Label>
+                    <Input
+                      value={paymentCtaUrlTemplate}
+                      onChange={(e) => setPaymentCtaUrlTemplate(e.target.value)}
+                      placeholder={DEFAULT_PAYMENT_CTA_URL}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Usa {"{{payment_url}}"} para abrir el enlace de Redsys.
+                    </p>
+                  </div>
+                </>
               )}
             </div>
             <div className="flex justify-end">
@@ -655,6 +807,27 @@ export function AppsSettings() {
                 />
               </div>
               <div className="space-y-1.5 lg:col-span-2">
+                <Label>Forma de envio</Label>
+                <select
+                  value={appointmentsSendMode}
+                  onChange={(e) => {
+                    const mode =
+                      e.target.value === "interactive_list" || e.target.value === "cta_url"
+                        ? e.target.value
+                        : "booking_link";
+                    setAppointmentsSendMode(mode);
+                    if (mode === "cta_url" && appointmentsMessage === APPOINTMENTS_DEFAULT_MESSAGE) {
+                      setAppointmentsMessage(APPOINTMENTS_DEFAULT_CTA_MESSAGE);
+                    }
+                  }}
+                  className="h-10 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground"
+                >
+                  <option value="booking_link">Mensaje de texto</option>
+                  <option value="cta_url">Boton con URL</option>
+                  <option value="interactive_list">Lista interactiva</option>
+                </select>
+              </div>
+              <div className="space-y-1.5 lg:col-span-2">
                 <Label>Mensaje por defecto</Label>
                 <Textarea
                   value={appointmentsMessage}
@@ -663,9 +836,131 @@ export function AppsSettings() {
                 />
                 <p className="text-xs text-muted-foreground">
                   Variables: {"{{mensaje}}"}, {"{{short_url}}"}, {"{{fecha_texto}}"},{" "}
-                  {"{{service}}"}.
+                  {"{{service}}"}, {"{{slots}}"}.
                 </p>
               </div>
+              {appointmentsSendMode === "cta_url" && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label>Texto del boton</Label>
+                    <Input
+                      value={appointmentsCtaButtonLabel}
+                      maxLength={20}
+                      onChange={(e) => setAppointmentsCtaButtonLabel(e.target.value)}
+                      placeholder={APPOINTMENTS_DEFAULT_CTA_BUTTON}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>URL del boton</Label>
+                    <Input
+                      value={appointmentsCtaUrlTemplate}
+                      onChange={(e) => setAppointmentsCtaUrlTemplate(e.target.value)}
+                      placeholder={APPOINTMENTS_DEFAULT_CTA_URL}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Usa {"{{short_url}}"} para abrir el enlace de reserva generado.
+                    </p>
+                  </div>
+                </>
+              )}
+              {appointmentsSendMode === "interactive_list" && (
+                <div className="space-y-4 rounded-md border border-border bg-muted/30 p-4 lg:col-span-2">
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground">
+                      Plantilla de lista interactiva
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      Variables: {"{{service}}"}, {"{{dates_short}}"}, {"{{dates_text}}"},{" "}
+                      {"{{date}}"}, {"{{long_date}}"}, {"{{weekday}}"},{" "}
+                      {"{{weekday_upper}}"}, {"{{day}}"}, {"{{month}}"},{" "}
+                      {"{{month_upper}}"}, {"{{year}}"}, {"{{time}}"}, {"{{end}}"}.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label>Encabezado</Label>
+                      <Input
+                        value={appointmentsListHeader}
+                        maxLength={60}
+                        onChange={(e) => setAppointmentsListHeader(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_HEADER}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListHeader.length}/60
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Etiqueta del boton de lista</Label>
+                      <Input
+                        value={appointmentsListButtonLabel}
+                        maxLength={20}
+                        onChange={(e) => setAppointmentsListButtonLabel(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListButtonLabel.length}/20
+                      </p>
+                    </div>
+                    <div className="space-y-1.5 lg:col-span-2">
+                      <Label>Cuerpo</Label>
+                      <Textarea
+                        value={appointmentsListBody}
+                        maxLength={1024}
+                        onChange={(e) => setAppointmentsListBody(e.target.value)}
+                        className="min-h-20"
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_BODY}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListBody.length}/1024
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Pie</Label>
+                      <Input
+                        value={appointmentsListFooter}
+                        maxLength={60}
+                        onChange={(e) => setAppointmentsListFooter(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_FOOTER}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListFooter.length}/60
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Titulo de seccion por dia</Label>
+                      <Input
+                        value={appointmentsListSectionTitle}
+                        onChange={(e) => setAppointmentsListSectionTitle(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Titulo de fila</Label>
+                      <Input
+                        value={appointmentsListRowTitle}
+                        maxLength={24}
+                        onChange={(e) => setAppointmentsListRowTitle(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_ROW_TITLE}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListRowTitle.length}/24
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Descripcion de fila</Label>
+                      <Input
+                        value={appointmentsListRowDescription}
+                        maxLength={72}
+                        onChange={(e) => setAppointmentsListRowDescription(e.target.value)}
+                        placeholder={APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {appointmentsListRowDescription.length}/72
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="space-y-1.5 lg:col-span-2">
                 <Label>Webhook para Citas Web</Label>
                 <div className="flex gap-2">

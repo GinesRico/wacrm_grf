@@ -5,10 +5,12 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import {
   fetchAvailabilityMessage,
   fetchAvailabilitySlots,
+  type ArveraAppointmentsConfig,
   type AppointmentSendMode,
   renderAppointmentsMessage,
   requireActiveArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments';
+import { INTERACTIVE_LIMITS } from '@/lib/whatsapp/meta-api';
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
 import { sendMessageToConversation, SendMessageError } from '@/lib/whatsapp/send-message';
 
@@ -31,7 +33,10 @@ function parseRequestedDates(body: Record<string, unknown>): string[] {
 }
 
 function resolveSendMode(body: Record<string, unknown>, fallback: AppointmentSendMode) {
-  return body.send_mode === 'interactive_list' ? 'interactive_list' : fallback;
+  if (body.send_mode === 'interactive_list' || body.send_mode === 'cta_url') {
+    return body.send_mode;
+  }
+  return fallback;
 }
 
 function normalizeAppointmentService(value: unknown, fallback: string) {
@@ -58,6 +63,34 @@ function formatListDate(date: string) {
   return formatted.replace(/\.$/, '').slice(0, 24);
 }
 
+function capitalizeWords(value: string) {
+  return value
+    .split(' ')
+    .map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word))
+    .join(' ');
+}
+
+function dateTemplateValues(date: string) {
+  const parsed = new Date(`${date}T12:00:00`);
+  const weekday = new Intl.DateTimeFormat('es-ES', { weekday: 'long' }).format(parsed);
+  const month = new Intl.DateTimeFormat('es-ES', { month: 'long' }).format(parsed);
+  const day = new Intl.DateTimeFormat('es-ES', { day: '2-digit' }).format(parsed);
+  const year = new Intl.DateTimeFormat('es-ES', { year: 'numeric' }).format(parsed);
+  const long_date = formatLongListDate(date);
+  return {
+    date,
+    long_date,
+    weekday,
+    weekday_cap: capitalizeWords(weekday),
+    weekday_upper: weekday.toLocaleUpperCase('es-ES'),
+    day,
+    month,
+    month_cap: capitalizeWords(month),
+    month_upper: month.toLocaleUpperCase('es-ES'),
+    year,
+  };
+}
+
 function formatLongListDate(date: string) {
   const parsed = new Date(`${date}T12:00:00`);
   return new Intl.DateTimeFormat('es-ES', {
@@ -78,12 +111,60 @@ function formatSelectedDates(dates: string[]) {
   return `los dias ${visible}${rest}`;
 }
 
+function formatDateTitle(date: string) {
+  const parts = dateTemplateValues(date);
+  return `${parts.weekday_cap} ${parts.day} de ${parts.month_cap}`;
+}
+
+function formatSelectedDateTitles(dates: string[]) {
+  if (dates.length === 1) return formatDateTitle(dates[0]);
+  if (dates.length === 2) {
+    return `${formatDateTitle(dates[0])} y ${formatDateTitle(dates[1])}`;
+  }
+  const visible = dates.slice(0, 3).map(formatDateTitle).join(', ');
+  const rest = dates.length > 3 ? ` y ${dates.length - 3} mas` : '';
+  return `${visible}${rest}`;
+}
+
 function formatRowDate(date: string) {
   return formatLongListDate(date);
 }
 
+function renderTemplate(template: string, values: Record<string, unknown>) {
+  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
+    const value = values[String(key)];
+    return value == null ? '' : String(value);
+  });
+}
+
+function trimToLimit(value: string, limit: number) {
+  return value.trim().slice(0, limit);
+}
+
+function renderLimited(
+  template: string,
+  values: Record<string, unknown>,
+  fallback: string,
+  limit: number,
+) {
+  const rendered = trimToLimit(renderTemplate(template, values), limit);
+  return rendered || trimToLimit(fallback, limit);
+}
+
 function toRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function formatMessageSlots(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      const record = toRecord(item);
+      return extractTime(record.hora_inicio ?? record.startTime) ?? '';
+    })
+    .filter(Boolean)
+    .join(' • ');
 }
 
 function extractDate(value: unknown, fallback: string): string {
@@ -106,6 +187,7 @@ function buildInteractivePayload(
   dates: string[],
   service: string,
   audits: Array<{ date: string; slots?: unknown[] | null; short_url?: string | null }>,
+  config: ArveraAppointmentsConfig,
 ): InteractiveMessagePayload {
   const rows = audits.flatMap((audit) => {
     const slots = Array.isArray(audit.slots) ? audit.slots : [];
@@ -121,16 +203,44 @@ function buildInteractivePayload(
     .sort((a, b) => `${a.date} ${a.start}`.localeCompare(`${b.date} ${b.start}`));
 
   const visibleRows = rows.slice(0, MAX_INTERACTIVE_ROWS);
+  const commonValues = {
+    service,
+    dates: dates.map(formatLongListDate).join(', '),
+    dates_text: formatSelectedDates(dates),
+    dates_short: formatSelectedDateTitles(dates),
+    days_count: dates.length,
+  };
   const sections = dates
     .map((date) => {
       const dateRows = visibleRows.filter((slot) => slot.date === date);
       if (dateRows.length === 0) return null;
+      const sectionValues = { ...commonValues, ...dateTemplateValues(date) };
       return {
-        title: formatListDate(date),
+        title: renderLimited(config.list_section_title, sectionValues, formatListDate(date), 24),
         rows: dateRows.map((slot) => ({
           id: slotTimeId(slot.date, slot.start, slot.index),
-          title: slot.start,
-          description: service ? `${formatRowDate(slot.date)} - ${service}` : formatRowDate(slot.date),
+          title: renderLimited(
+            config.list_row_title,
+            {
+              ...sectionValues,
+              time: slot.start,
+              start: slot.start,
+              end: slot.end ?? '',
+            },
+            slot.start,
+            INTERACTIVE_LIMITS.listRowTitleMaxLength,
+          ),
+          description: renderLimited(
+            config.list_row_description,
+            {
+              ...sectionValues,
+              time: slot.start,
+              start: slot.start,
+              end: slot.end ?? '',
+            },
+            formatRowDate(slot.date),
+            INTERACTIVE_LIMITS.listRowDescriptionMaxLength,
+          ),
         })),
       };
     })
@@ -139,10 +249,25 @@ function buildInteractivePayload(
   if (sections.length === 0) {
     return {
       kind: 'list',
-      header: 'Citas disponibles',
+      header: renderLimited(
+        config.list_header,
+        commonValues,
+        'Citas disponibles',
+        INTERACTIVE_LIMITS.headerTextMaxLength,
+      ),
       body: 'No he encontrado horas libres para los dias seleccionados.',
-      footer: 'Puedes probar con otros dias.',
-      button_label: 'Ver citas',
+      footer: renderLimited(
+        config.list_footer,
+        commonValues,
+        '',
+        INTERACTIVE_LIMITS.footerMaxLength,
+      ),
+      button_label: renderLimited(
+        config.list_button_label,
+        commonValues,
+        'Ver citas',
+        INTERACTIVE_LIMITS.buttonTitleMaxLength,
+      ),
       sections: [
         {
           title: 'Sin huecos',
@@ -158,13 +283,37 @@ function buildInteractivePayload(
 
   return {
     kind: 'list',
-    header: 'Citas disponibles',
-    body:
-      rows.length > MAX_INTERACTIVE_ROWS
-        ? `Elige una hora para ${service} ${formatSelectedDates(dates)}. Mostramos las primeras 10 disponibles.`
-        : `Elige una hora para ${service} ${formatSelectedDates(dates)}.`,
-    footer: 'Responderas con la hora elegida.',
-    button_label: 'Ver citas',
+    header: renderLimited(
+      config.list_header,
+      commonValues,
+      'Citas disponibles',
+      INTERACTIVE_LIMITS.headerTextMaxLength,
+    ),
+    body: renderLimited(
+      config.list_body,
+      {
+        ...commonValues,
+        max_rows: MAX_INTERACTIVE_ROWS,
+        truncated_notice:
+          rows.length > MAX_INTERACTIVE_ROWS
+            ? ` Mostramos las primeras ${MAX_INTERACTIVE_ROWS} disponibles.`
+            : '',
+      },
+      `Elige una hora para ${service}.`,
+      INTERACTIVE_LIMITS.bodyMaxLength,
+    ),
+    footer: renderLimited(
+      config.list_footer,
+      commonValues,
+      '',
+      INTERACTIVE_LIMITS.footerMaxLength,
+    ),
+    button_label: renderLimited(
+      config.list_button_label,
+      commonValues,
+      'Ver citas',
+      INTERACTIVE_LIMITS.buttonTitleMaxLength,
+    ),
     sections,
   };
 }
@@ -230,6 +379,7 @@ export async function POST(request: Request) {
         short_url: messagePayload.short_url ?? '',
         fecha_texto: messagePayload.fecha_texto ?? '',
         service,
+        slots: formatMessageSlots(messagePayload.slots),
       });
 
       const availability = await fetchAvailabilitySlots({
@@ -274,6 +424,37 @@ export async function POST(request: Request) {
         sentMessages.push(sent);
       }
 
+      if (sendMode === 'cta_url') {
+        const buttonUrl = renderAppointmentsMessage(config.cta_url_template, {
+          mensaje: messagePayload.mensaje,
+          short_url: messagePayload.short_url ?? '',
+          fecha_texto: messagePayload.fecha_texto ?? '',
+          service,
+          slots: formatMessageSlots(messagePayload.slots),
+        }).trim();
+        const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
+          conversationId,
+          messageType: 'interactive',
+          interactivePayload: {
+            kind: 'cta_url',
+            body: text || messagePayload.mensaje,
+            button_label: config.cta_button_label,
+            url: buttonUrl || messagePayload.short_url || config.public_booking_url,
+          },
+        });
+        sentMessages.push(sent);
+      }
+
+      if (sendMode === 'interactive_list') {
+        const payload = buildInteractivePayload([date], service, [audit], config);
+        const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
+          conversationId,
+          messageType: 'interactive',
+          interactivePayload: payload,
+        });
+        sentMessages.push(sent);
+      }
+
       void runAutomationsForTrigger({
         accountId: ctx.accountId,
         triggerType: 'appointment_availability_sent',
@@ -289,16 +470,6 @@ export async function POST(request: Request) {
           },
         },
       });
-    }
-
-    if (sendMode === 'interactive_list') {
-      const payload = buildInteractivePayload(dates, service, audits);
-      const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
-        conversationId,
-        messageType: 'interactive',
-        interactivePayload: payload,
-      });
-      sentMessages.push(sent);
     }
 
     return NextResponse.json(
