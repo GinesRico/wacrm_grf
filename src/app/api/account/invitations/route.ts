@@ -27,6 +27,7 @@ import {
   inviteUrl,
 } from "@/lib/auth/invitations";
 import { isAccountRole } from "@/lib/auth/roles";
+import { assertCanInviteMember } from "@/lib/platform/entitlements";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -177,6 +178,7 @@ export async function POST(request: Request) {
       RATE_LIMITS.adminAction,
     );
     if (!limit.success) return rateLimitResponse(limit);
+    await assertCanInviteMember(ctx.supabase, ctx.accountId);
 
     const body = (await request.json().catch(() => null)) as
       | { role?: unknown; expiresInDays?: unknown; label?: unknown }

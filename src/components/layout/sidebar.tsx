@@ -134,7 +134,7 @@ export function Sidebar({
 }: SidebarProps) {
   const t = useTranslations("Sidebar");
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, signOut } = useAuth();
+  const { profile, profileLoading, account, accountRole, canEditSettings, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
@@ -296,7 +296,14 @@ export function Sidebar({
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <ul className="flex flex-col gap-1">
             {[
-              ...navItems,
+              ...navItems.filter((item) => {
+                if (item.href === "/flows" || item.href === "/automations") {
+                  return canEditSettings;
+                }
+                if (item.href === "/agents") return account?.allow_ai !== false;
+                if (item.href === "/broadcasts") return account?.allow_broadcasts !== false;
+                return true;
+              }),
               ...(appointmentsEnabled ? [appointmentsNavItem] : []),
               ...(paymentsEnabled ? [paymentsNavItem] : []),
             ].map((item) => {

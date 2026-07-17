@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { assertCanCreateWhatsAppLine } from '@/lib/platform/entitlements'
 import {
   registerPhoneNumber,
   subscribeWabaToApp,
@@ -190,6 +192,12 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
+    try {
+      await requireRole('admin')
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+
     const supabase = await createClient()
 
     const {
@@ -345,6 +353,11 @@ export async function POST(request: Request) {
     const sameNumber =
       existing?.phone_number_id === phone_number_id &&
       existing?.registered_at != null
+    try {
+      await assertCanCreateWhatsAppLine(supabase, accountId, existing?.id ?? null)
+    } catch (err) {
+      return toErrorResponse(err)
+    }
 
     // Step 1: register the phone number for inbound webhooks.
     //
@@ -539,6 +552,12 @@ export async function POST(request: Request) {
  */
 export async function DELETE(request: Request) {
   try {
+    try {
+      await requireRole('admin')
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+
     const supabase = await createClient()
 
     const {

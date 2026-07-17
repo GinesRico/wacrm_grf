@@ -16,6 +16,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
+import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
 interface BroadcastResult {
   phone: string
@@ -95,6 +96,14 @@ export async function POST(request: Request) {
         { error: 'Your profile is not linked to an account.' },
         { status: 403 },
       )
+    }
+    try {
+      await assertFeatureEnabled(supabase, accountId, 'broadcasts')
+    } catch (err) {
+      if (err instanceof Error) {
+        return NextResponse.json({ error: err.message }, { status: 403 })
+      }
+      throw err
     }
 
     const body = await request.json()

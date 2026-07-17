@@ -40,6 +40,16 @@ interface Profile {
 interface AccountSummary {
   id: string;
   name: string;
+  status: "trial" | "active" | "suspended" | "cancelled";
+  plan: string;
+  max_users: number;
+  max_flows: number;
+  max_automations: number;
+  max_whatsapp_lines: number;
+  allow_ai: boolean;
+  allow_api: boolean;
+  allow_broadcasts: boolean;
+  trial_ends_at: string | null;
   /** Default deal currency (ISO-4217). NOT NULL DEFAULT 'USD' in the
    *  DB (migration 021); narrowed to DEFAULT_CURRENCY when absent. */
   default_currency: string;
@@ -171,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .from("accounts")
             // default_currency added in migration 021; narrowed to the
             // USD fallback below for older schemas where it reads null.
-            .select("id, name, default_currency")
+            .select("id, name, default_currency, status, plan, max_users, max_flows, max_automations, max_whatsapp_lines, allow_ai, allow_api, allow_broadcasts, trial_ends_at")
             .eq("id", data.account_id)
             .maybeSingle();
           if (accountErr) {
@@ -185,6 +195,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             accountRow = {
               id: account.id,
               name: account.name,
+              status: account.status ?? "active",
+              plan: account.plan ?? "starter",
+              max_users: account.max_users ?? 3,
+              max_flows: account.max_flows ?? 5,
+              max_automations: account.max_automations ?? 5,
+              max_whatsapp_lines: account.max_whatsapp_lines ?? 1,
+              allow_ai: account.allow_ai ?? false,
+              allow_api: account.allow_api ?? false,
+              allow_broadcasts: account.allow_broadcasts ?? true,
+              trial_ends_at: account.trial_ends_at ?? null,
               default_currency: account.default_currency ?? DEFAULT_CURRENCY,
             };
           }

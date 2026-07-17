@@ -4,6 +4,7 @@ import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
 import { AiError, type AiProvider } from '@/lib/ai/types'
+import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
 /**
  * POST /api/ai/test  (admin+)
@@ -17,6 +18,7 @@ import { AiError, type AiProvider } from '@/lib/ai/types'
 export async function POST(request: Request) {
   try {
     const { supabase, accountId, userId } = await requireRole('admin')
+    await assertFeatureEnabled(supabase, accountId, 'ai')
 
     const limit = checkRateLimit(`ai-test:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)

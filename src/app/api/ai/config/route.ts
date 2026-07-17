@@ -9,6 +9,7 @@ import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
+import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -70,6 +71,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const { supabase, accountId, userId } = await requireRole('admin')
+    await assertFeatureEnabled(supabase, accountId, 'ai')
 
     const limit = checkRateLimit(`ai-config:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
@@ -258,6 +260,7 @@ export async function POST(request: Request) {
 export async function DELETE() {
   try {
     const { supabase, accountId } = await requireRole('admin')
+    await assertFeatureEnabled(supabase, accountId, 'ai')
     const { error } = await supabase
       .from('ai_configs')
       .delete()

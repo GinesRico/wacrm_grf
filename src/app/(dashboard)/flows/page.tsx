@@ -20,6 +20,7 @@ import {
 
 import { useTranslations } from "next-intl";
 import { useCan } from "@/hooks/use-can";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
@@ -85,7 +86,8 @@ const TEMPLATE_ICONS = {
 
 export default function FlowsPage() {
   const router = useRouter();
-  const canCreate = useCan("send-messages");
+  const canCreate = useCan("edit-settings");
+  const { profileLoading } = useAuth();
   const t = useTranslations("Flows.list");
   const { confirm, confirmDialog } = useAppConfirm();
   const [flows, setFlows] = useState<FlowRow[]>([]);
@@ -203,6 +205,17 @@ export default function FlowsPage() {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!profileLoading && !canCreate) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-center">
+        <div>
+          <h1 className="text-base font-medium text-foreground">{t("title")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">This section is only available to account admins.</p>
+        </div>
       </div>
     );
   }

@@ -8,6 +8,7 @@ import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit
 import { loadEmbeddingsKey } from '@/lib/ai/config'
 import { ingestDocument } from '@/lib/ai/knowledge'
 import { AiError } from '@/lib/ai/types'
+import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -42,6 +43,7 @@ export async function GET(_request: Request, { params }: Params) {
 export async function PATCH(request: Request, { params }: Params) {
   try {
     const { supabase, accountId, userId } = await requireRole('admin')
+    await assertFeatureEnabled(supabase, accountId, 'ai')
     const limit = checkRateLimit(`ai-kb:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
 
@@ -115,6 +117,7 @@ export async function PATCH(request: Request, { params }: Params) {
 export async function DELETE(_request: Request, { params }: Params) {
   try {
     const { supabase, accountId } = await requireRole('admin')
+    await assertFeatureEnabled(supabase, accountId, 'ai')
     const { id } = await params
     const { error } = await supabase
       .from('ai_knowledge_documents')

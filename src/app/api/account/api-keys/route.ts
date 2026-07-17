@@ -31,6 +31,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import { assertFeatureEnabled } from '@/lib/platform/entitlements';
 
 const MAX_NAME_LEN = 80;
 // Hard ceiling on caller-supplied expiry (1 year), mirroring the
@@ -71,6 +72,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const ctx = await requireRole('admin');
+    await assertFeatureEnabled(ctx.supabase, ctx.accountId, 'api');
 
     const limit = checkRateLimit(
       `admin:apiKeyCreate:${ctx.userId}`,

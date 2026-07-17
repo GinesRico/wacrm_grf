@@ -87,8 +87,21 @@ export interface AccountContext {
   accountId: string;
   /** Caller's role within their account. */
   role: AccountRole;
-  /** Lightweight account meta — id + name. */
-  account: { id: string; name: string };
+  /** Lightweight account meta plus SaaS entitlements. */
+  account: {
+    id: string;
+    name: string;
+    status?: string;
+    plan?: string;
+    max_users?: number;
+    max_flows?: number;
+    max_automations?: number;
+    max_whatsapp_lines?: number;
+    allow_ai?: boolean;
+    allow_api?: boolean;
+    allow_broadcasts?: boolean;
+    trial_ends_at?: string | null;
+  };
 }
 
 /**
@@ -149,7 +162,7 @@ export async function getCurrentAccount(): Promise<AccountContext> {
   // RLS, so it stays robust against cache staleness and older schemas.
   const { data: account, error: accountErr } = await supabase
     .from("accounts")
-    .select("id, name")
+    .select("id, name, status, plan, max_users, max_flows, max_automations, max_whatsapp_lines, allow_ai, allow_api, allow_broadcasts, trial_ends_at")
     .eq("id", data.account_id)
     .maybeSingle();
 
@@ -168,7 +181,20 @@ export async function getCurrentAccount(): Promise<AccountContext> {
     userId: user.id,
     accountId: data.account_id,
     role: data.account_role,
-    account: { id: account.id, name: account.name },
+    account: {
+      id: account.id,
+      name: account.name,
+      status: account.status,
+      plan: account.plan,
+      max_users: account.max_users,
+      max_flows: account.max_flows,
+      max_automations: account.max_automations,
+      max_whatsapp_lines: account.max_whatsapp_lines,
+      allow_ai: account.allow_ai,
+      allow_api: account.allow_api,
+      allow_broadcasts: account.allow_broadcasts,
+      trial_ends_at: account.trial_ends_at,
+    },
   };
 }
 

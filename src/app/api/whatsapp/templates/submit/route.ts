@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config'
 import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
@@ -89,6 +90,12 @@ async function upsertTemplateRow(
  */
 export async function POST(request: Request) {
   try {
+    try {
+      await requireRole('admin')
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+
     const supabase = await createClient()
     const {
       data: { user },

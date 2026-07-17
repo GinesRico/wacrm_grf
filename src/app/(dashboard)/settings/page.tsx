@@ -28,7 +28,7 @@ import {
 export default function SettingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { defaultCurrency } = useAuth();
+  const { defaultCurrency, canEditSettings } = useAuth();
   const { mode } = useTheme();
   const t = useTranslations('Settings');
 
@@ -37,6 +37,24 @@ export default function SettingsPage() {
   // app sidebar/header working. Legacy tab values (tags, custom-fields)
   // resolve onto their new home; unknown/empty → the Overview landing.
   const section = resolveSection(searchParams.get('tab'));
+  const allowedSections: SettingsSection[] = canEditSettings
+    ? [
+        'overview',
+        'profile',
+        'security',
+        'appearance',
+        'whatsapp',
+        'departments',
+        'templates',
+        'quick-replies',
+        'apps',
+        'fields',
+        'deals',
+        'members',
+        'api',
+      ]
+    : ['overview', 'profile', 'security', 'appearance'];
+  const effectiveSection = allowedSections.includes(section) ? section : 'overview';
 
   const go = (next: SettingsSection) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -83,8 +101,8 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[236px_minmax(0,1fr)] lg:items-start">
-        <SettingsRail active={section} onSelect={go} hints={hints} />
-        <div className="min-w-0">{panel[section]}</div>
+        <SettingsRail active={effectiveSection} onSelect={go} hints={hints} allowedSections={allowedSections} />
+        <div className="min-w-0">{panel[effectiveSection]}</div>
       </div>
     </div>
   );

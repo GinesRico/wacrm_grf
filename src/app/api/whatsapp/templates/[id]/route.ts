@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config'
 import {
@@ -50,6 +51,12 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    try {
+      await requireRole('admin')
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+
     const { id } = await context.params
     if (!UUID_RE.test(id)) {
       return NextResponse.json(
@@ -232,6 +239,12 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
+    try {
+      await requireRole('admin')
+    } catch (err) {
+      return toErrorResponse(err)
+    }
+
     const { id } = await context.params
     if (!UUID_RE.test(id)) {
       return NextResponse.json(

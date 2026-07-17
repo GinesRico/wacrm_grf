@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { assertCanCreateAutomation } from '@/lib/platform/entitlements'
 
 export async function POST(
   _request: Request,
@@ -13,7 +14,7 @@ export async function POST(
   // (the service-role client below bypasses the agent-gated
   // automations_insert RLS).
   try {
-    await requireRole('agent')
+    await requireRole('admin')
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -33,6 +34,11 @@ export async function POST(
     .maybeSingle()
   if (origErr) return NextResponse.json({ error: origErr.message }, { status: 500 })
   if (!original) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  try {
+    await assertCanCreateAutomation(supabase, original.account_id as string)
+  } catch (err) {
+    return toErrorResponse(err)
+  }
 
   const { data: copy, error: copyErr } = await admin
     .from('automations')

@@ -8,6 +8,7 @@ import {
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
+import { assertCanCreateAutomation } from '@/lib/platform/entitlements'
 
 export async function GET() {
   const supabase = await createClient()
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
   // requires `agent`, but this route inserts via the service-role client
   // which bypasses RLS, so the role must be enforced here.
   try {
-    await requireRole('agent')
+    await requireRole('admin')
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -54,6 +55,11 @@ export async function POST(request: Request) {
       { error: 'Your profile is not linked to an account.' },
       { status: 403 },
     )
+  }
+  try {
+    await assertCanCreateAutomation(supabase, accountId)
+  } catch (err) {
+    return toErrorResponse(err)
   }
 
   const body = await request.json().catch(() => null)

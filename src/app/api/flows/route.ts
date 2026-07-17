@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
 import { getFlowTemplate } from '@/lib/flows/templates'
+import { assertCanCreateFlow } from '@/lib/platform/entitlements'
 
 /**
  * GET /api/flows — list the caller's flows.
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
   // `agent`, but this route inserts via the service-role client which
   // bypasses RLS, so the role must be enforced here.
   try {
-    await requireRole('agent')
+    await requireRole('admin')
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -75,6 +76,11 @@ export async function POST(request: Request) {
       { error: 'Your profile is not linked to an account.' },
       { status: 403 },
     )
+  }
+  try {
+    await assertCanCreateFlow(supabase, accountId)
+  } catch (err) {
+    return toErrorResponse(err)
   }
 
   const body = (await request.json().catch(() => null)) as
