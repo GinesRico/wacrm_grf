@@ -22,7 +22,6 @@ import { cn } from "@/lib/utils";
 // Remembers the agent's show/hide choice for the desktop contact panel
 // across reloads and sessions (device-scoped, like the theme prefs).
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
-const INBOX_RESYNC_INTERVAL_MS = 4_000;
 
 function conversationSortTime(conversation: Conversation) {
   return conversation.last_message_at ?? conversation.updated_at ?? "";
@@ -458,16 +457,6 @@ export default function InboxPage() {
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        setResyncToken((n) => n + 1);
-      }
-    }, INBOX_RESYNC_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
   }, []);
 
   /**
