@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
 
@@ -21,5 +22,23 @@ function getPool(): Pool {
   return globalThis.wacrmPgPool;
 }
 
-export const db = drizzle(getPool(), { schema });
+function createDb() {
+  return drizzle(getPool(), { schema });
+}
+
+type Database = NodePgDatabase<typeof schema>;
+
+let cachedDb: Database | undefined;
+
+export function getDb(): Database {
+  cachedDb ??= createDb();
+  return cachedDb;
+}
+
+export const db = new Proxy({} as Database, {
+  get(_target, property, receiver) {
+    const value = Reflect.get(getDb(), property, receiver);
+    return typeof value === "function" ? value.bind(getDb()) : value;
+  },
+});
 export type Db = typeof db;

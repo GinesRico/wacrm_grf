@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  matchesContactFilters,
-  normalizeConversation,
-} from "./conversations";
+import { matchesContactFilters } from "./contact-filters";
+import { normalizeConversation } from "./conversations";
 import type { Conversation } from "@/types";
 
 function makeConversation(

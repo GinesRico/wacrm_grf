@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { matchesContactFilters } from "@/lib/inbox/conversations";
+import { matchesContactFilters } from "@/lib/inbox/contact-filters";
 import type { InboxScope, InboxSubtab, InboxTab } from "@/lib/inbox/tickets";
 import { cn } from "@/lib/utils";
 import type {
