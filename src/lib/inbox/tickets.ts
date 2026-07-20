@@ -283,7 +283,7 @@ export async function listInboxConversations(
       ? conversations
       : conversations.filter(
           (conversation) =>
-            conversation.department_id != null &&
+            conversation.department_id == null ||
             departmentIds.includes(conversation.department_id),
         );
 
