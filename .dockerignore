@@ -1,0 +1,14 @@
+.git
+.next
+node_modules
+npm-debug.log
+pnpm-debug.log
+Dockerfile
+.dockerignore
+.env
+.env.*
+!.env.local.example
+coverage
+dist
+tmp
+temp
