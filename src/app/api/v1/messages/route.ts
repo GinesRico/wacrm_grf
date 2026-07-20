@@ -100,7 +100,7 @@ export async function POST(request: Request) {
     // steps share `SendMessageError`, so one catch maps the whole
     // pipeline to the envelope.
     const resolved = await resolveConversationByPhone(
-      ctx.supabase,
+      null,
       ctx.accountId,
       to,
       typeof body.name === 'string' ? body.name : null,
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
     );
 
     const result = await sendMessageToConversation(
-      ctx.supabase,
+      null,
       ctx.accountId,
       {
         conversationId: resolved.conversationId,

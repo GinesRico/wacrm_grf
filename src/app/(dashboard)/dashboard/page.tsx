@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback, useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
 import {
@@ -11,13 +10,6 @@ import {
   Send,
 } from 'lucide-react'
 
-import {
-  loadActivity,
-  loadConversationsSeries,
-  loadMetrics,
-  loadPipelineDonut,
-  loadResponseTime,
-} from '@/lib/dashboard/queries'
 import type {
   ActivityItem,
   ConversationsSeriesPoint,
@@ -64,42 +56,40 @@ export default function DashboardPage() {
   const [activity, setActivity] = useState<ActivityItem[] | null>(null)
   const [activityLoading, setActivityLoading] = useState(true)
 
-  const loadAll = useCallback(() => {
-    const db = createClient()
+  const loadAll = useCallback(async () => {
+    const res = await fetch('/api/dashboard/overview?range=30', {
+      cache: 'no-store',
+    })
+    const payload = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      console.error('[dashboard] overview failed:', payload.error)
+      setMetricsLoading(false)
+      setSeriesLoading(false)
+      setPipelineLoading(false)
+      setResponseTimeLoading(false)
+      setActivityLoading(false)
+      return
+    }
 
-    // Kick everything off in parallel. Each block has its own
-    // setState + finally so a slow query doesn't hold up faster
-    // sections — each widget shows its own skeleton independently.
-    void loadMetrics(db)
-      .then((m) => setMetrics(m))
-      .catch((err) => console.error('[dashboard] metrics failed:', err))
-      .finally(() => setMetricsLoading(false))
-
-    void loadConversationsSeries(db, 30)
-      .then((s) => setSeries((prev) => ({ ...prev, 30: s })))
-      .catch((err) => console.error('[dashboard] series failed:', err))
-      .finally(() => setSeriesLoading(false))
-
-    void loadPipelineDonut(db)
-      .then((p) => setPipeline(p))
-      .catch((err) => console.error('[dashboard] pipeline failed:', err))
-      .finally(() => setPipelineLoading(false))
-
-    void loadResponseTime(db)
-      .then((r) => setResponseTime(r))
-      .catch((err) => console.error('[dashboard] response time failed:', err))
-      .finally(() => setResponseTimeLoading(false))
-
-    // Fetch up to 50 so the biggest page-size option in the feed
-    // (50 rows) is already in memory — switching sizes then becomes
-    // a pure client-side slice with no extra round trip.
-    void loadActivity(db, 50)
-      .then((a) => setActivity(a))
-      .catch((err) => console.error('[dashboard] activity failed:', err))
-      .finally(() => setActivityLoading(false))
+    setMetrics((payload.metrics as MetricsBundle | undefined) ?? null)
+    setSeries((prev) => ({
+      ...prev,
+      30: (payload.series as ConversationsSeriesPoint[] | undefined) ?? [],
+    }))
+    setPipeline((payload.pipeline as PipelineDonutData | undefined) ?? null)
+    setResponseTime(
+      (payload.responseTime as ResponseTimeSummary | undefined) ?? null,
+    )
+    setActivity((payload.activity as ActivityItem[] | undefined) ?? [])
+    setMetricsLoading(false)
+    setSeriesLoading(false)
+    setPipelineLoading(false)
+    setResponseTimeLoading(false)
+    setActivityLoading(false)
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll()
   }, [loadAll])
 
@@ -112,9 +102,14 @@ export default function DashboardPage() {
       setRange(r)
       if (series[r] !== null) return
       setSeriesLoading(true)
-      const db = createClient()
-      loadConversationsSeries(db, r)
-        .then((s) => setSeries((prev) => ({ ...prev, [r]: s })))
+      fetch(`/api/dashboard/overview?range=${r}`, { cache: 'no-store' })
+        .then((res) => res.json())
+        .then((payload) =>
+          setSeries((prev) => ({
+            ...prev,
+            [r]: (payload.series as ConversationsSeriesPoint[] | undefined) ?? [],
+          })),
+        )
         .catch((err) => console.error('[dashboard] series failed:', err))
         .finally(() => setSeriesLoading(false))
     },

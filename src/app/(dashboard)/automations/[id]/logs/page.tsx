@@ -12,7 +12,6 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { createClient } from "@/lib/supabase/client"
 import type {
   Automation,
   AutomationLog,
@@ -39,30 +38,17 @@ export default function AutomationLogsPage({
   useEffect(() => {
     async function load() {
       try {
-        const supabase = createClient()
-        const [autRes, logRes] = await Promise.all([
-          supabase
-            .from("automations")
-            .select("*")
-            .eq("id", id)
-            .maybeSingle(),
-          supabase
-            .from("automation_logs")
-            .select("*, contact:contacts(id, name, phone)")
-            .eq("automation_id", id)
-            .order("created_at", { ascending: false })
-            .limit(100),
-        ])
-        if (autRes.error) throw autRes.error
-        if (logRes.error) throw logRes.error
-        setAutomation(autRes.data as Automation | null)
-        setLogs((logRes.data ?? []) as AutomationLog[])
+        const res = await fetch(`/api/automations/${id}/logs`)
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(body?.error ?? t("loadError"))
+        setAutomation(body.automation as Automation | null)
+        setLogs((body.logs ?? []) as AutomationLog[])
       } catch (err) {
         setError(err instanceof Error ? err.message : t("loadError"))
       }
     }
     load()
-  }, [id])
+  }, [id, t])
 
   if (error) {
     return (

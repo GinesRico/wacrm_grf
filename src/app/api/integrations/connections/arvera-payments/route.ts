@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import { and, eq } from 'drizzle-orm';
 
+import { db } from '@/db/client';
+import { integrationConnections } from '@/db/schema';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import {
   ARVERA_DEFAULT_BASE_URL,
@@ -24,33 +27,50 @@ const PAYMENT_TEMPLATE_VALUE_SOURCES = new Set<PaymentTemplateValueSource>([
   'phone',
 ]);
 
+function serializeConnection(row: typeof integrationConnections.$inferSelect) {
+  return {
+    id: row.id,
+    app_slug: row.appSlug,
+    enabled: row.enabled,
+    config: row.config,
+    status: row.status,
+    last_error: row.lastError,
+    last_checked_at: row.lastCheckedAt?.toISOString() ?? null,
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
 export async function GET() {
   try {
     const ctx = await requireRole('admin');
-    const { data, error } = await ctx.supabase
-      .from('integration_connections')
-      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at')
-      .eq('account_id', ctx.accountId)
-      .eq('app_slug', ARVERA_PAYMENTS_SLUG)
-      .maybeSingle();
-    if (error) {
-      return NextResponse.json({ error: 'Failed to load connection' }, { status: 500 });
-    }
+    const [data] = await db
+      .select()
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.accountId, ctx.accountId),
+          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG),
+        ),
+      )
+      .limit(1);
+
     return NextResponse.json({
-      connection: data ?? {
-        app_slug: ARVERA_PAYMENTS_SLUG,
-        enabled: false,
-        config: {
-          base_url: ARVERA_DEFAULT_BASE_URL,
-          auth_header: 'authorization_bearer',
-          default_message: ARVERA_DEFAULT_MESSAGE,
-          delivery_mode: 'text',
-          cta_button_label: ARVERA_DEFAULT_CTA_BUTTON_LABEL,
-          cta_url_template: ARVERA_DEFAULT_CTA_URL_TEMPLATE,
-        },
-        status: 'not_configured',
-        last_error: null,
-      },
+      connection: data
+        ? serializeConnection(data)
+        : {
+            app_slug: ARVERA_PAYMENTS_SLUG,
+            enabled: false,
+            config: {
+              base_url: ARVERA_DEFAULT_BASE_URL,
+              auth_header: 'authorization_bearer',
+              default_message: ARVERA_DEFAULT_MESSAGE,
+              delivery_mode: 'text',
+              cta_button_label: ARVERA_DEFAULT_CTA_BUTTON_LABEL,
+              cta_url_template: ARVERA_DEFAULT_CTA_URL_TEMPLATE,
+            },
+            status: 'not_configured',
+            last_error: null,
+          },
       has_api_key: Boolean(data),
     });
   } catch (err) {
@@ -133,49 +153,61 @@ export async function PUT(request: Request) {
     const apiKey = typeof body?.api_key === 'string' ? body.api_key.trim() : '';
     const enabled = body?.enabled === true;
 
-    const { data: existing } = await ctx.supabase
-      .from('integration_connections')
-      .select('encrypted_credentials')
-      .eq('account_id', ctx.accountId)
-      .eq('app_slug', ARVERA_PAYMENTS_SLUG)
-      .maybeSingle();
+    const [existing] = await db
+      .select({ encryptedCredentials: integrationConnections.encryptedCredentials })
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.accountId, ctx.accountId),
+          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG),
+        ),
+      )
+      .limit(1);
 
-    const encrypted_credentials = apiKey
+    const encryptedCredentials = apiKey
       ? encryptApiKey(apiKey)
-      : ((existing?.encrypted_credentials as Record<string, string> | undefined) ?? {});
+      : ((existing?.encryptedCredentials as Record<string, string> | undefined) ?? {});
 
-    if (enabled && !encrypted_credentials.api_key && !process.env.PAYMENT_LINKS_API_KEY) {
+    if (enabled && !encryptedCredentials.api_key && !process.env.PAYMENT_LINKS_API_KEY) {
       return NextResponse.json(
         { error: 'API key is required before enabling Pagos Arvera' },
         { status: 400 },
       );
     }
 
-    const { data, error } = await ctx.supabase
-      .from('integration_connections')
-      .upsert(
-        {
-          account_id: ctx.accountId,
-          app_slug: ARVERA_PAYMENTS_SLUG,
+    const [data] = await db
+      .insert(integrationConnections)
+      .values({
+        accountId: ctx.accountId,
+        appSlug: ARVERA_PAYMENTS_SLUG,
+        enabled,
+        encryptedCredentials,
+        config,
+        status: enabled ? 'active' : 'disabled',
+        lastError: null,
+        lastCheckedAt: new Date(),
+        createdBy: ctx.userId,
+      })
+      .onConflictDoUpdate({
+        target: [integrationConnections.accountId, integrationConnections.appSlug],
+        set: {
           enabled,
-          encrypted_credentials,
+          encryptedCredentials,
           config,
           status: enabled ? 'active' : 'disabled',
-          last_error: null,
-          last_checked_at: new Date().toISOString(),
-          created_by: ctx.userId,
+          lastError: null,
+          lastCheckedAt: new Date(),
+          createdBy: ctx.userId,
+          updatedAt: new Date(),
         },
-        { onConflict: 'account_id,app_slug' },
-      )
-      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at')
-      .single();
+      })
+      .returning();
 
-    if (error || !data) {
-      console.error('[arvera connection] save failed:', error);
+    if (!data) {
       return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
     }
 
-    return NextResponse.json({ connection: data, has_api_key: true });
+    return NextResponse.json({ connection: serializeConnection(data), has_api_key: true });
   } catch (err) {
     return toErrorResponse(err);
   }

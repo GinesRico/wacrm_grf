@@ -13,7 +13,6 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SettingsPanelHead } from "./settings-panel-head";
-import { createClient } from "@/lib/supabase/client";
 import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
 import type { MessageTemplate } from "@/types";
 
@@ -297,13 +296,13 @@ export function AppsSettings() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const supabase = createClient();
-      const { data } = await supabase
-        .from("message_templates")
-        .select("*")
-        .eq("status", "APPROVED")
-        .order("name");
-      if (!cancelled) setTemplates((data as MessageTemplate[] | null) ?? []);
+      const res = await fetch("/api/whatsapp/templates?status=APPROVED", {
+        cache: "no-store",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!cancelled) {
+        setTemplates((payload.templates as MessageTemplate[] | undefined) ?? []);
+      }
     })();
     return () => {
       cancelled = true;

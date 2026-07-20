@@ -20,7 +20,7 @@ const baseAccount: AccountEntitlements = {
   trial_ends_at: null,
 }
 
-function fakeSupabase({
+function fakePostgres({
   account = baseAccount,
   counts = {},
 }: {
@@ -48,8 +48,8 @@ function fakeSupabase({
   }
 }
 
-function fakeCountSupabase(args: Parameters<typeof fakeSupabase>[0]) {
-  const base = fakeSupabase(args)
+function fakeCountPostgres(args: Parameters<typeof fakePostgres>[0]) {
+  const base = fakePostgres(args)
   return {
     from(table: string) {
       if (table === 'accounts') return base.from(table)
@@ -65,20 +65,20 @@ function fakeCountSupabase(args: Parameters<typeof fakeSupabase>[0]) {
 describe('account entitlements', () => {
   it('blocks disabled features', async () => {
     await expect(
-      assertFeatureEnabled(fakeCountSupabase({}) as never, 'acct', 'ai'),
+      assertFeatureEnabled(fakeCountPostgres({}) as never, 'acct', 'ai'),
     ).rejects.toThrow(/not enabled/)
   })
 
   it('allows enabled features', async () => {
     await expect(
-      assertFeatureEnabled(fakeCountSupabase({}) as never, 'acct', 'broadcasts'),
+      assertFeatureEnabled(fakeCountPostgres({}) as never, 'acct', 'broadcasts'),
     ).resolves.toBeUndefined()
   })
 
   it('blocks flow creation at the configured limit', async () => {
     await expect(
       assertCanCreateFlow(
-        fakeCountSupabase({ counts: { flows: 2 } }) as never,
+        fakeCountPostgres({ counts: { flows: 2 } }) as never,
         'acct',
       ),
     ).rejects.toThrow(/Flow limit/)
@@ -87,7 +87,7 @@ describe('account entitlements', () => {
   it('blocks writes for suspended accounts', async () => {
     await expect(
       assertCanCreateFlow(
-        fakeCountSupabase({
+        fakeCountPostgres({
           account: { ...baseAccount, status: 'suspended' },
           counts: { flows: 0 },
         }) as never,

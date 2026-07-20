@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
-import { supabaseAdmin } from '@/lib/automations/admin-client';
+import { dbAdmin } from '@/lib/automations/admin-client';
 import {
   ARVERA_APPOINTMENTS_SLUG,
   resolveAppointmentsWebhookToken,
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const token = new URL(request.url).searchParams.get('token') ?? '';
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const db = supabaseAdmin();
+  const db = dbAdmin();
   const { data: connections, error: connErr } = await db
     .from('integration_connections')
     .select('*')
@@ -117,7 +117,7 @@ export async function POST(request: Request) {
 }
 
 async function findContactId(
-  db: ReturnType<typeof supabaseAdmin>,
+  db: ReturnType<typeof dbAdmin>,
   accountId: string,
   appointment: ArveraAppointmentRecord,
 ): Promise<string | null> {

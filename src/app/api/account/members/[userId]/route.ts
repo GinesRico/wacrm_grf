@@ -15,33 +15,18 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
-import type { PostgrestError } from "@supabase/supabase-js";
+import { and, eq, inArray } from "drizzle-orm";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import { db } from "@/db/client";
+import { crmAccounts, departmentMembers, departments, profiles } from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import { isAccountRole } from "@/lib/auth/roles";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
 import {
   checkRateLimit,
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
-
-// Map known SQLSTATEs from the RPCs (see migration 018) onto HTTP
-// statuses. The `error.code` field is the SQLSTATE; the `message`
-// is the human-readable RAISE message we put in the migration.
-function rpcErrorToResponse(err: PostgrestError): NextResponse {
-  if (err.code === "42501") {
-    return NextResponse.json({ error: err.message }, { status: 403 });
-  }
-  if (err.code === "22023") {
-    return NextResponse.json({ error: err.message }, { status: 400 });
-  }
-  console.error("[members route] unexpected RPC error:", err);
-  return NextResponse.json(
-    { error: "Failed to update member" },
-    { status: 500 },
-  );
-}
 
 async function validDepartmentIds(accountId: string, requested: unknown): Promise<string[]> {
   if (!Array.isArray(requested)) return [];
@@ -54,14 +39,11 @@ async function validDepartmentIds(accountId: string, requested: unknown): Promis
   );
   if (unique.length === 0) return [];
 
-  const { data, error } = await supabaseAdmin()
-    .from("departments")
-    .select("id")
-    .eq("account_id", accountId)
-    .in("id", unique);
-
-  if (error) throw error;
-  const allowed = new Set(((data ?? []) as { id: string }[]).map((row) => row.id));
+  const rows = await db
+    .select({ id: departments.id })
+    .from(departments)
+    .where(and(eq(departments.accountId, accountId), inArray(departments.id, unique)));
+  const allowed = new Set(rows.map((row) => row.id));
   return unique.filter((id) => allowed.has(id));
 }
 
@@ -70,7 +52,7 @@ export async function PATCH(
   { params }: { params: Promise<{ userId: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
     const limit = checkRateLimit(
       `admin:memberRole:${ctx.userId}`,
@@ -113,48 +95,65 @@ export async function PATCH(
       );
     }
 
-    const db = supabaseAdmin();
-
     if (hasRolePatch) {
-      const { error } = await ctx.supabase.rpc("set_member_role", {
-        p_user_id: userId,
-        p_new_role: role,
-      });
+      if (userId === ctx.userId) {
+        return NextResponse.json({ error: "Cannot change your own role" }, { status: 400 });
+      }
 
-      if (error) return rpcErrorToResponse(error);
+      const [member] = await db
+        .select({ accountId: profiles.accountId, accountRole: profiles.accountRole })
+        .from(profiles)
+        .where(eq(profiles.userId, userId))
+        .limit(1);
+
+      if (!member) return NextResponse.json({ error: "Target user not found" }, { status: 400 });
+      if (member.accountId !== ctx.accountId) {
+        return NextResponse.json(
+          { error: "Target user is not a member of your account" },
+          { status: 403 },
+        );
+      }
+      if (member.accountRole === "owner") {
+        return NextResponse.json(
+          { error: "Use transfer_account_ownership to demote an owner" },
+          { status: 400 },
+        );
+      }
+
+      await db
+        .update(profiles)
+        .set({ accountRole: role, updatedAt: new Date() })
+        .where(eq(profiles.userId, userId));
     }
 
     if (hasDepartmentPatch) {
-      const { data: member, error: memberError } = await db
-        .from("profiles")
-        .select("user_id")
-        .eq("account_id", ctx.accountId)
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (memberError) throw memberError;
+      const [member] = await db
+        .select({ userId: profiles.userId })
+        .from(profiles)
+        .where(and(eq(profiles.accountId, ctx.accountId), eq(profiles.userId, userId)))
+        .limit(1);
       if (!member) {
         return NextResponse.json({ error: "Member not found" }, { status: 404 });
       }
 
       const departmentIds = await validDepartmentIds(ctx.accountId, body?.department_ids);
-      const { error: deleteError } = await db
-        .from("department_members")
-        .delete()
-        .eq("account_id", ctx.accountId)
-        .eq("user_id", userId);
-      if (deleteError) throw deleteError;
+      await db
+        .delete(departmentMembers)
+        .where(
+          and(
+            eq(departmentMembers.accountId, ctx.accountId),
+            eq(departmentMembers.userId, userId),
+          ),
+        );
 
       if (departmentIds.length > 0) {
-        const { error: insertError } = await db
-          .from("department_members")
-          .insert(
-            departmentIds.map((departmentId) => ({
-              account_id: ctx.accountId,
-              department_id: departmentId,
-              user_id: userId,
-            })),
-          );
-        if (insertError) throw insertError;
+        await db.insert(departmentMembers).values(
+          departmentIds.map((departmentId) => ({
+            accountId: ctx.accountId,
+            departmentId,
+            userId,
+          })),
+        );
       }
     }
 
@@ -169,7 +168,7 @@ export async function DELETE(
   { params }: { params: Promise<{ userId: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
     const limit = checkRateLimit(
       `admin:memberRemove:${ctx.userId}`,
@@ -179,13 +178,62 @@ export async function DELETE(
 
     const { userId } = await params;
 
-    const { data, error } = await ctx.supabase.rpc("remove_account_member", {
-      p_user_id: userId,
+    if (userId === ctx.userId) {
+      return NextResponse.json(
+        { error: "Cannot remove yourself; transfer ownership or leave the account instead" },
+        { status: 400 },
+      );
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [target] = await tx
+        .select({
+          accountId: profiles.accountId,
+          accountRole: profiles.accountRole,
+          fullName: profiles.fullName,
+          email: profiles.email,
+        })
+        .from(profiles)
+        .where(eq(profiles.userId, userId))
+        .limit(1);
+
+      if (!target) return { error: "Target user not found", status: 400 as const };
+      if (target.accountId !== ctx.accountId) {
+        return { error: "Target user is not a member of your account", status: 403 as const };
+      }
+      if (target.accountRole === "owner") {
+        return { error: "Cannot remove the account owner; transfer ownership first", status: 400 as const };
+      }
+
+      const [newAccount] = await tx
+        .insert(crmAccounts)
+        .values({
+          name: target.fullName || target.email || "My account",
+          ownerUserId: userId,
+        })
+        .returning({ id: crmAccounts.id });
+
+      await tx
+        .delete(departmentMembers)
+        .where(and(eq(departmentMembers.accountId, ctx.accountId), eq(departmentMembers.userId, userId)));
+
+      await tx
+        .update(profiles)
+        .set({
+          accountId: newAccount.id,
+          accountRole: "owner",
+          updatedAt: new Date(),
+        })
+        .where(eq(profiles.userId, userId));
+
+      return { newPersonalAccountId: newAccount.id };
     });
 
-    if (error) return rpcErrorToResponse(error);
+    if ("error" in result) {
+      return NextResponse.json({ error: result.error }, { status: result.status });
+    }
 
-    return NextResponse.json({ ok: true, newPersonalAccountId: data });
+    return NextResponse.json({ ok: true, newPersonalAccountId: result.newPersonalAccountId });
   } catch (err) {
     return toErrorResponse(err);
   }

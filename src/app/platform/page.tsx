@@ -309,7 +309,7 @@ export default function PlatformPage() {
               <div className="border-b border-border p-4">
                 <h2 className="text-sm font-semibold">Superadmins de plataforma</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Usa aqui un usuario independiente de las empresas. Primero crea el usuario en Supabase Auth o deja que se registre, despues anade su email.
+                  Usa aqui un usuario independiente de las empresas. Primero crea el usuario en Better Auth o deja que se registre, despues anade su email.
                 </p>
               </div>
               <div className="space-y-3 p-4">

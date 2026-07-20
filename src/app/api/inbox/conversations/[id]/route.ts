@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
+import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
+import { getInboxConversationById } from "@/lib/inbox/conversations";
 import {
   deleteInboxConversation,
   InboxWorkflowError,
@@ -17,12 +18,29 @@ const ACTIONS = new Set<InboxAction>([
   "assign",
 ]);
 
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const ctx = await getCurrentDbAccount();
+    const { id } = await context.params;
+    const conversation = await getInboxConversationById(ctx.accountId, id);
+    if (!conversation) {
+      return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+    }
+    return NextResponse.json({ conversation });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireRole("agent");
+    const ctx = await requireDbRole("agent");
     const { id } = await context.params;
     const body = await request.json().catch(() => ({}));
     const action = body?.action;
@@ -31,7 +49,7 @@ export async function PATCH(
       return NextResponse.json({ error: "Invalid action." }, { status: 400 });
     }
 
-    const conversation = await mutateInboxConversation(supabaseAdmin(), {
+    const conversation = await mutateInboxConversation(null, {
       accountId: ctx.accountId,
       userId: ctx.userId,
       conversationId: id,
@@ -70,10 +88,10 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireRole("agent");
+    const ctx = await requireDbRole("agent");
     const { id } = await context.params;
 
-    await deleteInboxConversation(supabaseAdmin(), {
+    await deleteInboxConversation(null, {
       accountId: ctx.accountId,
       conversationId: id,
     });

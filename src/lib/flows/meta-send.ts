@@ -16,7 +16,7 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
-import { supabaseAdmin } from './admin-client'
+import { dbAdmin } from './admin-client'
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -66,7 +66,7 @@ interface SendTextEngineArgs {
 export async function engineSendText(
   args: SendTextEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
@@ -176,7 +176,7 @@ interface SendMediaEngineArgs {
 export async function engineSendMedia(
   args: SendMediaEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   const { data: contact, error: contactErr } = await db
     .from('contacts')
@@ -325,7 +325,7 @@ type SendInput =
 async function sendInteractiveViaMeta(
   input: SendInput,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   // Scope the contact + whatsapp_config lookups by account_id —
   // same defense-in-depth rationale as automations/meta-send.ts.

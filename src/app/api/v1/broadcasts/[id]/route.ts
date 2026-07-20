@@ -1,40 +1,41 @@
-// ============================================================
-// GET /api/v1/broadcasts/{id} — broadcast status + counts
-// (scope: broadcasts:send).
-//
-// Poll this after POST /api/v1/broadcasts to watch the fan-out
-// progress. `status` moves 'sending' → 'sent'; the delivered/read
-// counts continue to climb as Meta delivery webhooks arrive.
-// Account-scoped: a foreign id → 404.
-// ============================================================
+import { and, eq } from "drizzle-orm";
 
-import { requireApiKey } from '@/lib/auth/api-context';
-import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { db } from "@/db/client";
+import { broadcasts } from "@/db/schema";
+import { requireApiKey } from "@/lib/auth/api-context";
+import { ok, fail, toApiErrorResponse } from "@/lib/api/v1/respond";
 
 export async function GET(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireApiKey(request, 'broadcasts:send');
+    const ctx = await requireApiKey(request, "broadcasts:send");
     const { id } = await params;
 
-    const { data, error } = await ctx.supabase
-      .from('broadcasts')
-      .select(
-        'id, name, template_name, template_language, status, total_recipients, sent_count, delivered_count, read_count, replied_count, failed_count, created_at, updated_at'
-      )
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .maybeSingle();
+    const [row] = await db
+      .select()
+      .from(broadcasts)
+      .where(and(eq(broadcasts.id, id), eq(broadcasts.accountId, ctx.accountId)))
+      .limit(1);
 
-    if (error) {
-      console.error('[api/v1/broadcasts] read error:', error);
-      return fail('internal', 'Failed to read broadcast', 500);
-    }
-    if (!data) return fail('not_found', 'Broadcast not found', 404);
+    if (!row) return fail("not_found", "Broadcast not found", 404);
 
-    return ok(data);
+    return ok({
+      id: row.id,
+      name: row.name,
+      template_name: row.templateName,
+      template_language: row.templateLanguage,
+      status: row.status,
+      total_recipients: row.totalRecipients,
+      sent_count: row.sentCount,
+      delivered_count: row.deliveredCount,
+      read_count: row.readCount,
+      replied_count: row.repliedCount,
+      failed_count: row.failedCount,
+      created_at: row.createdAt.toISOString(),
+      updated_at: row.updatedAt.toISOString(),
+    });
   } catch (err) {
     return toApiErrorResponse(err);
   }

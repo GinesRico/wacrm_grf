@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { requireDbRole } from '@/lib/auth/current-account'
+import { toErrorResponse } from '@/lib/auth/errors'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadAiConfig } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
@@ -24,8 +25,8 @@ const MAX_TURNS = 20
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('agent')
-    await assertFeatureEnabled(supabase, accountId, 'ai')
+    const { accountId, userId } = await requireDbRole('agent')
+    await assertFeatureEnabled(null, accountId, 'ai')
 
     const limit = checkRateLimit(`ai-playground:${userId}`, RATE_LIMITS.aiDraft)
     if (!limit.success) return rateLimitResponse(limit)
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const config = await loadAiConfig(supabase, accountId, {
+    const config = await loadAiConfig(null, accountId, {
       requireActive: false,
     }).catch((err) => {
       console.error('[ai/playground] loadAiConfig error:', err)
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
     }
 
     const knowledge = await retrieveKnowledge(
-      supabase,
+      null,
       accountId,
       config,
       latestUserMessage(messages),

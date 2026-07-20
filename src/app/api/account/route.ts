@@ -12,12 +12,12 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 
-import {
-  requireRole,
-  getCurrentAccount,
-  toErrorResponse,
-} from "@/lib/auth/account";
+import { db } from "@/db/client";
+import { crmAccounts } from "@/db/schema";
+import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -26,7 +26,7 @@ import {
 
 export async function GET() {
   try {
-    const ctx = await getCurrentAccount();
+    const ctx = await getCurrentDbAccount();
     return NextResponse.json({
       account: ctx.account,
       role: ctx.role,
@@ -40,7 +40,7 @@ const MAX_NAME_LEN = 80;
 
 export async function PATCH(request: Request) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
     // Per-user limit on admin-class mutations. Bounds accidental
     // abuse (script run in a loop) and a compromised admin session
@@ -81,22 +81,13 @@ export async function PATCH(request: Request) {
     // RLS allows this UPDATE because accounts_update requires
     // `is_account_member(id, 'admin')`, and requireRole already
     // guaranteed the caller is admin+.
-    const { data, error } = await ctx.supabase
-      .from("accounts")
-      .update({ name })
-      .eq("id", ctx.accountId)
-      .select("id, name")
-      .single();
+    const [account] = await db
+      .update(crmAccounts)
+      .set({ name, updatedAt: new Date() })
+      .where(eq(crmAccounts.id, ctx.accountId))
+      .returning({ id: crmAccounts.id, name: crmAccounts.name });
 
-    if (error) {
-      console.error("[PATCH /api/account] update error:", error);
-      return NextResponse.json(
-        { error: "Failed to update account" },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json({ account: data });
+    return NextResponse.json({ account });
   } catch (err) {
     return toErrorResponse(err);
   }

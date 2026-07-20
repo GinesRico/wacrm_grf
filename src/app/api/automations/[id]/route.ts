@@ -1,102 +1,77 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
-import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { and, eq } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { automations } from '@/db/schema'
+import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import {
   loadStepsTree,
   replaceSteps,
   type BuilderStepInput,
 } from '@/lib/automations/steps-tree'
+import { serializeAutomation } from '@/lib/automations/serialize'
 import {
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
 
-async function requireUser() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  return user
-}
-
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    const { id } = await params
+    const { accountId } = await getCurrentAccount()
+    const [automation] = await db
+      .select()
+      .from(automations)
+      .where(and(eq(automations.id, id), eq(automations.accountId, accountId)))
+      .limit(1)
 
-  const admin = supabaseAdmin()
-  const { data: automation, error } = await admin
-    .from('automations')
-    .select('*')
-    .eq('id', id)
-    .eq('user_id', user.id)
-    .maybeSingle()
+    if (!automation) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!automation) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-
-  const steps = await loadStepsTree(id)
-  return NextResponse.json({ automation, steps })
+    const steps = await loadStepsTree(id)
+    return NextResponse.json({ automation: serializeAutomation(automation), steps })
+  } catch (err) {
+    return toErrorResponse(err)
+  }
 }
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params
-
-  // Editing an automation is a write — the RLS automations_update policy
-  // requires `agent`, but this route mutates via the service-role client
-  // which bypasses RLS, so enforce the role here.
+  let ctx
   try {
-    await requireRole('admin')
+    ctx = await requireRole('admin')
   } catch (err) {
     return toErrorResponse(err)
   }
 
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+  const { id } = await params
   const body = await request.json().catch(() => null)
   if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
 
-  const admin = supabaseAdmin()
+  const [existing] = await db
+    .select()
+    .from(automations)
+    .where(and(eq(automations.id, id), eq(automations.accountId, ctx.accountId)))
+    .limit(1)
 
-  // Ownership check before we touch anything. Load the fields we need
-  // to compute the post-patch "effective" state for validation.
-  const { data: existing } = await admin
-    .from('automations')
-    .select('id, user_id, is_active, trigger_type, trigger_config')
-    .eq('id', id)
-    .maybeSingle()
-  if (!existing || existing.user_id !== user.id) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  }
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const update: Record<string, unknown> = {}
-  for (const k of [
-    'name',
-    'description',
-    'trigger_type',
-    'trigger_config',
-    'is_active',
-  ] as const) {
-    if (k in body) update[k] = body[k]
-  }
+  const update: Partial<typeof automations.$inferInsert> = {}
+  if ('name' in body) update.name = body.name
+  if ('description' in body) update.description = body.description
+  if ('trigger_type' in body) update.triggerType = body.trigger_type
+  if ('trigger_config' in body) update.triggerConfig = body.trigger_config
+  if ('is_active' in body) update.isActive = body.is_active
 
-  // If this PATCH leaves the automation active (either explicitly
-  // activating it OR editing an already-active one), validate the
-  // merged configuration first. Activation is the natural gate — drafts
-  // are still allowed to be incomplete.
   const willBeActive =
-    typeof update.is_active === 'boolean' ? update.is_active : existing.is_active
+    typeof update.isActive === 'boolean' ? update.isActive : existing.isActive
   if (willBeActive) {
-    const mergedTriggerType = (update.trigger_type ?? existing.trigger_type) as string
-    const mergedTriggerConfig = update.trigger_config ?? existing.trigger_config
+    const mergedTriggerType = (update.triggerType ?? existing.triggerType) as string
+    const mergedTriggerConfig = update.triggerConfig ?? existing.triggerConfig
     const mergedSteps = Array.isArray(body.steps)
       ? (body.steps as { step_type: string; step_config: Record<string, unknown> }[])
       : await loadStepsTree(id)
@@ -116,11 +91,10 @@ export async function PATCH(
   }
 
   if (Object.keys(update).length > 0) {
-    const { error: updErr } = await admin
-      .from('automations')
-      .update(update)
-      .eq('id', id)
-    if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 })
+    await db
+      .update(automations)
+      .set(update)
+      .where(and(eq(automations.id, id), eq(automations.accountId, ctx.accountId)))
   }
 
   if (Array.isArray(body.steps)) {
@@ -135,24 +109,14 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params
-
-  // Deleting an automation is a write — enforce `agent` (the service-role
-  // client below bypasses the agent-gated automations_delete RLS).
   try {
-    await requireRole('admin')
+    const { id } = await params
+    const { accountId } = await requireRole('admin')
+    await db
+      .delete(automations)
+      .where(and(eq(automations.id, id), eq(automations.accountId, accountId)))
+    return NextResponse.json({ ok: true })
   } catch (err) {
     return toErrorResponse(err)
   }
-
-  const user = await requireUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { error } = await supabaseAdmin()
-    .from('automations')
-    .delete()
-    .eq('id', id)
-    .eq('user_id', user.id)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true })
 }

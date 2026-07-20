@@ -1,4 +1,7 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, asc, desc, eq } from 'drizzle-orm';
+
+import { db } from '@/db/client';
+import { conversations, whatsappConfig } from '@/db/schema';
 
 export interface WhatsAppLineConfig {
   id: string;
@@ -18,56 +21,68 @@ export interface WhatsAppLineConfig {
 }
 
 export async function getDefaultWhatsAppConfig(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
 ): Promise<WhatsAppLineConfig | null> {
-  const { data, error } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .order('is_default', { ascending: false })
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const [config] = await db
+    .select()
+    .from(whatsappConfig)
+    .where(eq(whatsappConfig.accountId, accountId))
+    .orderBy(desc(whatsappConfig.isDefault), asc(whatsappConfig.createdAt))
+    .limit(1);
 
-  if (error) throw error;
-  return (data as WhatsAppLineConfig | null) ?? null;
+  return config ? serializeConfig(config) : null;
 }
 
 export async function getWhatsAppConfigById(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   configId: string,
 ): Promise<WhatsAppLineConfig | null> {
-  const { data, error } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('id', configId)
-    .maybeSingle();
+  const [config] = await db
+    .select()
+    .from(whatsappConfig)
+    .where(and(eq(whatsappConfig.accountId, accountId), eq(whatsappConfig.id, configId)))
+    .limit(1);
 
-  if (error) throw error;
-  return (data as WhatsAppLineConfig | null) ?? null;
+  return config ? serializeConfig(config) : null;
 }
 
 export async function getWhatsAppConfigForConversation(
-  db: SupabaseClient,
+  client: unknown,
   accountId: string,
   conversationId: string,
 ): Promise<WhatsAppLineConfig | null> {
-  const { data: conversation, error } = await db
-    .from('conversations')
-    .select('whatsapp_config_id')
-    .eq('id', conversationId)
-    .eq('account_id', accountId)
-    .maybeSingle();
+  const [conversation] = await db
+    .select({ whatsappConfigId: conversations.whatsappConfigId })
+    .from(conversations)
+    .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+    .limit(1);
 
-  if (error) throw error;
-  const configId = conversation?.whatsapp_config_id as string | null | undefined;
+  const configId = conversation?.whatsappConfigId;
   if (configId) {
-    const config = await getWhatsAppConfigById(db, accountId, configId);
+    const config = await getWhatsAppConfigById(client, accountId, configId);
     if (config) return config;
   }
 
-  return getDefaultWhatsAppConfig(db, accountId);
+  return getDefaultWhatsAppConfig(client, accountId);
+}
+
+function serializeConfig(config: typeof whatsappConfig.$inferSelect): WhatsAppLineConfig {
+  return {
+    id: config.id,
+    account_id: config.accountId,
+    user_id: config.userId,
+    label: config.label,
+    phone_number_id: config.phoneNumberId,
+    waba_id: config.wabaId,
+    access_token: config.accessToken,
+    verify_token: config.verifyToken,
+    status: config.status as WhatsAppLineConfig['status'],
+    connected_at: config.connectedAt?.toISOString() ?? null,
+    registered_at: config.registeredAt?.toISOString() ?? null,
+    subscribed_apps_at: config.subscribedAppsAt?.toISOString() ?? null,
+    last_registration_error: config.lastRegistrationError,
+    is_default: config.isDefault,
+  };
 }

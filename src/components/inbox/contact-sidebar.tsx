@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { useAuth } from "@/hooks/use-auth";
 import type { Contact, Conversation, Deal, ContactNote, Message, Tag } from "@/types";
 import {
   Mail,
@@ -88,7 +86,6 @@ export function ContactSidebar({
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
 
-  const { accountId } = useAuth();
   const [activeTab, setActiveTab] = useState<ContactSidebarTab>("info");
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
@@ -110,57 +107,25 @@ export function ContactSidebar({
   const fetchContactData = useCallback(async () => {
     if (!displayedContact) return;
 
-    const supabase = createClient();
-    const mediaTypes = Array.from(MEDIA_TYPES);
+    const params = new URLSearchParams({ contact_id: displayedContact.id });
+    if (conversation?.id) params.set("conversation_id", conversation.id);
+    const res = await fetch(`/api/inbox/contact-sidebar?${params.toString()}`, {
+      cache: "no-store",
+    });
+    const payload = await res.json().catch(() => ({}));
 
-    const [dealsRes, notesRes, tagsRes, starredRes, mediaRes] = await Promise.all([
-      supabase
-        .from("deals")
-        .select("*, stage:pipeline_stages(*)")
-        .eq("contact_id", displayedContact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_notes")
-        .select("*")
-        .eq("contact_id", displayedContact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_tags")
-        .select("id, tag_id, tags(*)")
-        .eq("contact_id", displayedContact.id),
-      conversation
-        ? supabase
-            .from("messages")
-            .select("*")
-            .eq("conversation_id", conversation.id)
-            .eq("is_starred", true)
-            .order("created_at", { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
-      conversation
-        ? supabase
-            .from("messages")
-            .select("*")
-            .eq("conversation_id", conversation.id)
-            .in("content_type", mediaTypes)
-            .not("media_url", "is", null)
-            .order("created_at", { ascending: false })
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-
-    if (dealsRes.data) setDeals(dealsRes.data);
-    if (notesRes.data) setNotes(notesRes.data);
-    if (tagsRes.data) {
-      const mapped = tagsRes.data
-        .filter((ct: Record<string, unknown>) => ct.tags)
-        .map((ct: Record<string, unknown>) => ({
-          ...(ct.tags as Tag),
-          contact_tag_id: ct.id as string,
-        }));
-      setTags(mapped);
+    if (!res.ok) {
+      console.error("Failed to fetch contact sidebar data:", payload);
+      return;
     }
-    if (starredRes.data) setStarredMessages((starredRes.data as Message[]) ?? []);
-    if (mediaRes.data) setMediaMessages((mediaRes.data as Message[]) ?? []);
-  }, [displayedContact, conversation]);
+
+    if (payload.contact) setLocalContact(payload.contact as Contact);
+    setDeals((payload.deals as Deal[] | undefined) ?? []);
+    setNotes((payload.notes as ContactNote[] | undefined) ?? []);
+    setTags((payload.tags as (Tag & { contact_tag_id: string })[] | undefined) ?? []);
+    setStarredMessages((payload.starredMessages as Message[] | undefined) ?? []);
+    setMediaMessages((payload.mediaMessages as Message[] | undefined) ?? []);
+  }, [displayedContact?.id, conversation?.id]);
 
   useEffect(() => {
     fetchContactData();
@@ -175,47 +140,29 @@ export function ContactSidebar({
 
   const refreshContactAfterEdit = useCallback(async () => {
     if (!displayedContact) return;
-    const supabase = createClient();
-    const { data } = await supabase
-      .from("contacts")
-      .select("*")
-      .eq("id", displayedContact.id)
-      .single();
-
-    if (data) {
-      setLocalContact(data as Contact);
-    }
     await fetchContactData();
   }, [displayedContact, fetchContactData]);
 
   const handleAddNote = useCallback(async () => {
     if (!displayedContact || !newNote.trim()) return;
-    if (!accountId) return;
     setAddingNote(true);
 
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const user = session?.user;
-
-    const { data, error } = await supabase
-      .from("contact_notes")
-      .insert({
+    const res = await fetch("/api/inbox/contact-notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         contact_id: displayedContact.id,
-        account_id: accountId,
-        user_id: user?.id,
         note_text: newNote.trim(),
-      })
-      .select()
-      .single();
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
 
-    if (!error && data) {
-      setNotes((prev) => [data, ...prev]);
+    if (res.ok && payload.note) {
+      setNotes((prev) => [payload.note as ContactNote, ...prev]);
       setNewNote("");
     }
     setAddingNote(false);
-  }, [displayedContact, newNote, accountId]);
+  }, [displayedContact, newNote]);
 
   const displayedStarredMessages = useMemo(
     () =>

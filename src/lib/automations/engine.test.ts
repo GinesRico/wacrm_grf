@@ -80,7 +80,7 @@ vi.mock("./admin-client", () => {
   }
 
   return {
-    supabaseAdmin: () => ({
+    dbAdmin: () => ({
       from: (t: string) => {
         state.fromCalls.push(t);
         return builder(t);

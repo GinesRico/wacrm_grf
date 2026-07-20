@@ -3,8 +3,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Plus, Tag as TagIcon, X } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
-import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -44,8 +42,6 @@ const PRESET_COLORS = [
  */
 export function TagManager() {
   const t = useTranslations('Settings.tagsAndFields');
-  const supabase = createClient();
-  const { user, accountId, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [tags, setTags] = useState<Tag[]>([]);
@@ -57,26 +53,18 @@ export function TagManager() {
   const [selectedColor, setSelectedColor] = useState(PRESET_COLORS[3].value);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-    fetchTags(user.id);
+    void fetchTags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
+  }, []);
 
-  async function fetchTags(userId: string) {
+  async function fetchTags() {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('tags')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: true });
+      const res = await fetch('/api/tags', { cache: 'no-store' });
+      const payload = await res.json().catch(() => ({}));
 
-      if (error) throw error;
-      setTags(data || []);
+      if (!res.ok) throw new Error(payload.error ?? t('failedToLoadTags'));
+      setTags((payload.tags as Tag[] | undefined) || []);
     } catch (err) {
       console.error('Failed to fetch tags:', err);
       toast.error(t('failedToLoadTags'));
@@ -93,26 +81,23 @@ export function TagManager() {
 
     try {
       setSaving(true);
-      if (!user || !accountId) {
-        toast.error(t('notAuthenticated'));
-        return;
-      }
 
-      // account_id is mandatory on every account-scoped insert (NOT
-      // NULL + RLS, no DB default).
-      const { error } = await supabase.from('tags').insert({
-        user_id: user.id,
-        account_id: accountId,
+      const res = await fetch('/api/tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
         name: newTagName.trim(),
         color: selectedColor,
+        }),
       });
+      const payload = await res.json().catch(() => ({}));
 
-      if (error) throw error;
+      if (!res.ok) throw new Error(payload.error ?? t('failedToCreateTag'));
 
       toast.success(t('tagCreated'));
       setNewTagName('');
       setSelectedColor(PRESET_COLORS[3].value);
-      await fetchTags(user.id);
+      await fetchTags();
     } catch (err) {
       console.error('Create error:', err);
       toast.error(t('failedToCreateTag'));
@@ -131,12 +116,12 @@ export function TagManager() {
 
     try {
       setDeleting(true);
-      const { error } = await supabase
-        .from('tags')
-        .delete()
-        .eq('id', tagToDelete.id);
+      const res = await fetch(`/api/tags?id=${tagToDelete.id}`, {
+        method: 'DELETE',
+      });
+      const payload = await res.json().catch(() => ({}));
 
-      if (error) throw error;
+      if (!res.ok) throw new Error(payload.error ?? t('failedToDeleteTag'));
 
       toast.success(t('tagDeleted'));
       setTags((prev) => prev.filter((t) => t.id !== tagToDelete.id));

@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createClient } from "@/lib/supabase/client";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 import { useAuth } from "@/hooks/use-auth";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
@@ -516,22 +519,26 @@ export function MessageThread({
     }
 
     let cancelled = false;
-    const supabase = createClient();
 
     (async () => {
-      const { data, error } = await supabase
-        .from("message_templates")
-        .select("name, footer_text, buttons")
-        .in("name", templateNames);
-
+      const res = await fetch("/api/inbox/template-previews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: templateNames }),
+      });
+      const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
-      if (error) {
-        console.error("Failed to fetch template buttons:", error);
+      if (!res.ok) {
+        console.error("Failed to fetch template buttons:", payload);
         return;
       }
 
       const payloads: Record<string, InteractiveMessagePayload> = {};
-      for (const row of data ?? []) {
+      for (const row of (payload.templates ?? []) as {
+        name?: unknown;
+        footer_text?: unknown;
+        buttons?: unknown;
+      }[]) {
         const buttons = Array.isArray(row.buttons) ? row.buttons : [];
         const previewButtons = buttons
           .map(toInteractiveTemplateButton)
@@ -662,7 +669,6 @@ export function MessageThread({
   useEffect(() => {
     if (!conversationId) return;
 
-    const supabase = createClient();
     let cancelled = false;
 
     (async () => {
@@ -675,18 +681,18 @@ export function MessageThread({
         setSessionCheckedConversationId(null);
       }
 
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true });
+      const res = await fetch(`/api/inbox/messages?conversation_id=${conversationId}`, {
+        cache: "no-store",
+      });
+      const payload = await res.json().catch(() => ({}));
 
       if (cancelled) return;
 
-      if (error) {
-        console.error("Failed to fetch messages:", error);
+      if (!res.ok) {
+        console.error("Failed to fetch messages:", payload);
       } else {
-        onMessagesLoadedRef.current(data ?? []);
+        onMessagesLoadedRef.current(payload.messages ?? []);
+        setReactions((payload.reactions as MessageReaction[] | undefined) ?? []);
         setSessionCheckedConversationId(conversationId);
       }
 
@@ -707,101 +713,55 @@ export function MessageThread({
   // refetches the rows without also tearing down and rebuilding the
   // realtime channel.
   useEffect(() => {
-    if (!conversationId) {
-      setReactions([]);
-      return;
-    }
-    const supabase = createClient();
-    let cancelled = false;
-
-    (async () => {
-      const { data, error } = await supabase
-        .from("message_reactions")
-        .select("*")
-        .eq("conversation_id", conversationId);
-      if (cancelled) return;
-      if (error) {
-        console.error("Failed to fetch reactions:", error);
-        return;
-      }
-      setReactions((data as MessageReaction[]) ?? []);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId, resyncToken]);
-
-  // Reactions realtime subscription per conversation. Subscribing here
-  // (not at the page level) keeps the channel scoped to the visible
-  // conversation and avoids cross-conversation chatter on a busy inbox.
-  useEffect(() => {
     if (!conversationId) return;
-    const supabase = createClient();
 
-    const channel = supabase
-      .channel(`reactions:${conversationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "message_reactions",
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const row = payload.new as MessageReaction;
-          setReactions((prev) => {
-            if (prev.some((r) => r.id === row.id)) return prev;
-            // Swap any matching optimistic temp row for the real one so
-            // the pill doesn't double up after a successful POST.
-            const tempIdx = prev.findIndex(
-              (r) =>
-                r.id.startsWith("temp-") &&
-                r.message_id === row.message_id &&
-                r.actor_type === row.actor_type &&
-                r.actor_id === row.actor_id,
-            );
-            if (tempIdx >= 0) {
-              const copy = prev.slice();
-              copy[tempIdx] = row;
-              return copy;
-            }
-            return [...prev, row];
-          });
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "message_reactions",
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const row = payload.new as MessageReaction;
-          setReactions((prev) => prev.map((r) => (r.id === row.id ? row : r)));
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "message_reactions",
-          filter: `conversation_id=eq.${conversationId}`,
-        },
-        (payload) => {
-          const old = payload.old as Partial<MessageReaction>;
-          if (!old?.id) return;
-          setReactions((prev) => prev.filter((r) => r.id !== old.id));
-        },
-      )
-      .subscribe();
+    const channelName = `private-conversation-${conversationId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const upsertReaction = (event: {
+      payload: { reaction: MessageReaction };
+    }) => {
+      const row = event.payload.reaction;
+      setReactions((prev) => {
+        const existingIdx = prev.findIndex((r) => r.id === row.id);
+        if (existingIdx >= 0) {
+          const copy = prev.slice();
+          copy[existingIdx] = row;
+          return copy;
+        }
+
+        const tempIdx = prev.findIndex(
+          (r) =>
+            r.id.startsWith("temp-") &&
+            r.message_id === row.message_id &&
+            r.actor_type === row.actor_type &&
+            r.actor_id === row.actor_id,
+        );
+        if (tempIdx >= 0) {
+          const copy = prev.slice();
+          copy[tempIdx] = row;
+          return copy;
+        }
+
+        return [...prev, row];
+      });
+    };
+    const deleteReaction = (event: {
+      payload: { reaction: Partial<MessageReaction> };
+    }) => {
+      const old = event.payload.reaction;
+      if (!old?.id) return;
+      setReactions((prev) => prev.filter((r) => r.id !== old.id));
+    };
+
+    channel.bind("reaction.created", upsertReaction);
+    channel.bind("reaction.updated", upsertReaction);
+    channel.bind("reaction.deleted", deleteReaction);
 
     return () => {
-      supabase.removeChannel(channel);
+      channel.unbind("reaction.created", upsertReaction);
+      channel.unbind("reaction.updated", upsertReaction);
+      channel.unbind("reaction.deleted", deleteReaction);
+      unsubscribeRealtimeChannel(channelName);
     };
   }, [conversationId]);
 
@@ -822,14 +782,16 @@ export function MessageThread({
   // is 0 the condition is false, so no further UPDATE is issued.
   useEffect(() => {
     if (!conversationId || !hasUnread) return;
-    const supabase = createClient();
-    supabase
-      .from("conversations")
-      .update({ unread_count: 0 })
-      .eq("id", conversationId)
-      .then(({ error }) => {
-        if (error) console.error("Failed to reset unread_count:", error);
-      });
+    void fetch(`/api/inbox/conversations/${conversationId}/unread`, {
+      method: "PATCH",
+    }).then(async (res) => {
+      if (!res.ok) {
+        console.error(
+          "Failed to reset unread_count:",
+          await res.json().catch(() => ({})),
+        );
+      }
+    });
   }, [conversationId, hasUnread]);
 
   // Auto-scroll to bottom on new messages
@@ -1297,14 +1259,17 @@ export function MessageThread({
       const nextStarred = !message.is_starred;
       onUpdateMessage(message.id, { is_starred: nextStarred });
 
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("messages")
-        .update({ is_starred: nextStarred })
-        .eq("id", message.id)
-        .eq("conversation_id", message.conversation_id);
+      const res = await fetch("/api/inbox/messages", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "star",
+          message_id: message.id,
+          is_starred: nextStarred,
+        }),
+      });
 
-      if (error) {
+      if (!res.ok) {
         onUpdateMessage(message.id, { is_starred: message.is_starred });
         toast.error(t("messageStarFailed"));
       }
@@ -1438,16 +1403,15 @@ export function MessageThread({
     if (!forwardDialogOpen) return;
 
     let cancelled = false;
-    const supabase = createClient();
 
     (async () => {
-      const { data, error } = await supabase
-        .from("contacts")
-        .select("*")
-        .order("name", { ascending: true });
+      const res = await fetch("/api/inbox/forward-contacts", {
+        cache: "no-store",
+      });
+      const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
-      if (!error) {
-        setForwardContacts((data as Contact[]) ?? []);
+      if (res.ok) {
+        setForwardContacts((payload.contacts as Contact[] | undefined) ?? []);
       }
       setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
     })();

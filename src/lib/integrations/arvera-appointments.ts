@@ -1,6 +1,8 @@
 import { randomBytes } from 'crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, eq } from 'drizzle-orm';
 
+import { db as appDb } from '@/db/client';
+import { integrationConnections } from '@/db/schema';
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption';
 
 export const ARVERA_APPOINTMENTS_SLUG = 'arvera-appointments';
@@ -172,22 +174,35 @@ export function resolveAppointmentsWebhookToken(
 }
 
 export async function getArveraAppointmentsConnection(
-  db: SupabaseClient,
+  _unusedDb: unknown,
   accountId: string,
 ): Promise<ArveraAppointmentsConnection | null> {
-  const { data, error } = await db
-    .from('integration_connections')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('app_slug', ARVERA_APPOINTMENTS_SLUG)
-    .maybeSingle();
+  const [row] = await appDb
+    .select()
+    .from(integrationConnections)
+    .where(
+      and(
+        eq(integrationConnections.accountId, accountId),
+        eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG),
+      ),
+    )
+    .limit(1);
 
-  if (error) throw new Error(`Could not load Arvera appointments connection: ${error.message}`);
-  return (data as ArveraAppointmentsConnection | null) ?? null;
+  if (!row) return null;
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    app_slug: row.appSlug,
+    enabled: row.enabled,
+    encrypted_credentials: row.encryptedCredentials as Record<string, string>,
+    config: row.config as Partial<ArveraAppointmentsConfig>,
+    status: row.status,
+    last_error: row.lastError,
+  };
 }
 
 export async function requireActiveArveraAppointmentsConnection(
-  db: SupabaseClient,
+  db: unknown,
   accountId: string,
 ): Promise<{
   connection: ArveraAppointmentsConnection;

@@ -1,62 +1,61 @@
 import { NextResponse } from "next/server";
+import { asc, desc, eq } from "drizzle-orm";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
+import { db } from "@/db/client";
+import { departmentMembers, departments as departmentsTable, profiles, whatsappConfig } from "@/db/schema";
+import { getCurrentDbAccount } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember, Department } from "@/types";
 
-interface ProfileRow {
-  user_id: string;
-  full_name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-  account_role: string;
-  created_at: string;
-}
-
 export async function GET() {
   try {
-    const ctx = await requireRole("viewer");
-    const db = supabaseAdmin();
+    const ctx = await getCurrentDbAccount();
 
-    const [
-      { data: profileRows, error: profilesError },
-      { data: departmentRows, error: departmentsError },
-      { data: departmentMemberRows, error: departmentMembersError },
-      { data: lines, error: linesError },
-    ] =
+    const [profileRows, departmentRows, departmentMemberRows, lineRows] =
       await Promise.all([
         db
-          .from("profiles")
-          .select("user_id, full_name, email, avatar_url, account_role, created_at")
-          .eq("account_id", ctx.accountId)
-          .order("created_at", { ascending: true }),
+          .select({
+            user_id: profiles.userId,
+            full_name: profiles.fullName,
+            email: profiles.email,
+            avatar_url: profiles.avatarUrl,
+            account_role: profiles.accountRole,
+            created_at: profiles.createdAt,
+          })
+          .from(profiles)
+          .where(eq(profiles.accountId, ctx.accountId))
+          .orderBy(asc(profiles.createdAt)),
         db
-          .from("departments")
-          .select("*")
-          .eq("account_id", ctx.accountId)
-          .order("name", { ascending: true }),
+          .select()
+          .from(departmentsTable)
+          .where(eq(departmentsTable.accountId, ctx.accountId))
+          .orderBy(asc(departmentsTable.name)),
         db
-          .from("department_members")
-          .select("department_id, user_id")
-          .eq("account_id", ctx.accountId),
+          .select({
+            department_id: departmentMembers.departmentId,
+            user_id: departmentMembers.userId,
+          })
+          .from(departmentMembers)
+          .where(eq(departmentMembers.accountId, ctx.accountId)),
         db
-          .from("whatsapp_config")
-          .select("id, label, phone_number_id, status, is_default, department_id")
-          .eq("account_id", ctx.accountId)
-          .order("is_default", { ascending: false })
-          .order("created_at", { ascending: true }),
+          .select({
+            id: whatsappConfig.id,
+            label: whatsappConfig.label,
+            phone_number_id: whatsappConfig.phoneNumberId,
+            status: whatsappConfig.status,
+            is_default: whatsappConfig.isDefault,
+            department_id: whatsappConfig.departmentId,
+          })
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.accountId, ctx.accountId))
+          .orderBy(desc(whatsappConfig.isDefault), asc(whatsappConfig.createdAt)),
       ]);
-
-    if (profilesError) throw profilesError;
-    if (departmentsError) throw departmentsError;
-    if (departmentMembersError) throw departmentMembersError;
-    if (linesError) throw linesError;
 
     const canSeeEmails = canManageMembers(ctx.role);
     const departmentIdsByUser = new Map<string, string[]>();
     const memberIdsByDepartment = new Map<string, string[]>();
-    for (const row of (departmentMemberRows ?? []) as { department_id: string; user_id: string }[]) {
+    for (const row of departmentMemberRows) {
       const userList = departmentIdsByUser.get(row.user_id) ?? [];
       userList.push(row.department_id);
       departmentIdsByUser.set(row.user_id, userList);
@@ -66,7 +65,7 @@ export async function GET() {
       memberIdsByDepartment.set(row.department_id, departmentList);
     }
 
-    const members: AccountMember[] = ((profileRows ?? []) as ProfileRow[]).flatMap(
+    const members: AccountMember[] = profileRows.flatMap(
       (row) => {
         if (!isAccountRole(row.account_role)) return [];
         return [
@@ -76,21 +75,26 @@ export async function GET() {
             email: canSeeEmails ? row.email : null,
             avatar_url: row.avatar_url,
             role: row.account_role,
-            joined_at: row.created_at,
+            joined_at: row.created_at.toISOString(),
             department_ids: departmentIdsByUser.get(row.user_id) ?? [],
           },
         ];
       },
     );
 
-    const departments: Department[] = ((departmentRows ?? []) as Department[]).map(
+    const departments: Department[] = departmentRows.map(
       (department) => ({
-        ...department,
+        id: department.id,
+        account_id: department.accountId,
+        name: department.name,
+        color: department.color,
+        created_at: department.createdAt.toISOString(),
+        updated_at: department.updatedAt.toISOString(),
         member_user_ids: memberIdsByDepartment.get(department.id) ?? [],
       }),
     );
 
-    return NextResponse.json({ members, departments, lines: lines ?? [] });
+    return NextResponse.json({ members, departments, lines: lineRows });
   } catch (err) {
     return toErrorResponse(err);
   }

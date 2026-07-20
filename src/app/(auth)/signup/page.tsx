@@ -2,9 +2,9 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
+import { authClient } from "@/lib/better-auth/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,7 +45,7 @@ function SignupPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const supabase = createClient();
+  const router = useRouter();
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,35 +63,27 @@ function SignupPageInner() {
 
     setLoading(true);
 
-    // If we have an invite token, point Supabase's verification
-    // email back at the join page so the user can accept after
-    // verifying. Without a token, Supabase uses its default
-    // redirect (the app root).
-    const emailRedirectTo = inviteToken
-      ? `${window.location.origin}/join/${encodeURIComponent(inviteToken)}`
-      : nextPath?.startsWith("/") && !nextPath.startsWith("//")
-        ? `${window.location.origin}${nextPath}`
-      : undefined;
-
-    const { error } = await supabase.auth.signUp({
+    const { error } = await authClient.signUp.email({
       email,
       password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-        ...(emailRedirectTo ? { emailRedirectTo } : {}),
-      },
+      name: fullName,
     });
 
     if (error) {
-      setError(error.message);
+      setError(error.message ?? "Could not create account.");
       setLoading(false);
       return;
     }
 
-    setSuccess(true);
     setLoading(false);
+    setSuccess(true);
+    if (inviteToken) {
+      router.push(`/join/${encodeURIComponent(inviteToken)}`);
+    } else if (nextPath?.startsWith("/") && !nextPath.startsWith("//")) {
+      router.push(nextPath);
+    } else {
+      router.push("/dashboard");
+    }
   };
 
   if (success) {

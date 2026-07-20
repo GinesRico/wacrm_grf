@@ -1,8 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
-import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import type { CustomField } from '@/types';
 import {
@@ -57,8 +55,6 @@ export function CustomFieldsManager({
  */
 export function CustomFieldsPanel() {
   const t = useTranslations('Contacts.customFields');
-  const supabase = createClient();
-  const { user, accountId } = useAuth();
   const { confirm, confirmDialog } = useAppConfirm();
 
   const [fields, setFields] = useState<CustomField[]>([]);
@@ -68,25 +64,20 @@ export function CustomFieldsPanel() {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const fetchFields = useCallback(async () => {
-    if (!accountId) return;
     setLoading(true);
-    const { data } = await supabase
-      .from('custom_fields')
-      .select('*')
-      .order('field_name');
-    setFields((data as CustomField[] | null) ?? []);
+    const res = await fetch('/api/custom-fields', { cache: 'no-store' });
+    const payload = await res.json().catch(() => ({}));
+    if (res.ok) setFields((payload.fields as CustomField[] | undefined) ?? []);
     setLoading(false);
-  }, [supabase, accountId]);
+  }, []);
 
   // Load the field list on mount once the account is known. The setters
-  // inside fetchFields run after the Supabase await — not synchronously in
+  // inside fetchFields run after the database await — not synchronously in
   // the effect body — so the cascade the lint rule warns about doesn't apply.
   useEffect(() => {
-    if (accountId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchFields();
-    }
-  }, [accountId, fetchFields]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchFields();
+  }, [fetchFields]);
 
   /** Case-insensitive name clash within the loaded list. */
   function isDuplicate(name: string, exceptId?: string): boolean {
@@ -99,25 +90,20 @@ export function CustomFieldsPanel() {
   async function handleCreate() {
     const name = newName.trim();
     if (!name) return;
-    if (!accountId || !user) {
-      toast.error(t('toastNoAccount'));
-      return;
-    }
     if (isDuplicate(name)) {
       toast.error(t('toastDuplicate', { name }));
       return;
     }
 
     setCreating(true);
-    const { error } = await supabase.from('custom_fields').insert({
-      field_name: name,
-      field_type: 'text',
-      user_id: user.id,
-      account_id: accountId,
+    const res = await fetch('/api/custom-fields', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field_name: name }),
     });
     setCreating(false);
 
-    if (error) {
+    if (!res.ok) {
       toast.error(t('toastCreateFailed'));
       return;
     }
@@ -139,12 +125,13 @@ export function CustomFieldsPanel() {
       return false;
     }
     setBusyId(field.id);
-    const { error } = await supabase
-      .from('custom_fields')
-      .update({ field_name: name })
-      .eq('id', field.id);
+    const res = await fetch('/api/custom-fields', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: field.id, field_name: name }),
+    });
     setBusyId(null);
-    if (error) {
+    if (!res.ok) {
       toast.error(t('toastRenameFailed'));
       return false;
     }
@@ -164,12 +151,11 @@ export function CustomFieldsPanel() {
       return;
     }
     setBusyId(field.id);
-    const { error } = await supabase
-      .from('custom_fields')
-      .delete()
-      .eq('id', field.id);
+    const res = await fetch(`/api/custom-fields?id=${field.id}`, {
+      method: 'DELETE',
+    });
     setBusyId(null);
-    if (error) {
+    if (!res.ok) {
       toast.error(t('toastDeleteFailed'));
       return;
     }

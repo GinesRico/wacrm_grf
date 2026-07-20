@@ -14,8 +14,12 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import { db } from "@/db/client";
+import { accountInvitations } from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -27,7 +31,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
     const limit = checkRateLimit(
       `admin:inviteRevoke:${ctx.userId}`,
@@ -43,20 +47,17 @@ export async function DELETE(
     // filter would be redundant; omitting it surfaces a
     // cross-account attempt as a silent 0-row delete (which is
     // exactly what we want for a revocation endpoint).
-    const { error, count } = await ctx.supabase
-      .from("account_invitations")
-      .delete({ count: "exact" })
-      .eq("id", id);
+    const deleted = await db
+      .delete(accountInvitations)
+      .where(
+        and(
+          eq(accountInvitations.id, id),
+          eq(accountInvitations.accountId, ctx.accountId),
+        ),
+      )
+      .returning({ id: accountInvitations.id });
 
-    if (error) {
-      console.error("[DELETE /api/account/invitations/[id]] error:", error);
-      return NextResponse.json(
-        { error: "Failed to revoke invitation" },
-        { status: 500 },
-      );
-    }
-
-    if (count === 0) {
+    if (deleted.length === 0) {
       // Either the id doesn't exist or RLS hid it (different
       // account). 404 either way — surfacing "exists but not
       // yours" would leak existence.

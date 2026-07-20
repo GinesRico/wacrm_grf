@@ -1,59 +1,89 @@
-import { NextResponse } from 'next/server';
+import { NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 
-import { requireRole, toErrorResponse } from '@/lib/auth/account';
-import { runAutomationsForTrigger } from '@/lib/automations/engine';
+import { db } from "@/db/client";
+import { contacts, conversations, paymentLinks } from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
+import { runAutomationsForTrigger } from "@/lib/automations/engine";
 import {
   createArveraPaymentLink,
   normalizeAmountCents,
   requireActiveArveraConnection,
   responseToPaymentRecord,
-} from '@/lib/integrations/arvera-payments';
+} from "@/lib/integrations/arvera-payments";
+
+function serializePaymentLink(row: typeof paymentLinks.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    contact_id: row.contactId,
+    conversation_id: row.conversationId,
+    provider: row.provider,
+    amount_cents: row.amountCents,
+    currency: row.currency,
+    concept: row.concept,
+    email: row.email,
+    phone: row.phone,
+    order_id: row.orderId,
+    payment_url: row.paymentUrl,
+    status: row.status,
+    raw_response: row.rawResponse,
+    last_synced_at: row.lastSyncedAt?.toISOString() ?? null,
+    created_by: row.createdBy,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole('agent');
+    const ctx = await requireDbRole("agent");
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) {
-      return NextResponse.json({ error: 'Request body must be JSON' }, { status: 400 });
+      return NextResponse.json({ error: "Request body must be JSON" }, { status: 400 });
     }
 
     const amountCents = normalizeAmountCents(body);
-    const concept = typeof body.concept === 'string' ? body.concept.trim() : '';
+    const concept = typeof body.concept === "string" ? body.concept.trim() : "";
     if (!amountCents) {
-      return NextResponse.json({ error: 'Valid amount is required' }, { status: 400 });
+      return NextResponse.json({ error: "Valid amount is required" }, { status: 400 });
     }
     if (!concept) {
-      return NextResponse.json({ error: 'Concept is required' }, { status: 400 });
+      return NextResponse.json({ error: "Concept is required" }, { status: 400 });
     }
 
-    const contactId = typeof body.contact_id === 'string' ? body.contact_id : null;
+    const contactId = typeof body.contact_id === "string" ? body.contact_id : null;
     const conversationId =
-      typeof body.conversation_id === 'string' ? body.conversation_id : null;
+      typeof body.conversation_id === "string" ? body.conversation_id : null;
 
     if (contactId) {
-      const { data: contact } = await ctx.supabase
-        .from('contacts')
-        .select('id')
-        .eq('account_id', ctx.accountId)
-        .eq('id', contactId)
-        .maybeSingle();
-      if (!contact) return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
+      const [contact] = await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.accountId, ctx.accountId), eq(contacts.id, contactId)))
+        .limit(1);
+      if (!contact) return NextResponse.json({ error: "Contact not found" }, { status: 404 });
     }
 
     if (conversationId) {
-      const { data: conversation } = await ctx.supabase
-        .from('conversations')
-        .select('id')
-        .eq('account_id', ctx.accountId)
-        .eq('id', conversationId)
-        .maybeSingle();
+      const [conversation] = await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.accountId, ctx.accountId),
+            eq(conversations.id, conversationId),
+          ),
+        )
+        .limit(1);
       if (!conversation) {
-        return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+        return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
       }
     }
 
     const { config, apiKey } = await requireActiveArveraConnection(
-      ctx.supabase,
+      null,
       ctx.accountId,
     );
     const payload = await createArveraPaymentLink({
@@ -62,59 +92,53 @@ export async function POST(request: Request) {
       input: {
         amountCents,
         concept,
-        email: typeof body.email === 'string' ? body.email.trim() : null,
-        phone: typeof body.phone === 'string' ? body.phone.trim() : null,
+        email: typeof body.email === "string" ? body.email.trim() : null,
+        phone: typeof body.phone === "string" ? body.phone.trim() : null,
       },
     });
     const normalized = responseToPaymentRecord(payload);
 
-    const { data, error } = await ctx.supabase
-      .from('payment_links')
-      .insert({
-        account_id: ctx.accountId,
-        contact_id: contactId,
-        conversation_id: conversationId,
-        provider: 'arvera-payments',
-        amount_cents: amountCents,
-        currency: 'EUR',
+    const [data] = await db
+      .insert(paymentLinks)
+      .values({
+        accountId: ctx.accountId,
+        contactId,
+        conversationId,
+        provider: "arvera-payments",
+        amountCents,
+        currency: "EUR",
         concept,
-        email: typeof body.email === 'string' ? body.email.trim() : null,
-        phone: typeof body.phone === 'string' ? body.phone.trim() : null,
-        order_id: normalized.orderId,
-        payment_url: normalized.paymentUrl,
+        email: typeof body.email === "string" ? body.email.trim() : null,
+        phone: typeof body.phone === "string" ? body.phone.trim() : null,
+        orderId: normalized.orderId,
+        paymentUrl: normalized.paymentUrl,
         status: normalized.status,
-        raw_response: payload,
-        created_by: ctx.userId,
+        rawResponse: payload,
+        createdBy: ctx.userId,
       })
-      .select('*')
-      .single();
-
-    if (error || !data) {
-      console.error('[arvera payment-links] insert failed:', error);
-      return NextResponse.json({ error: 'Payment link created but not saved' }, { status: 500 });
-    }
+      .returning();
 
     void runAutomationsForTrigger({
       accountId: ctx.accountId,
-      triggerType: 'payment_link_created',
+      triggerType: "payment_link_created",
       contactId,
       context: {
         conversation_id: conversationId ?? undefined,
         vars: {
           payment_link_id: data.id,
-          payment_url: data.payment_url,
-          order_id: data.order_id,
-          amount_cents: data.amount_cents,
+          payment_url: data.paymentUrl,
+          order_id: data.orderId,
+          amount_cents: data.amountCents,
           concept: data.concept,
         },
       },
     });
 
-    return NextResponse.json({ payment_link: data }, { status: 201 });
+    return NextResponse.json({ payment_link: serializePaymentLink(data) }, { status: 201 });
   } catch (err) {
     if (
       err instanceof Error &&
-      (err.name === 'UnauthorizedError' || err.name === 'ForbiddenError')
+      (err.name === "UnauthorizedError" || err.name === "ForbiddenError")
     ) {
       return toErrorResponse(err);
     }

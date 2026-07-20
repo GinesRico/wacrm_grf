@@ -1,14 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useCallback, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  getRealtimeClient,
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 import type { Message, Conversation, Contact } from "@/types";
-import type { RealtimeChannel } from "@supabase/supabase-js";
 
 interface RealtimeEvent<T> {
   eventType: "INSERT" | "UPDATE" | "DELETE";
   new: T;
   old: Partial<T>;
+}
+
+interface RealtimeEnvelope<TPayload = unknown> {
+  payload: TPayload;
+}
+
+interface MessagePayload {
+  message: Message;
+}
+
+interface ConversationPayload {
+  conversation: Conversation;
+}
+
+interface ContactPayload {
+  contact: Contact;
 }
 
 interface UseRealtimeOptions {
@@ -26,7 +46,8 @@ export function useRealtime({
   onContactEvent,
   enabled = true,
 }: UseRealtimeOptions) {
-  const channelRef = useRef<RealtimeChannel | null>(null);
+  const { accountId } = useAuth();
+  const channelNameRef = useRef<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
 
   // Store latest callbacks in refs to avoid re-subscribing when the
@@ -44,63 +65,96 @@ export function useRealtime({
   });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !accountId) return;
 
-    const supabase = createClient();
+    const socketChannelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(socketChannelName);
+    const client = getRealtimeClient();
+    channelNameRef.current = socketChannelName;
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload) => {
-          onMessageRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
-            new: payload.new as Message,
-            old: payload.old as Partial<Message>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          onConversationRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
-            new: payload.new as Conversation,
-            old: payload.old as Partial<Conversation>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "contacts" },
-        (payload) => {
-          onContactRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Contact>["eventType"],
-            new: payload.new as Contact,
-            old: payload.old as Partial<Contact>,
-          });
-        }
-      )
-      .subscribe((status) => {
-        setIsConnected(status === "SUBSCRIBED");
+    const markConnected = () => setIsConnected(true);
+    const markDisconnected = () => setIsConnected(false);
+    const handleMessageCreated = (event: RealtimeEnvelope<MessagePayload>) => {
+      onMessageRef.current?.({
+        eventType: "INSERT",
+        new: event.payload.message,
+        old: {},
       });
+    };
+    const handleMessageUpdated = (event: RealtimeEnvelope<MessagePayload>) => {
+      onMessageRef.current?.({
+        eventType: "UPDATE",
+        new: event.payload.message,
+        old: {},
+      });
+    };
+    const handleConversationCreated = (
+      event: RealtimeEnvelope<ConversationPayload>,
+    ) => {
+      onConversationRef.current?.({
+        eventType: "INSERT",
+        new: event.payload.conversation,
+        old: {},
+      });
+    };
+    const handleConversationUpdated = (
+      event: RealtimeEnvelope<ConversationPayload>,
+    ) => {
+      onConversationRef.current?.({
+        eventType: "UPDATE",
+        new: event.payload.conversation,
+        old: {},
+      });
+    };
+    const handleContactCreated = (event: RealtimeEnvelope<ContactPayload>) => {
+      onContactRef.current?.({
+        eventType: "INSERT",
+        new: event.payload.contact,
+        old: {},
+      });
+    };
+    const handleContactUpdated = (event: RealtimeEnvelope<ContactPayload>) => {
+      onContactRef.current?.({
+        eventType: "UPDATE",
+        new: event.payload.contact,
+        old: {},
+      });
+    };
 
-    channelRef.current = channel;
+    client.connection.bind("connected", markConnected);
+    client.connection.bind("unavailable", markDisconnected);
+    client.connection.bind("disconnected", markDisconnected);
+    client.connection.bind("failed", markDisconnected);
+    channel.bind("pusher:subscription_succeeded", markConnected);
+    channel.bind("message.created", handleMessageCreated);
+    channel.bind("message.updated", handleMessageUpdated);
+    channel.bind("conversation.created", handleConversationCreated);
+    channel.bind("conversation.updated", handleConversationUpdated);
+    channel.bind("contact.created", handleContactCreated);
+    channel.bind("contact.updated", handleContactUpdated);
 
     return () => {
-      supabase.removeChannel(channel);
-      channelRef.current = null;
+      client.connection.unbind("connected", markConnected);
+      client.connection.unbind("unavailable", markDisconnected);
+      client.connection.unbind("disconnected", markDisconnected);
+      client.connection.unbind("failed", markDisconnected);
+      channel.unbind("pusher:subscription_succeeded", markConnected);
+      channel.unbind("message.created", handleMessageCreated);
+      channel.unbind("message.updated", handleMessageUpdated);
+      channel.unbind("conversation.created", handleConversationCreated);
+      channel.unbind("conversation.updated", handleConversationUpdated);
+      channel.unbind("contact.created", handleContactCreated);
+      channel.unbind("contact.updated", handleContactUpdated);
+      unsubscribeRealtimeChannel(socketChannelName);
+      channelNameRef.current = null;
       setIsConnected(false);
     };
-  }, [channelName, enabled]);
+  }, [accountId, channelName, enabled]);
 
   const unsubscribe = useCallback(() => {
-    if (channelRef.current) {
-      const supabase = createClient();
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+    if (channelNameRef.current) {
+      unsubscribeRealtimeChannel(channelNameRef.current);
+      channelNameRef.current = null;
       setIsConnected(false);
     }
   }, []);

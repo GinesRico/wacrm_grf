@@ -1,9 +1,10 @@
-import { createClient } from '@/lib/supabase/server'
-import { ForbiddenError, UnauthorizedError } from '@/lib/auth/account'
-import { supabaseAdmin } from '@/lib/supabase/admin'
+import { and, count, eq, inArray, or } from 'drizzle-orm'
+import { db } from '@/db/client'
+import { authUser, platformAdmins, profiles } from '@/db/schema'
+import { getCurrentDbAccount } from '@/lib/auth/current-account'
+import { ForbiddenError } from '@/lib/auth/errors'
 
 export interface PlatformAdminContext {
-  supabase: Awaited<ReturnType<typeof createClient>>
   userId: string
   email: string
 }
@@ -21,37 +22,29 @@ export function isBootstrapPlatformAdminEmail(email: string | null | undefined):
 }
 
 export async function getPlatformAdminUserIds(): Promise<Set<string>> {
-  const admin = supabaseAdmin()
-  const { data: platformAdmins, error } = await admin
-    .from('platform_admins')
-    .select('email, user_id')
-
-  if (error) {
-    console.error('[getPlatformAdminUserIds] platform_admins lookup error:', error)
-    throw new ForbiddenError('Could not verify platform admin accounts')
-  }
+  const rows = await db
+    .select({
+      email: platformAdmins.email,
+      userId: platformAdmins.userId,
+    })
+    .from(platformAdmins)
 
   const userIds = new Set<string>()
   const emails = new Set<string>()
 
-  for (const platformAdmin of platformAdmins ?? []) {
-    if (platformAdmin.user_id) userIds.add(platformAdmin.user_id)
+  for (const platformAdmin of rows) {
+    if (platformAdmin.userId) userIds.add(platformAdmin.userId)
     if (platformAdmin.email) emails.add(platformAdmin.email.toLowerCase())
   }
 
   if (emails.size > 0) {
-    const { data: profiles, error: profilesError } = await admin
-      .from('profiles')
-      .select('user_id, email')
-      .in('email', Array.from(emails))
+    const matchedProfiles = await db
+      .select({ userId: profiles.userId })
+      .from(profiles)
+      .where(inArray(profiles.email, Array.from(emails)))
 
-    if (profilesError) {
-      console.error('[getPlatformAdminUserIds] profiles lookup error:', profilesError)
-      throw new ForbiddenError('Could not verify platform admin accounts')
-    }
-
-    for (const profile of profiles ?? []) {
-      if (profile.user_id) userIds.add(profile.user_id)
+    for (const profile of matchedProfiles) {
+      if (profile.userId) userIds.add(profile.userId)
     }
   }
 
@@ -60,50 +53,37 @@ export async function getPlatformAdminUserIds(): Promise<Set<string>> {
 
 export async function isPlatformAdmin(email: string, userId: string): Promise<boolean> {
   const normalized = email.trim().toLowerCase()
-  const admin = supabaseAdmin()
 
-  const { count, error } = await admin
-    .from('platform_admins')
-    .select('id', { count: 'exact', head: true })
-
-  if (error) {
-    console.error('[isPlatformAdmin] platform_admins count error:', error)
-    throw new ForbiddenError('Could not verify platform admin access')
-  }
-
-  if ((count ?? 0) === 0 && isBootstrapPlatformAdminEmail(normalized)) {
+  const [total] = await db.select({ value: count() }).from(platformAdmins)
+  if ((total?.value ?? 0) === 0 && isBootstrapPlatformAdminEmail(normalized)) {
     return true
   }
 
-  const { data, error: lookupError } = await admin
-    .from('platform_admins')
-    .select('id')
-    .or(`email.eq.${normalized},user_id.eq.${userId}`)
-    .maybeSingle()
+  const [row] = await db
+    .select({ id: platformAdmins.id })
+    .from(platformAdmins)
+    .leftJoin(authUser, eq(authUser.id, platformAdmins.userId))
+    .where(
+      or(
+        eq(platformAdmins.email, normalized),
+        eq(platformAdmins.userId, userId),
+        and(eq(authUser.email, normalized), eq(authUser.id, userId)),
+      ),
+    )
+    .limit(1)
 
-  if (lookupError) {
-    console.error('[isPlatformAdmin] platform_admins lookup error:', lookupError)
-    throw new ForbiddenError('Could not verify platform admin access')
-  }
-
-  return !!data
+  return !!row
 }
 
 export async function requirePlatformAdmin(): Promise<PlatformAdminContext> {
-  const supabase = await createClient()
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser()
+  const ctx = await getCurrentDbAccount()
 
-  if (error || !user) throw new UnauthorizedError()
-  if (!(await isPlatformAdmin(user.email!, user.id))) {
+  if (!(await isPlatformAdmin(ctx.user.email, ctx.userId))) {
     throw new ForbiddenError('This action requires platform admin access')
   }
 
   return {
-    supabase,
-    userId: user.id,
-    email: user.email!,
+    userId: ctx.userId,
+    email: ctx.user.email,
   }
 }

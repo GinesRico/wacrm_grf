@@ -1,5 +1,8 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { ForbiddenError } from '@/lib/auth/account'
+import { eq, sql } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { crmAccounts } from '@/db/schema'
+import { ForbiddenError } from '@/lib/auth/errors'
 
 export type AccountStatus = 'trial' | 'active' | 'suspended' | 'cancelled'
 export type AccountFeature = 'ai' | 'api' | 'broadcasts'
@@ -18,24 +21,33 @@ export interface AccountEntitlements {
   trial_ends_at: string | null
 }
 
-const ACCOUNT_COLUMNS =
-  'id, status, plan, max_users, max_flows, max_automations, max_whatsapp_lines, allow_ai, allow_api, allow_broadcasts, trial_ends_at'
-
 export async function getAccountEntitlements(
-  supabase: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
 ): Promise<AccountEntitlements> {
-  const { data, error } = await supabase
-    .from('accounts')
-    .select(ACCOUNT_COLUMNS)
-    .eq('id', accountId)
-    .maybeSingle()
+  const [account] = await db
+    .select()
+    .from(crmAccounts)
+    .where(eq(crmAccounts.id, accountId))
+    .limit(1)
 
-  if (error || !data) {
+  if (!account) {
     throw new ForbiddenError('Could not load account limits')
   }
 
-  return data as AccountEntitlements
+  return {
+    id: account.id,
+    status: account.status as AccountStatus,
+    plan: account.plan,
+    max_users: account.maxUsers,
+    max_flows: account.maxFlows,
+    max_automations: account.maxAutomations,
+    max_whatsapp_lines: account.maxWhatsappLines,
+    allow_ai: account.allowAi,
+    allow_api: account.allowApi,
+    allow_broadcasts: account.allowBroadcasts,
+    trial_ends_at: account.trialEndsAt?.toISOString() ?? null,
+  }
 }
 
 export function assertAccountWritable(entitlements: AccountEntitlements): void {
@@ -48,75 +60,84 @@ export function assertAccountWritable(entitlements: AccountEntitlements): void {
 }
 
 async function exactCount(
-  supabase: SupabaseClient,
+  _unusedClient: unknown,
   table: string,
   accountId: string,
-  column = 'id',
+  _column = 'id',
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from(table)
-    .select(column, { count: 'exact', head: true })
-    .eq('account_id', accountId)
-  if (error) throw new ForbiddenError(`Could not check ${table} limit`)
-  return count ?? 0
+  void _column
+
+  if (!['profiles', 'flows', 'automations', 'whatsapp_config'].includes(table)) {
+    throw new ForbiddenError(`Could not check ${table} limit`)
+  }
+
+  try {
+    const result = await db.execute(
+      sql.raw(`select count(*)::int as count from ${table} where account_id = '${accountId.replaceAll("'", "''")}'`),
+    )
+    return Number((result.rows[0] as { count?: number } | undefined)?.count ?? 0)
+  } catch (error) {
+    if ((error as { code?: string })?.code === '42P01') return 0
+    throw new ForbiddenError(`Could not check ${table} limit`)
+  }
 }
 
 export async function assertCanInviteMember(
-  supabase: SupabaseClient,
+  client: unknown,
   accountId: string,
 ): Promise<void> {
-  const entitlements = await getAccountEntitlements(supabase, accountId)
+  const entitlements = await getAccountEntitlements(client, accountId)
   assertAccountWritable(entitlements)
-  const members = await exactCount(supabase, 'profiles', accountId, 'user_id')
+  const members = await exactCount(client, 'profiles', accountId, 'user_id')
   if (members >= entitlements.max_users) {
     throw new ForbiddenError(`User limit reached for plan '${entitlements.plan}'`)
   }
 }
 
 export async function assertCanCreateFlow(
-  supabase: SupabaseClient,
+  client: unknown,
   accountId: string,
 ): Promise<void> {
-  const entitlements = await getAccountEntitlements(supabase, accountId)
+  const entitlements = await getAccountEntitlements(client, accountId)
   assertAccountWritable(entitlements)
-  const flows = await exactCount(supabase, 'flows', accountId)
+  const flows = await exactCount(client, 'flows', accountId)
   if (flows >= entitlements.max_flows) {
     throw new ForbiddenError(`Flow limit reached for plan '${entitlements.plan}'`)
   }
 }
 
 export async function assertCanCreateAutomation(
-  supabase: SupabaseClient,
+  client: unknown,
   accountId: string,
 ): Promise<void> {
-  const entitlements = await getAccountEntitlements(supabase, accountId)
+  const entitlements = await getAccountEntitlements(client, accountId)
   assertAccountWritable(entitlements)
-  const automations = await exactCount(supabase, 'automations', accountId)
+  const automations = await exactCount(client, 'automations', accountId)
   if (automations >= entitlements.max_automations) {
     throw new ForbiddenError(`Automation limit reached for plan '${entitlements.plan}'`)
   }
 }
 
 export async function assertCanCreateWhatsAppLine(
-  supabase: SupabaseClient,
+  client: unknown,
   accountId: string,
   existingLineId?: string | null,
 ): Promise<void> {
-  const entitlements = await getAccountEntitlements(supabase, accountId)
+  const entitlements = await getAccountEntitlements(client, accountId)
   assertAccountWritable(entitlements)
   if (existingLineId) return
-  const lines = await exactCount(supabase, 'whatsapp_config', accountId)
+  const lines = await exactCount(client, 'whatsapp_config', accountId)
   if (lines >= entitlements.max_whatsapp_lines) {
     throw new ForbiddenError(`WhatsApp line limit reached for plan '${entitlements.plan}'`)
   }
 }
 
 export async function assertFeatureEnabled(
-  supabase: SupabaseClient,
+  client: unknown,
   accountId: string,
   feature: AccountFeature,
 ): Promise<void> {
-  const entitlements = await getAccountEntitlements(supabase, accountId)
+  const entitlements = await getAccountEntitlements(client, accountId)
   assertAccountWritable(entitlements)
   const enabled =
     feature === 'ai'

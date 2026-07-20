@@ -18,8 +18,12 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { and, desc, eq, gt, isNull } from "drizzle-orm";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
+import { db } from "@/db/client";
+import { accountInvitations } from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import {
   clampExpiryDays,
   generateInviteToken,
@@ -137,29 +141,37 @@ function getBaseUrl(request: Request): string {
 
 const MAX_LABEL_LEN = 80;
 
+function serializeInvitation(invitation: typeof accountInvitations.$inferSelect) {
+  return {
+    id: invitation.id,
+    account_id: invitation.accountId,
+    role: invitation.role,
+    created_by_user_id: invitation.createdByUserId,
+    label: invitation.label,
+    created_at: invitation.createdAt.toISOString(),
+    expires_at: invitation.expiresAt.toISOString(),
+    accepted_at: invitation.acceptedAt?.toISOString() ?? null,
+    accepted_by_user_id: invitation.acceptedByUserId,
+  };
+}
+
 export async function GET() {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
-    const { data, error } = await ctx.supabase
-      .from("account_invitations")
-      .select(
-        "id, role, label, created_by_user_id, created_at, expires_at, accepted_at, accepted_by_user_id",
+    const invitations = await db
+      .select()
+      .from(accountInvitations)
+      .where(
+        and(
+          eq(accountInvitations.accountId, ctx.accountId),
+          isNull(accountInvitations.acceptedAt),
+          gt(accountInvitations.expiresAt, new Date()),
+        ),
       )
-      .eq("account_id", ctx.accountId)
-      .is("accepted_at", null)
-      .gt("expires_at", new Date().toISOString())
-      .order("created_at", { ascending: false });
+      .orderBy(desc(accountInvitations.createdAt));
 
-    if (error) {
-      console.error("[GET /api/account/invitations] fetch error:", error);
-      return NextResponse.json(
-        { error: "Failed to load invitations" },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json({ invitations: data ?? [] });
+    return NextResponse.json({ invitations: invitations.map(serializeInvitation) });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -167,7 +179,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
 
     // 30/min per user. The Members tab is a clicks-only UI so any
     // legitimate admin is far below this; the cap exists to keep
@@ -178,7 +190,7 @@ export async function POST(request: Request) {
       RATE_LIMITS.adminAction,
     );
     if (!limit.success) return rateLimitResponse(limit);
-    await assertCanInviteMember(ctx.supabase, ctx.accountId);
+    await assertCanInviteMember(null, ctx.accountId);
 
     const body = (await request.json().catch(() => null)) as
       | { role?: unknown; expiresInDays?: unknown; label?: unknown }
@@ -218,21 +230,19 @@ export async function POST(request: Request) {
 
     const { token, hash } = generateInviteToken();
 
-    const { data, error } = await ctx.supabase
-      .from("account_invitations")
-      .insert({
-        account_id: ctx.accountId,
-        token_hash: hash,
+    const [invitation] = await db
+      .insert(accountInvitations)
+      .values({
+        accountId: ctx.accountId,
+        tokenHash: hash,
         role,
-        created_by_user_id: ctx.userId,
+        createdByUserId: ctx.userId,
         label,
-        expires_at: expiresAt.toISOString(),
+        expiresAt,
       })
-      .select("id, role, label, expires_at, created_at")
-      .single();
+      .returning();
 
-    if (error || !data) {
-      console.error("[POST /api/account/invitations] insert error:", error);
+    if (!invitation) {
       return NextResponse.json(
         { error: "Failed to create invitation" },
         { status: 500 },
@@ -241,7 +251,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        invitation: data,
+        invitation: serializeInvitation(invitation),
         // Plaintext payload — visible to the admin exactly once.
         token,
         url: inviteUrl(token, getBaseUrl(request)),

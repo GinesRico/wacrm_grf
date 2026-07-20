@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { and, eq } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { conversations } from '@/db/schema'
+import { requireDbRole } from '@/lib/auth/current-account'
+import { toErrorResponse } from '@/lib/auth/errors'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadAiConfig } from '@/lib/ai/config'
 import { buildConversationContext } from '@/lib/ai/context'
@@ -8,7 +13,6 @@ import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { logAiUsage } from '@/lib/ai/usage'
-import { supabaseAdmin } from '@/lib/ai/admin-client'
 import { AiError } from '@/lib/ai/types'
 import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
@@ -23,8 +27,8 @@ import { assertFeatureEnabled } from '@/lib/platform/entitlements'
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('agent')
-    await assertFeatureEnabled(supabase, accountId, 'ai')
+    const { accountId, userId } = await requireDbRole('agent')
+    await assertFeatureEnabled(null, accountId, 'ai')
 
     const userLimit = checkRateLimit(`ai-draft:${userId}`, RATE_LIMITS.aiDraft)
     if (!userLimit.success) return rateLimitResponse(userLimit)
@@ -47,20 +51,16 @@ export async function POST(request: Request) {
 
     // RLS scopes the SSR client to the caller's account, so a missing
     // row means "not yours / not found" either way.
-    const { data: conversation, error: convErr } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', conversationId)
-      .maybeSingle()
-    if (convErr) {
-      console.error('[ai/draft] conversation lookup error:', convErr)
-      return NextResponse.json({ error: 'Failed to load conversation' }, { status: 500 })
-    }
+    const [conversation] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+      .limit(1)
     if (!conversation) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
-    const config = await loadAiConfig(supabase, accountId).catch((err) => {
+    const config = await loadAiConfig(null, accountId).catch((err) => {
       // Decrypt failure — surface distinctly from "not configured".
       console.error('[ai/draft] loadAiConfig error:', err)
       throw new AiError('Stored API key could not be decrypted.', {
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const messages = await buildConversationContext(supabase, conversationId)
+    const messages = await buildConversationContext(null, conversationId)
     // Nothing to draft from — a brand-new thread with no customer text
     // would otherwise produce a nonsensical reply-to-nothing.
     if (messages.length === 0) {
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     // Ground the draft in the account's knowledge base (best-effort —
     // returns [] when there's no KB or retrieval fails).
     const knowledge = await retrieveKnowledge(
-      supabase,
+      null,
       accountId,
       config,
       latestUserMessage(messages),
@@ -116,7 +116,7 @@ export async function POST(request: Request) {
     //  - it's fire-and-forget (`void`), not awaited, so the response
     //    isn't held for a DB round-trip.
     try {
-      void logAiUsage(supabaseAdmin(), {
+      void logAiUsage({
         accountId,
         conversationId,
         mode: 'draft',

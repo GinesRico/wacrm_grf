@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { Contact, CustomField, MessageTemplate } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -85,42 +84,27 @@ export function Step3Personalize({
   >(new Map());
   const [loadingPreview, setLoadingPreview] = useState(true);
 
-  // Load user's custom fields + a representative contact for the
-  // live preview. Fall back to sample data if no contacts exist yet.
+  // Load custom fields + a representative contact for the live preview.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const supabase = createClient();
-      const [fieldsRes, contactRes] = await Promise.all([
-        supabase.from('custom_fields').select('*').order('field_name'),
-        supabase
-          .from('contacts')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ]);
+      const res = await fetch('/api/broadcasts/wizard-data', { cache: 'no-store' });
+      const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
 
-      setCustomFields(fieldsRes.data ?? []);
+      setCustomFields((payload.custom_fields as CustomField[] | undefined) ?? []);
       setLoadingFields(false);
 
-      const contact = contactRes.data ?? null;
+      const contact = (payload.first_contact as Contact | null | undefined) ?? null;
       setFirstContact(contact);
-
-      if (contact) {
-        const { data: customVals } = await supabase
-          .from('contact_custom_values')
-          .select('custom_field_id, value')
-          .eq('contact_id', contact.id);
-        if (!cancelled) {
-          const map = new Map<string, string>();
-          for (const row of customVals ?? []) {
-            map.set(row.custom_field_id, row.value ?? '');
-          }
-          setFirstContactCustomValues(map);
-        }
+      const map = new Map<string, string>();
+      for (const row of (payload.first_contact_custom_values ?? []) as Array<{
+        custom_field_id: string;
+        value?: string | null;
+      }>) {
+        map.set(row.custom_field_id, row.value ?? '');
       }
+      setFirstContactCustomValues(map);
       setLoadingPreview(false);
     })();
     return () => {

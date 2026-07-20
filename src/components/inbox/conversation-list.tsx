@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
 import type { InboxScope, InboxSubtab, InboxTab } from "@/lib/inbox/tickets";
 import { cn } from "@/lib/utils";
@@ -298,15 +297,17 @@ export function ConversationList({
   // Tag and department definitions for the filter pickers; loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
   useEffect(() => {
-    const supabase = createClient();
     let cancelled = false;
     (async () => {
-      const [{ data }, departmentRes] = await Promise.all([
-        supabase.from("tags").select("*").order("name"),
+      const [tagsRes, departmentRes] = await Promise.all([
+        fetch("/api/tags", { cache: "no-store" }),
         fetch("/api/departments", { cache: "no-store" }),
       ]);
+      const tagsPayload = await tagsRes.json().catch(() => ({}));
       const departmentPayload = await departmentRes.json().catch(() => ({}));
-      if (!cancelled && data) setTags(data as Tag[]);
+      if (!cancelled && tagsRes.ok) {
+        setTags((tagsPayload.tags as Tag[] | undefined) ?? []);
+      }
       if (!cancelled && departmentRes.ok) {
         setDepartments((departmentPayload.departments as Department[] | undefined) ?? []);
       }
@@ -492,19 +493,16 @@ export function ConversationList({
       setPreviewMessages([]);
       setPreviewLoading(true);
 
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .eq("conversation_id", conversation.id)
-        .order("created_at", { ascending: false })
-        .limit(30);
+      const res = await fetch(`/api/inbox/messages?conversation_id=${conversation.id}`, {
+        cache: "no-store",
+      });
+      const payload = await res.json().catch(() => ({}));
 
-      if (error) {
-        console.error("Failed to load conversation preview:", error);
+      if (!res.ok) {
+        console.error("Failed to load conversation preview:", payload);
         setPreviewMessages([]);
       } else {
-        setPreviewMessages([...(data ?? [])].reverse() as Message[]);
+        setPreviewMessages(((payload.messages as Message[] | undefined) ?? []).slice(-30));
       }
 
       setPreviewLoading(false);
@@ -1176,22 +1174,26 @@ function ConversationPreviewDialog({
     }
 
     let cancelled = false;
-    const supabase = createClient();
 
     (async () => {
-      const { data, error } = await supabase
-        .from("message_templates")
-        .select("name, footer_text, buttons")
-        .in("name", templateNames);
-
+      const res = await fetch("/api/inbox/template-previews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: templateNames }),
+      });
+      const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
-      if (error) {
-        console.error("Failed to fetch preview template buttons:", error);
+      if (!res.ok) {
+        console.error("Failed to fetch preview template buttons:", payload);
         return;
       }
 
       const payloads: Record<string, InteractiveMessagePayload> = {};
-      for (const row of data ?? []) {
+      for (const row of (payload.templates ?? []) as {
+        name?: unknown;
+        footer_text?: unknown;
+        buttons?: unknown;
+      }[]) {
         const buttons = Array.isArray(row.buttons) ? row.buttons : [];
         const previewButtons = buttons
           .map(toInteractiveTemplateButton)

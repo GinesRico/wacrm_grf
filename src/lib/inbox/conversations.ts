@@ -1,5 +1,7 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
+import { db } from "@/db/client";
+import { profiles } from "@/db/schema";
 import type { Conversation, Contact, Department, Profile, Tag, WhatsAppConfig } from "@/types";
 
 /**
@@ -47,7 +49,7 @@ export function normalizeConversations(
 }
 
 export async function hydrateAssignedAgents(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   conversations: Conversation[],
 ): Promise<Conversation[]> {
@@ -61,13 +63,17 @@ export async function hydrateAssignedAgents(
 
   if (agentIds.length === 0) return conversations;
 
-  const { data, error } = await db
-    .from("profiles")
-    .select("user_id, full_name, email, avatar_url")
-    .eq("account_id", accountId)
-    .in("user_id", agentIds);
-
-  if (error) throw error;
+  const data = await db
+    .select({
+      user_id: profiles.userId,
+      full_name: profiles.fullName,
+      email: profiles.email,
+      avatar_url: profiles.avatarUrl,
+    })
+    .from(profiles)
+    .where(
+      and(eq(profiles.accountId, accountId), inArray(profiles.userId, agentIds)),
+    );
 
   const profilesByUserId = new Map(
     ((data ?? []) as Pick<
@@ -82,6 +88,84 @@ export async function hydrateAssignedAgents(
       ? profilesByUserId.get(conversation.assigned_agent_id) ?? null
       : null,
   }));
+}
+
+function rowsOf<T>(result: { rows: unknown[] }): T[] {
+  return result.rows as T[];
+}
+
+const INBOX_CONVERSATION_ROW_SQL = sql.raw(`
+  c.*,
+  case
+    when ct.id is null then null
+    else json_build_object(
+      'id', ct.id,
+      'user_id', ct.user_id,
+      'account_id', ct.account_id,
+      'phone', ct.phone,
+      'phone_normalized', ct.phone_normalized,
+      'name', ct.name,
+      'email', ct.email,
+      'company', ct.company,
+      'avatar_url', ct.avatar_url,
+      'created_at', ct.created_at,
+      'updated_at', ct.updated_at,
+      'tags', coalesce(tags.items, '[]'::json)
+    )
+  end as contact,
+  case
+    when wc.id is null then null
+    else json_build_object(
+      'id', wc.id,
+      'label', wc.label,
+      'phone_number_id', wc.phone_number_id
+    )
+  end as whatsapp_config,
+  case
+    when d.id is null then null
+    else json_build_object(
+      'id', d.id,
+      'name', d.name,
+      'color', d.color
+    )
+  end as department
+`);
+
+export async function getInboxConversationById(
+  accountId: string,
+  conversationId: string,
+): Promise<Conversation | null> {
+  const result = await db.execute(sql`
+    select ${INBOX_CONVERSATION_ROW_SQL}
+    from conversations c
+    left join contacts ct on ct.id = c.contact_id
+    left join whatsapp_config wc on wc.id = c.whatsapp_config_id
+    left join departments d on d.id = c.department_id
+    left join lateral (
+      select json_agg(
+        json_build_object(
+          'id', t.id,
+          'user_id', t.user_id,
+          'name', t.name,
+          'color', t.color,
+          'created_at', t.created_at
+        )
+        order by t.name asc
+      ) as items
+      from contact_tags ctag
+      join tags t on t.id = ctag.tag_id
+      where ctag.contact_id = ct.id
+    ) tags on true
+    where c.id = ${conversationId} and c.account_id = ${accountId}
+    limit 1
+  `);
+
+  const [row] = rowsOf<RawConversation>(result);
+  if (!row) return null;
+  const [conversation] = await hydrateAssignedAgents(null, accountId, [
+    normalizeConversation(row),
+  ]);
+  return conversation;
 }
 
 export interface ContactFilters {

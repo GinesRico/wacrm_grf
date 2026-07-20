@@ -20,7 +20,7 @@ import type {
   AppointmentAvailabilityStepConfig,
   CreateAppointmentStepConfig,
 } from '@/types'
-import { supabaseAdmin } from './admin-client'
+import { dbAdmin } from './admin-client'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
 import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
@@ -83,7 +83,7 @@ export interface DispatchInput {
  */
 export async function runAutomationsForTrigger(input: DispatchInput): Promise<void> {
   try {
-    const db = supabaseAdmin()
+    const db = dbAdmin()
 
     // Tenant isolation. `contactId` can be caller-supplied (the manual
     // POST /api/automations/engine entrypoint reads it straight from the
@@ -155,7 +155,7 @@ export async function resumePendingExecution(pending: {
   next_step_position: number
   context: AutomationContext
 }): Promise<void> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
   const { data: automation, error } = await db
     .from('automations')
     .select('*')
@@ -191,7 +191,7 @@ export async function resumePendingExecution(pending: {
 // ------------------------------------------------------------
 
 async function executeAutomation(automation: Automation, input: DispatchInput) {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   const { data: log, error: logErr } = await db
     .from('automation_logs')
@@ -251,7 +251,7 @@ interface ExecuteArgs {
 }
 
 async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   const baseQuery = db
     .from('automation_steps')
@@ -365,7 +365,7 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
 }
 
 async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
 
   switch (step.step_type) {
     case 'send_message': {
@@ -876,7 +876,7 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
   if (fromCtx) return fromCtx
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
-  const { data, error } = await supabaseAdmin()
+  const { data, error } = await dbAdmin()
     .from('conversations')
     .select('id')
     .eq('account_id', args.automation.account_id)
@@ -916,7 +916,7 @@ export function triggerMatches(automation: Automation, ctx: AutomationContext | 
 }
 
 async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {
-  const db = supabaseAdmin()
+  const db = dbAdmin()
   switch (cfg.subject) {
     case 'tag_presence': {
       if (!args.contactId || !cfg.operand) return false
@@ -1003,7 +1003,7 @@ async function appendResults(
   errorMessage: string | null,
 ) {
   if (!logId) return
-  const db = supabaseAdmin()
+  const db = dbAdmin()
   const { data: existing } = await db
     .from('automation_logs')
     .select('steps_executed, status')
@@ -1028,14 +1028,14 @@ async function finalizeLog(
   errorMessage: string | null,
 ) {
   if (!logId) return
-  await supabaseAdmin()
+  await dbAdmin()
     .from('automation_logs')
     .update({ status, error_message: errorMessage })
     .eq('id', logId)
 }
 
 async function markPending(id: string, status: 'done' | 'failed') {
-  await supabaseAdmin()
+  await dbAdmin()
     .from('automation_pending_executions')
     .update({ status })
     .eq('id', id)

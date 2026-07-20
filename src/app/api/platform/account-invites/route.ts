@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
+import { desc } from 'drizzle-orm'
 
+import { db } from '@/db/client'
+import { platformAccountInvites } from '@/db/schema'
+import { toErrorResponse } from '@/lib/auth/errors'
 import { requirePlatformAdmin } from '@/lib/platform/admin'
-import { supabaseAdmin } from '@/lib/supabase/admin'
-import { toErrorResponse } from '@/lib/auth/account'
 import {
   clampExpiryDays,
   generateInviteToken,
@@ -12,6 +14,28 @@ import {
 
 const MAX_NAME_LEN = 80
 const MAX_PLAN_LEN = 40
+
+function serializeInvite(invite: typeof platformAccountInvites.$inferSelect) {
+  return {
+    id: invite.id,
+    account_name: invite.accountName,
+    owner_email: invite.ownerEmail,
+    plan: invite.plan,
+    status: invite.status,
+    max_users: invite.maxUsers,
+    max_flows: invite.maxFlows,
+    max_automations: invite.maxAutomations,
+    max_whatsapp_lines: invite.maxWhatsappLines,
+    allow_ai: invite.allowAi,
+    allow_api: invite.allowApi,
+    allow_broadcasts: invite.allowBroadcasts,
+    trial_ends_at: invite.trialEndsAt?.toISOString() ?? null,
+    created_at: invite.createdAt.toISOString(),
+    expires_at: invite.expiresAt.toISOString(),
+    accepted_at: invite.acceptedAt?.toISOString() ?? null,
+    accepted_by_user_id: invite.acceptedByUserId,
+  }
+}
 
 function getBaseUrl(request: Request): string {
   const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim()
@@ -29,15 +53,13 @@ function asLimit(value: unknown, fallback: number, min = 0): number {
 export async function GET() {
   try {
     await requirePlatformAdmin()
-    const { data, error } = await supabaseAdmin()
-      .from('platform_account_invites')
-      .select('id, account_name, owner_email, plan, status, max_users, max_flows, max_automations, max_whatsapp_lines, allow_ai, allow_api, allow_broadcasts, trial_ends_at, created_at, expires_at, accepted_at, accepted_by_user_id')
-      .order('created_at', { ascending: false })
-    if (error) {
-      console.error('[GET /api/platform/account-invites] fetch error:', error)
-      return NextResponse.json({ error: 'Failed to load invitations' }, { status: 500 })
-    }
-    return NextResponse.json({ invitations: data ?? [] })
+
+    const invites = await db
+      .select()
+      .from(platformAccountInvites)
+      .orderBy(desc(platformAccountInvites.createdAt))
+
+    return NextResponse.json({ invitations: invites.map(serializeInvite) })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -68,40 +90,35 @@ export async function POST(request: Request) {
     const expiresAt = inviteExpiresAt(expiryDays)
 
     const row = {
-      account_name: accountName,
-      owner_email: ownerEmail,
+      accountName,
+      ownerEmail,
       plan,
       status: body.status === 'trial' ? 'trial' : 'active',
-      max_users: asLimit(body.max_users, 3, 1),
-      max_flows: asLimit(body.max_flows, 5),
-      max_automations: asLimit(body.max_automations, 5),
-      max_whatsapp_lines: asLimit(body.max_whatsapp_lines, 1),
-      allow_ai: body.allow_ai === true,
-      allow_api: body.allow_api === true,
-      allow_broadcasts: body.allow_broadcasts !== false,
-      trial_ends_at:
+      maxUsers: asLimit(body.max_users, 3, 1),
+      maxFlows: asLimit(body.max_flows, 5),
+      maxAutomations: asLimit(body.max_automations, 5),
+      maxWhatsappLines: asLimit(body.max_whatsapp_lines, 1),
+      allowAi: body.allow_ai === true,
+      allowApi: body.allow_api === true,
+      allowBroadcasts: body.allow_broadcasts !== false,
+      trialEndsAt:
         typeof body.trial_ends_at === 'string' && body.trial_ends_at
-          ? new Date(body.trial_ends_at).toISOString()
+          ? new Date(body.trial_ends_at)
           : null,
-      token_hash: hash,
-      created_by_user_id: ctx.userId,
-      expires_at: expiresAt.toISOString(),
+      tokenHash: hash,
+      createdByUserId: ctx.userId,
+      expiresAt,
     }
 
-    const { data, error } = await supabaseAdmin()
-      .from('platform_account_invites')
-      .insert(row)
-      .select('id, account_name, owner_email, plan, expires_at, created_at')
-      .single()
+    const [invitation] = await db.insert(platformAccountInvites).values(row).returning()
 
-    if (error || !data) {
-      console.error('[POST /api/platform/account-invites] insert error:', error)
+    if (!invitation) {
       return NextResponse.json({ error: 'Failed to create platform invitation' }, { status: 500 })
     }
 
     return NextResponse.json(
       {
-        invitation: data,
+        invitation: serializeInvite(invitation),
         token,
         url: inviteUrl(token, `${getBaseUrl(request)}/platform`),
         expiresInDays: expiryDays,

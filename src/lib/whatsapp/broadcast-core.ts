@@ -16,8 +16,10 @@
 // for API broadcasts exactly as it does for dashboard ones.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, eq } from "drizzle-orm";
 
+import { db as appDb } from "@/db/client";
+import { broadcastRecipients, broadcasts, messageTemplates } from "@/db/schema";
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config';
@@ -30,6 +32,7 @@ import {
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
+import { serializeMessageTemplate } from "@/lib/whatsapp/template-serializer";
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -84,7 +87,7 @@ const MAX_RECIPIENTS = 1000;
  * template / a DB failure — nothing is sent in this phase.
  */
 export async function createBroadcast(
-  db: SupabaseClient,
+  _unusedDb: unknown,
   accountId: string,
   auditUserId: string,
   params: CreateBroadcastParams
@@ -112,7 +115,7 @@ export async function createBroadcast(
 
   // Config (fail fast + provides the audit trail owner already resolved
   // by the caller). Meta send needs phone_number_id + decrypted token.
-  const config = await getDefaultWhatsAppConfig(db, accountId);
+  const config = await getDefaultWhatsAppConfig(null, accountId);
   if (!config) {
     throw new BroadcastError(
       'whatsapp_not_configured',
@@ -124,21 +127,27 @@ export async function createBroadcast(
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.
-  const { data: rawTemplateRow } = await db
-    .from('message_templates')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('name', templateName)
-    .eq('language', templateLanguage)
-    .maybeSingle();
-  if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
+  const [matchingTemplate] = await appDb
+    .select()
+    .from(messageTemplates)
+    .where(
+      and(
+        eq(messageTemplates.accountId, accountId),
+        eq(messageTemplates.name, templateName),
+        eq(messageTemplates.language, templateLanguage),
+      ),
+    );
+  const serializedTemplate = matchingTemplate
+    ? serializeMessageTemplate(matchingTemplate)
+    : null;
+  if (serializedTemplate && !isMessageTemplate(serializedTemplate)) {
     throw new BroadcastError(
       'template_malformed',
       'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
       500
     );
   }
-  const templateRow = (rawTemplateRow as MessageTemplate | null) ?? null;
+  const templateRow = (serializedTemplate as MessageTemplate | null) ?? null;
 
   // Resolve each recipient to a contact. Invalid phones are dropped
   // (counted as rejected) rather than aborting the whole broadcast.
@@ -150,7 +159,7 @@ export async function createBroadcast(
       rejected++;
       continue;
     }
-    const { id } = await findOrCreateContact(db, accountId, auditUserId, {
+    const { id } = await findOrCreateContact(null, accountId, auditUserId, {
       phone: sanitized,
     });
     resolved.push({
@@ -190,36 +199,33 @@ export async function createBroadcast(
   // recipient change). `rejected` phones have no recipient row, so they
   // are reported to the caller in the POST response, not in these
   // persisted counts.
-  const { data: broadcast, error: bErr } = await db
-    .from('broadcasts')
-    .insert({
-      account_id: accountId,
-      user_id: auditUserId,
+  const [broadcast] = await appDb
+    .insert(broadcasts)
+    .values({
+      accountId,
+      userId: auditUserId,
       name: name || `API broadcast (${templateName})`,
-      template_name: templateName,
-      template_language: templateLanguage,
+      templateName,
+      templateLanguage,
       status: 'sending',
-      total_recipients: deduped.length,
+      totalRecipients: deduped.length,
     })
-    .select('id')
-    .single();
-  if (bErr || !broadcast) {
-    console.error('[broadcast-core] create broadcast error:', bErr);
+    .returning({ id: broadcasts.id });
+  if (!broadcast) {
     throw new BroadcastError('internal', 'Failed to create broadcast', 500);
   }
 
-  const { data: recipientRows, error: rErr } = await db
-    .from('broadcast_recipients')
-    .insert(
+  const recipientRows = await appDb
+    .insert(broadcastRecipients)
+    .values(
       deduped.map((r) => ({
-        broadcast_id: broadcast.id,
-        contact_id: r.contactId,
+        broadcastId: broadcast.id,
+        contactId: r.contactId,
         status: 'pending' as const,
       }))
     )
-    .select('id, contact_id');
-  if (rErr || !recipientRows) {
-    console.error('[broadcast-core] create recipients error:', rErr);
+    .returning({ id: broadcastRecipients.id, contactId: broadcastRecipients.contactId });
+  if (!recipientRows.length) {
     throw new BroadcastError('internal', 'Failed to create broadcast', 500);
   }
 
@@ -227,7 +233,7 @@ export async function createBroadcast(
   // contact_id — unambiguous now that duplicates are collapsed.
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = recipientRows.map((row) => {
-    const r = byContact.get(row.contact_id as string)!;
+    const r = byContact.get(row.contactId as string)!;
     return { recipientRowId: row.id as string, phone: r.phone, params: r.params };
   });
 
@@ -257,7 +263,7 @@ export async function createBroadcast(
  * race and clobber the trigger-maintained counts.
  */
 export async function deliverBroadcast(
-  db: SupabaseClient,
+  _unusedDb: unknown,
   plan: BroadcastPlan
 ): Promise<void> {
   let sentCount = 0;
@@ -291,34 +297,34 @@ export async function deliverBroadcast(
 
     if (sentMessageId) {
       sentCount++;
-      await db
-        .from('broadcast_recipients')
-        .update({
+      await appDb
+        .update(broadcastRecipients)
+        .set({
           status: 'sent',
-          sent_at: new Date().toISOString(),
-          whatsapp_message_id: sentMessageId,
-          error_message: null,
+          sentAt: new Date(),
+          whatsappMessageId: sentMessageId,
+          errorMessage: null,
         })
-        .eq('id', recipient.recipientRowId);
+        .where(eq(broadcastRecipients.id, recipient.recipientRowId));
     } else {
-      await db
-        .from('broadcast_recipients')
-        .update({
+      await appDb
+        .update(broadcastRecipients)
+        .set({
           status: 'failed',
-          error_message: lastError || 'Unknown error',
+          errorMessage: lastError || 'Unknown error',
         })
-        .eq('id', recipient.recipientRowId);
+        .where(eq(broadcastRecipients.id, recipient.recipientRowId));
     }
   }
 
   // Terminal status only — counts are trigger-owned (see the note
   // above). If nothing sent, the broadcast failed outright; a partial
   // send is still 'sent' (per-recipient failures show in failed_count).
-  await db
-    .from('broadcasts')
-    .update({
+  await appDb
+    .update(broadcasts)
+    .set({
       status: sentCount > 0 ? 'sent' : 'failed',
-      updated_at: new Date().toISOString(),
+      updatedAt: new Date(),
     })
-    .eq('id', plan.broadcastId);
+    .where(eq(broadcasts.id, plan.broadcastId));
 }

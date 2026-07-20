@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
+import { and, eq } from 'drizzle-orm';
 
+import { db } from '@/db/client';
+import { appointmentAvailabilityMessages, contacts, conversations } from '@/db/schema';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
-import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
 import {
   fetchAvailabilityMessage,
   fetchAvailabilitySlots,
@@ -17,6 +21,26 @@ import { sendMessageToConversation, SendMessageError } from '@/lib/whatsapp/send
 const MAX_INTERACTIVE_DAYS = 10;
 const MAX_INTERACTIVE_ROWS = 10;
 const APPOINTMENT_SERVICES = ['Neumaticos', 'Alineacion', 'Neumaticos + Alineacion'];
+
+function serializeAvailabilityAudit(row: typeof appointmentAvailabilityMessages.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    contact_id: row.contactId,
+    conversation_id: row.conversationId,
+    provider: row.provider,
+    date: row.date,
+    end_date: row.endDate,
+    send_mode: row.sendMode,
+    service: row.service,
+    slots: Array.isArray(row.slots) ? row.slots : [],
+    short_url: row.shortUrl,
+    message_text: row.messageText,
+    raw_response: row.rawResponse,
+    created_by: row.createdBy,
+    created_at: row.createdAt.toISOString(),
+  };
+}
 
 function parseRequestedDates(body: Record<string, unknown>): string[] {
   const rawDates = Array.isArray(body.dates) ? body.dates : [body.date];
@@ -320,7 +344,7 @@ function buildInteractivePayload(
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole('agent');
+    const ctx = await requireDbRole('agent');
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) {
       return NextResponse.json({ error: 'Request body must be JSON' }, { status: 400 });
@@ -344,27 +368,25 @@ export async function POST(request: Request) {
     }
 
     if (contactId) {
-      const { data: contact } = await ctx.supabase
-        .from('contacts')
-        .select('id')
-        .eq('account_id', ctx.accountId)
-        .eq('id', contactId)
-        .maybeSingle();
+      const [contact] = await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.accountId, ctx.accountId), eq(contacts.id, contactId)))
+        .limit(1);
       if (!contact) return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
     }
 
-    const { data: conversation } = await ctx.supabase
-      .from('conversations')
-      .select('id')
-      .eq('account_id', ctx.accountId)
-      .eq('id', conversationId)
-      .maybeSingle();
+    const [conversation] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.accountId, ctx.accountId), eq(conversations.id, conversationId)))
+      .limit(1);
     if (!conversation) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
     const { config, apiToken } = await requireActiveArveraAppointmentsConnection(
-      ctx.supabase,
+      null,
       ctx.accountId,
     );
     const sendMode = resolveSendMode(body, config.default_send_mode);
@@ -391,32 +413,31 @@ export async function POST(request: Request) {
         timezone: typeof body.timezone === 'string' ? body.timezone : config.timezone,
       }).catch(() => ({ disponibles: [] }));
 
-      const { data: audit, error } = await ctx.supabase
-        .from('appointment_availability_messages')
-        .insert({
-          account_id: ctx.accountId,
-          contact_id: contactId,
-          conversation_id: conversationId,
+      const [auditRow] = await db
+        .insert(appointmentAvailabilityMessages)
+        .values({
+          accountId: ctx.accountId,
+          contactId,
+          conversationId,
           date,
-          end_date: null,
-          send_mode: sendMode,
+          endDate: null,
+          sendMode,
           service,
           slots: availability.disponibles,
-          short_url: messagePayload.short_url ?? null,
-          message_text: text,
-          raw_response: messagePayload,
-          created_by: ctx.userId,
+          shortUrl: messagePayload.short_url ?? null,
+          messageText: text,
+          rawResponse: messagePayload,
+          createdBy: ctx.userId,
         })
-        .select('*')
-        .single();
-      if (error || !audit) {
-        console.error('[arvera appointments availability] insert failed:', error);
+        .returning();
+      if (!auditRow) {
         return NextResponse.json({ error: 'Availability message not saved' }, { status: 500 });
       }
+      const audit = serializeAvailabilityAudit(auditRow);
       audits.push(audit);
 
       if (sendMode === 'booking_link') {
-        const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
+        const sent = await sendMessageToConversation(null, ctx.accountId, {
           conversationId,
           messageType: 'text',
           contentText: text,
@@ -432,7 +453,7 @@ export async function POST(request: Request) {
           service,
           slots: formatMessageSlots(messagePayload.slots),
         }).trim();
-        const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
+        const sent = await sendMessageToConversation(null, ctx.accountId, {
           conversationId,
           messageType: 'interactive',
           interactivePayload: {
@@ -447,7 +468,7 @@ export async function POST(request: Request) {
 
       if (sendMode === 'interactive_list') {
         const payload = buildInteractivePayload([date], service, [audit], config);
-        const sent = await sendMessageToConversation(ctx.supabase, ctx.accountId, {
+        const sent = await sendMessageToConversation(null, ctx.accountId, {
           conversationId,
           messageType: 'interactive',
           interactivePayload: payload,
@@ -484,6 +505,12 @@ export async function POST(request: Request) {
   } catch (err) {
     if (err instanceof SendMessageError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    if (
+      err instanceof Error &&
+      (err.name === 'UnauthorizedError' || err.name === 'ForbiddenError')
+    ) {
+      return toErrorResponse(err);
     }
     if (err instanceof Error) {
       return NextResponse.json({ error: err.message }, { status: 400 });

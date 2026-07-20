@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SupabaseClient } from '@supabase/supabase-js';
+type DbClient = any;
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
@@ -7,9 +7,9 @@ import {
 
 // Tiny mock that records the .update payload and the .eq filter for
 // inspection. Mirrors the surface this module actually uses on the
-// Supabase client (.from().update().eq().select()) — anything beyond
+// database client (.from().update().eq().select()) — anything beyond
 // throws, so unintended calls fail loudly.
-function makeSupabaseStub(
+function makePostgresStub(
   selectResult: { data: { id: string }[] | null; error: { message: string } | null } = {
     data: [{ id: 'row-1' }],
     error: null,
@@ -40,7 +40,7 @@ function makeSupabaseStub(
                     v: { error: { message: string } | null },
                   ) => unknown,
                 ) {
-                  // Allow `await supabase.update().eq()` (no .select()).
+                  // Allow `await postgres.update().eq()` (no .select()).
                   return Promise.resolve({ error: selectResult.error }).then(
                     onFulfilled,
                   );
@@ -53,7 +53,7 @@ function makeSupabaseStub(
     },
   };
 
-  return { stub: stub as unknown as SupabaseClient, calls };
+  return { stub: stub as unknown as DbClient, calls };
 }
 
 describe('isTemplateWebhookField', () => {
@@ -71,7 +71,7 @@ describe('isTemplateWebhookField', () => {
 });
 
 describe('handleTemplateWebhookChange — status update', () => {
-  let supabaseCalls: ReturnType<typeof makeSupabaseStub>['calls'];
+  let postgresCalls: ReturnType<typeof makePostgresStub>['calls'];
 
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -80,8 +80,8 @@ describe('handleTemplateWebhookChange — status update', () => {
   });
 
   it('flips status to APPROVED and clears any rejection_reason', async () => {
-    const { stub, calls } = makeSupabaseStub();
-    supabaseCalls = calls;
+    const { stub, calls } = makePostgresStub();
+    postgresCalls = calls;
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -94,13 +94,13 @@ describe('handleTemplateWebhookChange — status update', () => {
       },
       stub,
     );
-    expect(supabaseCalls).toHaveLength(1);
-    expect(supabaseCalls[0].table).toBe('message_templates');
-    expect(supabaseCalls[0].filter).toEqual({
+    expect(postgresCalls).toHaveLength(1);
+    expect(postgresCalls[0].table).toBe('message_templates');
+    expect(postgresCalls[0].filter).toEqual({
       column: 'meta_template_id',
       value: '12345', // coerced to string so the .eq matches the TEXT column
     });
-    expect(supabaseCalls[0].update).toEqual({
+    expect(postgresCalls[0].update).toEqual({
       status: 'APPROVED',
       rejection_reason: null,
       submission_error: null,
@@ -108,7 +108,7 @@ describe('handleTemplateWebhookChange — status update', () => {
   });
 
   it('persists the reason field on REJECTED', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -127,7 +127,7 @@ describe('handleTemplateWebhookChange — status update', () => {
   });
 
   it('falls back to a generic reason when REJECTED has no `reason`', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -139,7 +139,7 @@ describe('handleTemplateWebhookChange — status update', () => {
   });
 
   it('normalises PENDING_REVIEW → PENDING (via shared normalizeStatus)', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -151,7 +151,7 @@ describe('handleTemplateWebhookChange — status update', () => {
   });
 
   it('logs and exits when meta_template_id is missing (no UPDATE issued)', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -164,7 +164,7 @@ describe('handleTemplateWebhookChange — status update', () => {
 
   it('logs a warning when the row is unknown locally (zero matches)', async () => {
     const warn = vi.spyOn(console, 'warn');
-    const { stub } = makeSupabaseStub({ data: [], error: null });
+    const { stub } = makePostgresStub({ data: [], error: null });
     await handleTemplateWebhookChange(
       {
         field: 'message_template_status_update',
@@ -182,7 +182,7 @@ describe('handleTemplateWebhookChange — status update', () => {
 
 describe('handleTemplateWebhookChange — quality update', () => {
   it('sets quality_score from new_quality_score', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_quality_update',
@@ -202,7 +202,7 @@ describe('handleTemplateWebhookChange — quality update', () => {
   });
 
   it('stores null for unrecognised quality scores', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_quality_update',
@@ -220,7 +220,7 @@ describe('handleTemplateWebhookChange — quality update', () => {
 describe('handleTemplateWebhookChange — components update', () => {
   it('is an info-log no-op (does not write to DB)', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       {
         field: 'message_template_components_update',
@@ -238,7 +238,7 @@ describe('handleTemplateWebhookChange — components update', () => {
 
 describe('handleTemplateWebhookChange — unknown field', () => {
   it('is a defensive no-op', async () => {
-    const { stub, calls } = makeSupabaseStub();
+    const { stub, calls } = makePostgresStub();
     await handleTemplateWebhookChange(
       // Pretend Meta added a new template_* field we don't know about.
       // The route handler pre-filters via isTemplateWebhookField, but

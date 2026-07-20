@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { SupabaseClient } from '@supabase/supabase-js';
+type DbClient = any;
 import { createBroadcast, BroadcastError } from './broadcast-core';
 
 // These assertions all fire in the pure validation prologue, before
-// any Supabase call — a bare stub is enough.
-const db = {} as SupabaseClient;
+// any Postgres call — a bare stub is enough.
+const db = {} as DbClient;
 
 describe('createBroadcast validation', () => {
   it('rejects a missing template_name', async () => {

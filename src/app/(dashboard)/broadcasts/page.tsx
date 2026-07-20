@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import { Broadcast } from '@/types';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,13 +17,6 @@ import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { getBroadcastStatus } from '@/lib/broadcast-status';
 import { useTranslations } from 'next-intl';
-
-/**
- * Poll cadence while any broadcast is sending. Kept modest so we don't
- * beat on Supabase — the aggregate trigger in migration 003 keeps
- * counts consistent; we just need to surface the freshest snapshot.
- */
-const POLL_INTERVAL_MS = 5_000;
 
 function percent(numerator: number, denominator: number): number {
   if (!denominator) return 0;
@@ -66,19 +58,14 @@ export default function BroadcastsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Used to kick off polling only while something is actively sending.
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchBroadcasts() {
     try {
-      const supabase = createClient();
-      const { data, error: fetchError } = await supabase
-        .from('broadcasts')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const res = await fetch('/api/broadcasts', { cache: 'no-store' });
+      const payload = await res.json().catch(() => ({}));
 
-      if (fetchError) throw fetchError;
-      setBroadcasts(data ?? []);
+      if (!res.ok) throw new Error(payload.error ?? t('errorLoad'));
+      setBroadcasts((payload.broadcasts as Broadcast[] | undefined) ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('errorLoad'));
     } finally {
@@ -88,6 +75,7 @@ export default function BroadcastsPage() {
 
   useEffect(() => {
     fetchBroadcasts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const anySending = useMemo(
@@ -95,41 +83,6 @@ export default function BroadcastsPage() {
     [broadcasts],
   );
 
-  useEffect(() => {
-    function startPolling() {
-      if (pollTimer.current) return;
-      pollTimer.current = setInterval(fetchBroadcasts, POLL_INTERVAL_MS);
-    }
-    function stopPolling() {
-      if (!pollTimer.current) return;
-      clearInterval(pollTimer.current);
-      pollTimer.current = null;
-    }
-
-    // Pause polling while the tab is hidden — keeps Supabase cold when
-    // the user is away, and ensures a fresh fetch the moment they
-    // refocus so they don't see stale data on return.
-    function handleVisibilityChange() {
-      if (!anySending) return;
-      if (document.visibilityState === 'hidden') {
-        stopPolling();
-      } else {
-        fetchBroadcasts();
-        startPolling();
-      }
-    }
-
-    if (anySending && document.visibilityState === 'visible') {
-      startPolling();
-    } else {
-      stopPolling();
-    }
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      stopPolling();
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [anySending]);
 
   if (loading) {
     return (

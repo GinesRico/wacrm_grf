@@ -25,10 +25,10 @@ const CONTACT = {
   phone: '+15551234567',
 }
 
-// Chainable Supabase mock. A fresh builder per `.from()` call tracks whether
+// Chainable database mock. A fresh builder per `.from()` call tracks whether
 // `.insert()` ran so the terminal resolves to the inserted row for creates
 // and the canned select row otherwise.
-function makeSupabaseMock() {
+function makePostgresMock() {
   function builder(table: string) {
     let didInsert = false
 
@@ -118,14 +118,14 @@ function makeSupabaseMock() {
   }
 }
 
-let supabaseMock = makeSupabaseMock()
+let postgresMock = makePostgresMock()
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => supabaseMock),
+vi.mock('@/lib/db/server', () => ({
+  createClient: vi.fn(async () => postgresMock),
 }))
 
 vi.mock('@/lib/flows/admin-client', () => ({
-  supabaseAdmin: () => ({
+  dbAdmin: () => ({
     from: () => {
       const b: Record<string, unknown> = {}
       const chain = () => b
@@ -179,7 +179,7 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
     existingConversation = null
     createdConversation = null
     contactRow = CONTACT
-    supabaseMock = makeSupabaseMock()
+    postgresMock = makePostgresMock()
     sendTemplateMessage.mockClear()
   })
 

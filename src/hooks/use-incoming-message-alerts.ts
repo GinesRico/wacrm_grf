@@ -2,13 +2,18 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 import type { Message } from "@/types";
 
 const MAX_BODY_LENGTH = 120;
 const INCOMING_MESSAGE_SOUND_SRC = "/sounds/incoming-message.mp3";
 
-interface ConversationAlertContext {
+interface IncomingMessageAlertPayload {
+  message: Message;
   contact?: {
     name?: string | null;
     phone?: string | null;
@@ -93,6 +98,7 @@ async function playIncomingMessageSound(
 
 export function useIncomingMessageAlerts(enabled: boolean) {
   const router = useRouter();
+  const { accountId } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
@@ -145,11 +151,10 @@ export function useIncomingMessageAlerts(enabled: boolean) {
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !accountId) return;
 
-    const supabase = createClient();
-
-    const showAlert = async (message: Message) => {
+    const showAlert = async (payload: IncomingMessageAlertPayload) => {
+      const { message } = payload;
       if (message.sender_type !== "customer") return;
       if (seenMessageIdsRef.current.has(message.id)) return;
       seenMessageIdsRef.current.add(message.id);
@@ -163,16 +168,9 @@ export function useIncomingMessageAlerts(enabled: boolean) {
         return;
       }
 
-      const { data } = await supabase
-        .from("conversations")
-        .select("contact:contacts(name, phone)")
-        .eq("id", message.conversation_id)
-        .maybeSingle();
-
-      const context = data as ConversationAlertContext | null;
       const contact =
-        context?.contact?.name?.trim() ||
-        context?.contact?.phone?.trim() ||
+        payload.contact?.name?.trim() ||
+        payload.contact?.phone?.trim() ||
         "Cliente";
 
       const notification = new window.Notification(`Mensaje de ${contact}`, {
@@ -187,26 +185,15 @@ export function useIncomingMessageAlerts(enabled: boolean) {
       };
     };
 
-    const channel = supabase
-      .channel("incoming-message-alerts")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          void showAlert(payload.new as Message);
-        },
-      )
-      .subscribe((status, error) => {
-        if (error) {
-          console.warn("[incoming-message-alerts] realtime failed:", error);
-        }
-        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.warn("[incoming-message-alerts] realtime status:", status);
-        }
-      });
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    channel.bind("message.created", (event: { payload: IncomingMessageAlertPayload }) => {
+      void showAlert(event.payload);
+    });
 
     return () => {
-      supabase.removeChannel(channel);
+      channel.unbind("message.created");
+      unsubscribeRealtimeChannel(channelName);
     };
-  }, [enabled, router]);
+  }, [accountId, enabled, router]);
 }

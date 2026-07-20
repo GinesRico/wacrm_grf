@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
+import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import {
   deleteInboxConversation,
   InboxWorkflowError,
@@ -21,11 +21,11 @@ const ACTIONS = new Set<InboxAction>([
 
 export async function GET(request: Request) {
   try {
-    const ctx = await requireRole("viewer");
+    const ctx = await getCurrentDbAccount();
     const url = new URL(request.url);
     const parsed = parseInboxSearchParams(url.searchParams);
 
-    const result = await listInboxConversations(supabaseAdmin(), {
+    const result = await listInboxConversations(null, {
       accountId: ctx.accountId,
       userId: ctx.userId,
       ...parsed,
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const ctx = await requireRole("agent");
+    const ctx = await requireDbRole("agent");
     const body = await request.json().catch(() => ({}));
     const action = body?.action;
     const conversationId = body?.conversation_id;
@@ -55,7 +55,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Invalid action." }, { status: 400 });
     }
 
-    const conversation = await mutateInboxConversation(supabaseAdmin(), {
+    const conversation = await mutateInboxConversation(null, {
       accountId: ctx.accountId,
       userId: ctx.userId,
       conversationId,
@@ -91,7 +91,7 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const ctx = await requireRole("agent");
+    const ctx = await requireDbRole("agent");
     const url = new URL(request.url);
     const conversationId = url.searchParams.get("conversation_id");
 
@@ -102,7 +102,7 @@ export async function DELETE(request: Request) {
       );
     }
 
-    await deleteInboxConversation(supabaseAdmin(), {
+    await deleteInboxConversation(null, {
       accountId: ctx.accountId,
       conversationId,
     });

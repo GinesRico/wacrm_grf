@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
 import {
   fetchAvailabilitySlots,
   requireActiveArveraAppointmentsConnection,
@@ -8,7 +9,7 @@ import {
 
 export async function GET(request: Request) {
   try {
-    const ctx = await requireRole('agent');
+    const ctx = await requireDbRole('agent');
     const { searchParams } = new URL(request.url);
     const startDate = searchParams.get('startDate') || searchParams.get('date');
     const endDate = searchParams.get('endDate') || startDate;
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     }
 
     const { config, apiToken } = await requireActiveArveraAppointmentsConnection(
-      ctx.supabase,
+      null,
       ctx.accountId,
     );
     const duracion = Number(searchParams.get('duracion') ?? config.duracion);
@@ -32,6 +33,12 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload);
   } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.name === 'UnauthorizedError' || err.name === 'ForbiddenError')
+    ) {
+      return toErrorResponse(err);
+    }
     if (err instanceof Error) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }

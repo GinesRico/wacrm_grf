@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
+import { and, eq } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { conversations } from '@/db/schema'
+import { requireDbRole } from '@/lib/auth/current-account'
+import { toErrorResponse } from '@/lib/auth/errors'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { assertFeatureEnabled } from '@/lib/platform/entitlements'
 
@@ -27,8 +32,8 @@ type Params = { params: Promise<{ conversationId: string }> }
  */
 export async function POST(request: Request, { params }: Params) {
   try {
-    const { supabase, accountId, userId } = await requireRole('agent')
-    await assertFeatureEnabled(supabase, accountId, 'ai')
+    const { accountId, userId } = await requireDbRole('agent')
+    await assertFeatureEnabled(null, accountId, 'ai')
 
     // Reuse the send bucket: this is a cheap per-user inbox action and
     // toggling it in a tight loop has no legitimate use.
@@ -47,27 +52,19 @@ export async function POST(request: Request, { params }: Params) {
     const assignToMe = body.assign_to_me === true
 
     // Confirm the conversation is in the caller's account before writing.
-    const { data: conv, error: convErr } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', conversationId)
-      .eq('account_id', accountId)
-      .maybeSingle()
-    if (convErr) {
-      console.error('[ai/autoreply] conversation lookup error:', convErr)
-      return NextResponse.json(
-        { error: 'Failed to load conversation' },
-        { status: 500 },
-      )
-    }
+    const [conv] = await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+      .limit(1)
     if (!conv) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
-    const update: Record<string, unknown> = { ai_autoreply_disabled: paused }
+    const update: Partial<typeof conversations.$inferInsert> = { aiAutoreplyDisabled: paused }
 
     if (paused) {
-      if (assignToMe) update.assigned_agent_id = userId
+      if (assignToMe) update.assignedAgentId = userId
     } else {
       // Resuming hands the thread *back to the bot*. Clear the pause and
       // the handoff note, and — crucially — release ANY assignment, not
@@ -76,27 +73,19 @@ export async function POST(request: Request, { params }: Params) {
       // (e.g. the agent a prior handoff routed to) would silently keep
       // the bot muted and make "Resume AI" a no-op. This is the explicit
       // choice to let the bot own the thread again.
-      update.assigned_agent_id = null
+      update.assignedAgentId = null
       // Give the bot a fresh reply budget on this thread. This is a
       // deliberate, manual, rate-limited action (not automatable), so it
       // can't be used to bypass the per-conversation cap at scale — it's
       // a human choosing to re-engage the assistant.
-      update.ai_reply_count = 0
-      update.ai_handoff_summary = null
+      update.aiReplyCount = 0
+      update.aiHandoffSummary = null
     }
 
-    const { error: upErr } = await supabase
-      .from('conversations')
-      .update(update)
-      .eq('id', conversationId)
-      .eq('account_id', accountId)
-    if (upErr) {
-      console.error('[ai/autoreply] update error:', upErr)
-      return NextResponse.json(
-        { error: 'Failed to update conversation' },
-        { status: 500 },
-      )
-    }
+    await db
+      .update(conversations)
+      .set(update)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
 
     return NextResponse.json({ success: true, paused })
   } catch (err) {

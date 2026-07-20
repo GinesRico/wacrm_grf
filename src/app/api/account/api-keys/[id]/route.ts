@@ -13,8 +13,12 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
+import { and, eq, isNull } from 'drizzle-orm';
 
-import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { db } from '@/db/client';
+import { apiKeys } from '@/db/schema';
+import { requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -26,7 +30,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireRole('admin');
+    const ctx = await requireDbRole('admin');
 
     const limit = checkRateLimit(
       `admin:apiKeyRevoke:${ctx.userId}`,
@@ -40,23 +44,19 @@ export async function DELETE(
     // never revoke another account's key by guessing a UUID. (RLS
     // already enforces this; the explicit filter is belt-and-braces
     // and makes the "0 rows updated → 404" path precise.)
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .update({ revoked_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .is('revoked_at', null)
-      .select('id')
-      .maybeSingle();
+    const [revoked] = await db
+      .update(apiKeys)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(apiKeys.id, id),
+          eq(apiKeys.accountId, ctx.accountId),
+          isNull(apiKeys.revokedAt),
+        ),
+      )
+      .returning({ id: apiKeys.id });
 
-    if (error) {
-      console.error('[DELETE /api/account/api-keys/[id]] error:', error);
-      return NextResponse.json(
-        { error: 'Failed to revoke API key' },
-        { status: 500 }
-      );
-    }
-    if (!data) {
+    if (!revoked) {
       // Either no such key in this account, or it was already revoked.
       return NextResponse.json(
         { error: 'API key not found or already revoked' },

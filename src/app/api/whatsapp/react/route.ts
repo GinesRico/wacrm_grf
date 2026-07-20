@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { and, eq } from 'drizzle-orm';
+
+import { db } from '@/db/client';
+import { contacts, conversations, messageReactions, messages } from '@/db/schema';
+import { getCurrentDbAccount } from '@/lib/auth/current-account';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
@@ -9,6 +13,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit';
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 
 /**
  * POST /api/whatsapp/react
@@ -21,35 +26,11 @@ import {
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient();
+    const ctx = await getCurrentDbAccount();
 
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const limit = checkRateLimit(`react:${user.id}`, RATE_LIMITS.react);
+    const limit = checkRateLimit(`react:${ctx.userId}`, RATE_LIMITS.react);
     if (!limit.success) {
       return rateLimitResponse(limit);
-    }
-
-    // Resolve the caller's account_id so conversation + whatsapp_config
-    // lookups work for teammates who didn't author the rows directly.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle();
-    const accountId = profile?.account_id as string | undefined;
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      );
     }
 
     const body = await request.json();
@@ -66,17 +47,21 @@ export async function POST(request: Request) {
     }
 
     // Resolve target message + its conversation; verify ownership.
-    const { data: targetMessage, error: msgError } = await supabase
-      .from('messages')
-      .select('id, message_id, conversation_id')
-      .eq('id', message_id)
-      .maybeSingle();
+    const [targetMessage] = await db
+      .select({
+        id: messages.id,
+        messageId: messages.messageId,
+        conversationId: messages.conversationId,
+      })
+      .from(messages)
+      .where(eq(messages.id, message_id))
+      .limit(1);
 
-    if (msgError || !targetMessage) {
+    if (!targetMessage) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
-    if (!targetMessage.message_id) {
+    if (!targetMessage.messageId) {
       // No Meta ID yet — usually a sending/failed agent message. We can't
       // tell Meta to react to a message it never received.
       return NextResponse.json(
@@ -85,24 +70,30 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data: conversation, error: convError } = await supabase
-      .from('conversations')
-      .select('id, account_id, contact:contacts(phone)')
-      .eq('id', targetMessage.conversation_id)
-      .eq('account_id', accountId)
-      .maybeSingle();
+    const [conversation] = await db
+      .select({
+        id: conversations.id,
+        accountId: conversations.accountId,
+        contactPhone: contacts.phone,
+      })
+      .from(conversations)
+      .innerJoin(contacts, eq(contacts.id, conversations.contactId))
+      .where(
+        and(
+          eq(conversations.id, targetMessage.conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1);
 
-    if (convError || !conversation) {
+    if (!conversation) {
       return NextResponse.json(
         { error: 'Conversation not found' },
         { status: 404 },
       );
     }
 
-    const contact = Array.isArray(conversation.contact)
-      ? conversation.contact[0]
-      : conversation.contact;
-    if (!contact?.phone) {
+    if (!conversation.contactPhone) {
       return NextResponse.json(
         { error: 'Contact phone number not found' },
         { status: 400 },
@@ -111,9 +102,9 @@ export async function POST(request: Request) {
 
     // WhatsApp config + access token. Conversation-scoped for multi-line.
     const config = await getWhatsAppConfigForConversation(
-      supabase,
-      accountId,
-      targetMessage.conversation_id,
+      null,
+      ctx.accountId,
+      targetMessage.conversationId,
     );
 
     if (!config) {
@@ -124,14 +115,14 @@ export async function POST(request: Request) {
     }
 
     const accessToken = decrypt(config.access_token);
-    const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
+    const sanitizedPhone = sanitizePhoneForMeta(conversation.contactPhone);
 
     try {
       await sendReactionMessage({
         phoneNumberId: config.phone_number_id,
         accessToken,
         to: sanitizedPhone,
-        targetMessageId: targetMessage.message_id,
+        targetMessageId: targetMessage.messageId,
         emoji,
       });
     } catch (err) {
@@ -146,40 +137,70 @@ export async function POST(request: Request) {
 
     // Mirror into DB. Empty emoji = removal.
     if (emoji === '') {
-      const { error: delError } = await supabase
-        .from('message_reactions')
-        .delete()
-        .eq('message_id', targetMessage.id)
-        .eq('actor_type', 'agent')
-        .eq('actor_id', user.id);
+      const [existingReaction] = await db
+        .select()
+        .from(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, targetMessage.id),
+            eq(messageReactions.actorType, 'agent'),
+            eq(messageReactions.actorId, ctx.userId),
+          ),
+        )
+        .limit(1);
 
-      if (delError) {
-        console.error('[whatsapp/react] DB delete failed:', delError.message);
-        return NextResponse.json(
-          { error: 'Reaction sent to Meta but DB delete failed' },
-          { status: 500 },
+      await db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, targetMessage.id),
+            eq(messageReactions.actorType, 'agent'),
+            eq(messageReactions.actorId, ctx.userId),
+          ),
         );
+
+      if (existingReaction) {
+        await publishRealtimeEvent('reaction.deleted', {
+          accountId: ctx.accountId,
+          conversationId: targetMessage.conversationId,
+          payload: { reaction: existingReaction },
+        }).catch((error) => {
+          console.warn('[realtime] failed to publish reaction.deleted:', error);
+        });
       }
     } else {
       // Upsert. The unique constraint (message_id, actor_type, actor_id)
       // lets us swap emoji in a single statement.
-      const { error: upsertError } = await supabase.from('message_reactions').upsert(
-        {
-          message_id: targetMessage.id,
-          conversation_id: targetMessage.conversation_id,
-          actor_type: 'agent',
-          actor_id: user.id,
+      const [savedReaction] = await db
+        .insert(messageReactions)
+        .values({
+          messageId: targetMessage.id,
+          conversationId: targetMessage.conversationId,
+          actorType: 'agent',
+          actorId: ctx.userId,
           emoji,
-        },
-        { onConflict: 'message_id,actor_type,actor_id' },
-      );
+        })
+        .onConflictDoUpdate({
+          target: [
+            messageReactions.messageId,
+            messageReactions.actorType,
+            messageReactions.actorId,
+          ],
+          set: {
+            emoji,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
 
-      if (upsertError) {
-        console.error('[whatsapp/react] DB upsert failed:', upsertError.message);
-        return NextResponse.json(
-          { error: 'Reaction sent to Meta but DB upsert failed' },
-          { status: 500 },
-        );
+      if (savedReaction) {
+        await publishRealtimeEvent('reaction.updated', {
+          accountId: ctx.accountId,
+          conversationId: targetMessage.conversationId,
+          payload: { reaction: savedReaction },
+        }).catch((error) => {
+          console.warn('[realtime] failed to publish reaction.updated:', error);
+        });
       }
     }
 

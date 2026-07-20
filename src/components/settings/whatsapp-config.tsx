@@ -16,7 +16,6 @@ import {
   Plus,
   Star,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
@@ -49,7 +48,6 @@ type ResetReason = 'token_corrupted' | 'meta_api_error' | null;
 
 export function WhatsAppConfig() {
   const t = useTranslations('Settings.whatsapp');
-  const supabase = createClient();
   const { confirm, confirmDialog } = useAppConfirm();
   // After multi-user, whatsapp_config is one-row-per-account, not
   // one-row-per-user. We pull `accountId` straight off the auth
@@ -71,7 +69,7 @@ export function WhatsAppConfig() {
   const [statusMessage, setStatusMessage] = useState<string>('');
   // Guards against re-hydrating the form when the load effect below
   // re-runs for reasons unrelated to actually switching accounts —
-  // e.g. Supabase's onAuthStateChange fires a token refresh (new
+  // e.g. Postgres's onAuthStateChange fires a token refresh (new
   // `user` object, profileLoading flips true/false) when the browser
   // tab regains focus. Without this, that churn calls fetchConfig()
   // again and overwrites whatever the user typed but hadn't saved yet.
@@ -128,27 +126,24 @@ export function WhatsAppConfig() {
     setRegistrationProbe(null);
   }
 
-  const fetchConfig = useCallback(async (acctId: string) => {
+  const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      // Load form values from Supabase (shows what's in DB).
+      // Load form values from the app API (shows what's in DB).
       // Switched from `user_id` (which would only match the row's
       // original author) to `account_id` so every member of the
       // account sees the same saved configuration. UNIQUE(account_id)
       // on the table guarantees the .maybeSingle() return type
       // remains accurate.
-      const { data, error } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', acctId)
-        .order('is_default', { ascending: false })
-        .order('created_at', { ascending: true });
-
-      if (error) {
-        console.error('Failed to load config row:', error);
+      const configRes = await fetch('/api/whatsapp/config?list=1', {
+        cache: 'no-store',
+      });
+      const configPayload = await configRes.json().catch(() => ({}));
+      if (!configRes.ok) {
+        throw new Error(configPayload.error ?? t('loadFailed'));
       }
 
-      const rows = (data ?? []) as WhatsAppConfigType[];
+      const rows = (configPayload.configs ?? []) as WhatsAppConfigType[];
       setConfigs(rows);
       try {
         const res = await fetch('/api/departments', { cache: 'no-store' });
@@ -202,7 +197,7 @@ export function WhatsAppConfig() {
     } finally {
       setLoading(false);
     }
-  }, [supabase, selectedConfigId]);
+  }, [selectedConfigId, t]);
 
   useEffect(() => {
     // Need both the auth session (`!authLoading`) AND the profile
@@ -218,7 +213,7 @@ export function WhatsAppConfig() {
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
-    fetchConfig(accountId);
+    fetchConfig();
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
 
   async function handleSave() {
@@ -236,7 +231,7 @@ export function WhatsAppConfig() {
 
       // Always POST through the API — it verifies with Meta and encrypts
       // the access_token server-side with ENCRYPTION_KEY. Skipping this
-      // and writing direct to Supabase stores the token in plaintext,
+      // and writing direct to Postgres stores the token in plaintext,
       // which then fails decryption on every subsequent health check.
       const payload: Record<string, unknown> = {
         id: config?.id,
@@ -311,7 +306,7 @@ export function WhatsAppConfig() {
         setPin('');
       }
 
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) await fetchConfig();
     } catch (err) {
       console.error('Save error:', err);
       toast.error(t('saveFailed'));
@@ -370,7 +365,7 @@ export function WhatsAppConfig() {
           { duration: 8000 },
         );
       }
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) await fetchConfig();
     } catch (err) {
       console.error('verify-registration failed:', err);
       toast.error(t('verificationEndpointFailed'));
@@ -453,18 +448,15 @@ export function WhatsAppConfig() {
   async function handleMakeDefault(row: WhatsAppConfigType) {
     if (!accountId) return;
     try {
-      await supabase
-        .from('whatsapp_config')
-        .update({ is_default: false })
-        .eq('account_id', accountId);
-      const { error } = await supabase
-        .from('whatsapp_config')
-        .update({ is_default: true })
-        .eq('account_id', accountId)
-        .eq('id', row.id);
-      if (error) throw error;
+      const res = await fetch('/api/whatsapp/config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'make_default', id: row.id }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error ?? t('defaultLineFailed'));
       toast.success(t('defaultLineUpdated'));
-      await fetchConfig(accountId);
+      await fetchConfig();
     } catch (error) {
       console.error('make default failed:', error);
       toast.error(t('defaultLineFailed'));

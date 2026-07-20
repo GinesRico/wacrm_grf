@@ -1,92 +1,68 @@
-import { NextResponse } from 'next/server'
-import {
-  getCurrentAccount,
-  requireRole,
-  toErrorResponse,
-} from '@/lib/auth/account'
-import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { loadEmbeddingsKey } from '@/lib/ai/config'
-import { ingestDocument } from '@/lib/ai/knowledge'
-import { AiError } from '@/lib/ai/types'
-import { assertFeatureEnabled } from '@/lib/platform/entitlements'
+import { NextResponse } from "next/server";
+import { desc, eq } from "drizzle-orm";
 
-/**
- * GET /api/ai/knowledge
- *
- * List the account's knowledge-base documents (any member).
- */
+import { db } from "@/db/client";
+import { aiKnowledgeDocuments } from "@/db/schema";
+import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from "@/lib/rate-limit";
+import { loadEmbeddingsKey } from "@/lib/ai/config";
+import { ingestDocument } from "@/lib/ai/knowledge";
+import { AiError } from "@/lib/ai/types";
+import { assertFeatureEnabled } from "@/lib/platform/entitlements";
+
 export async function GET() {
   try {
-    const { supabase, accountId } = await getCurrentAccount()
-    const { data, error } = await supabase
-      .from('ai_knowledge_documents')
-      .select('id, title, updated_at')
-      .eq('account_id', accountId)
-      .order('updated_at', { ascending: false })
-    if (error) {
-      console.error('[ai/knowledge GET] error:', error)
-      return NextResponse.json(
-        { error: 'Failed to load knowledge base' },
-        { status: 500 },
-      )
-    }
-    return NextResponse.json({ documents: data ?? [] })
+    const { accountId } = await getCurrentDbAccount();
+    const documents = await db
+      .select({
+        id: aiKnowledgeDocuments.id,
+        title: aiKnowledgeDocuments.title,
+        updated_at: aiKnowledgeDocuments.updatedAt,
+      })
+      .from(aiKnowledgeDocuments)
+      .where(eq(aiKnowledgeDocuments.accountId, accountId))
+      .orderBy(desc(aiKnowledgeDocuments.updatedAt));
+
+    return NextResponse.json({
+      documents: documents.map((doc) => ({
+        ...doc,
+        updated_at: doc.updated_at.toISOString(),
+      })),
+    });
   } catch (err) {
-    return toErrorResponse(err)
+    return toErrorResponse(err);
   }
 }
 
-/**
- * POST /api/ai/knowledge  (admin+)
- *
- * Create a document, then chunk + (optionally) embed it. If indexing
- * fails the document is still saved so the admin can retry via reindex.
- */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('admin')
-    await assertFeatureEnabled(supabase, accountId, 'ai')
-    const limit = checkRateLimit(`ai-kb:${userId}`, RATE_LIMITS.adminAction)
-    if (!limit.success) return rateLimitResponse(limit)
+    const { accountId, userId } = await requireDbRole("admin");
+    await assertFeatureEnabled(null, accountId, "ai");
+    const limit = checkRateLimit(`ai-kb:${userId}`, RATE_LIMITS.adminAction);
+    if (!limit.success) return rateLimitResponse(limit);
 
-    const body = await request.json().catch(() => null)
-    const title = typeof body?.title === 'string' ? body.title.trim() : ''
-    const content = typeof body?.content === 'string' ? body.content.trim() : ''
+    const body = await request.json().catch(() => null);
+    const title = typeof body?.title === "string" ? body.title.trim() : "";
+    const content = typeof body?.content === "string" ? body.content.trim() : "";
     if (!title || !content) {
       return NextResponse.json(
-        { error: 'title and content are required' },
+        { error: "title and content are required" },
         { status: 400 },
-      )
+      );
     }
 
-    const { data: doc, error } = await supabase
-      .from('ai_knowledge_documents')
-      .insert({ account_id: accountId, created_by: userId, title, content })
-      .select('id')
-      .single()
-    if (error || !doc) {
-      console.error('[ai/knowledge POST] insert error:', error)
-      return NextResponse.json(
-        { error: 'Failed to save document' },
-        { status: 500 },
-      )
-    }
+    const [doc] = await db
+      .insert(aiKnowledgeDocuments)
+      .values({ accountId, createdBy: userId, title, content })
+      .returning({ id: aiKnowledgeDocuments.id });
 
-    const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(
-      supabase,
-      accountId,
-    )
+    const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(null, accountId);
     try {
-      await ingestDocument(
-        supabase,
-        accountId,
-        { embeddingsApiKey },
-        doc.id,
-        content,
-      )
+      await ingestDocument(null, accountId, { embeddingsApiKey }, doc.id, content);
     } catch (err) {
-      const message = err instanceof AiError ? err.message : 'indexing failed'
-      console.error('[ai/knowledge POST] ingest error:', err)
+      const message = err instanceof AiError ? err.message : "indexing failed";
+      console.error("[ai/knowledge POST] ingest error:", err);
       return NextResponse.json(
         {
           success: true,
@@ -94,7 +70,7 @@ export async function POST(request: Request) {
           warning: `Saved, but semantic indexing failed (${message}). Lexical search still works; use Reindex to retry.`,
         },
         { status: 200 },
-      )
+      );
     }
 
     if (corrupt) {
@@ -102,11 +78,11 @@ export async function POST(request: Request) {
         success: true,
         id: doc.id,
         warning:
-          'Saved with keyword search only — your embeddings key could not be decrypted (check ENCRYPTION_KEY, then re-enter the key).',
-      })
+          "Saved with keyword search only - your embeddings key could not be decrypted (check ENCRYPTION_KEY, then re-enter the key).",
+      });
     }
-    return NextResponse.json({ success: true, id: doc.id })
+    return NextResponse.json({ success: true, id: doc.id });
   } catch (err) {
-    return toErrorResponse(err)
+    return toErrorResponse(err);
   }
 }

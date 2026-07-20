@@ -1,32 +1,29 @@
-// ============================================================
-// POST /api/invitations/[token]/redeem
-//
-// Authenticated. Caller atomically moves from their personal
-// account (created at signup) to the inviter's account with the
-// invite's role. Heavy lifting lives in the SECURITY DEFINER
-// `redeem_invitation` RPC from migration 019.
-//
-// Refusal contract (from the RPC)
-//   - SQLSTATE 42501 → 401 (caller not authenticated)
-//   - SQLSTATE 22023 → 400 (invitation not_found / used / expired)
-//   - SQLSTATE 23505 → 409 (caller's account already has data /
-//     they're already in this or another shared account)
-//
-// Rate limit (per IP) is the same shape as peek but tighter —
-// a successful redeem changes data, and the RPC's data-loss
-// guard makes brute-force retries pointless past a few attempts.
-// ============================================================
-
+import { and, count, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import type { PostgrestError } from "@supabase/supabase-js";
 
+import { db } from "@/db/client";
+import { accountInvitations, crmAccounts, profiles } from "@/db/schema";
+import { getCurrentDbAccount } from "@/lib/auth/current-account";
 import { hashInviteToken } from "@/lib/auth/invitations";
 import {
   checkRateLimit,
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
-import { createClient } from "@/lib/supabase/server";
+
+const BUSINESS_TABLES = [
+  "contacts",
+  "conversations",
+  "broadcasts",
+  "automations",
+  "flows",
+  "pipelines",
+  "message_templates",
+  "tags",
+  "custom_fields",
+  "contact_notes",
+  "whatsapp_config",
+] as const;
 
 function getClientIp(request: Request): string {
   const xff = request.headers.get("x-forwarded-for");
@@ -36,21 +33,20 @@ function getClientIp(request: Request): string {
   return "unknown";
 }
 
-function rpcErrorToResponse(err: PostgrestError): NextResponse {
-  if (err.code === "42501") {
-    return NextResponse.json({ error: err.message }, { status: 401 });
+async function hasBusinessData(accountId: string): Promise<boolean> {
+  for (const table of BUSINESS_TABLES) {
+    try {
+      const result = await db.execute(
+        sql.raw(`select count(*)::int as count from ${table} where account_id = '${accountId.replaceAll("'", "''")}'`),
+      );
+      if (Number((result.rows[0] as { count?: number } | undefined)?.count ?? 0) > 0) {
+        return true;
+      }
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "42P01") throw error;
+    }
   }
-  if (err.code === "22023") {
-    return NextResponse.json({ error: err.message }, { status: 400 });
-  }
-  if (err.code === "23505") {
-    return NextResponse.json({ error: err.message }, { status: 409 });
-  }
-  console.error("[redeem] unexpected RPC error:", err);
-  return NextResponse.json(
-    { error: "Failed to redeem invitation" },
-    { status: 500 },
-  );
+  return false;
 }
 
 export async function POST(
@@ -63,29 +59,84 @@ export async function POST(
 
   const { token } = await params;
   if (!token || typeof token !== "string") {
+    return NextResponse.json({ error: "Missing invitation token" }, { status: 400 });
+  }
+
+  const ctx = await getCurrentDbAccount().catch(() => null);
+  if (!ctx) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const [invite] = await db
+    .select()
+    .from(accountInvitations)
+    .where(eq(accountInvitations.tokenHash, hashInviteToken(token)))
+    .limit(1);
+
+  if (!invite) return NextResponse.json({ error: "Invitation not found" }, { status: 400 });
+  if (invite.acceptedAt) {
+    return NextResponse.json({ error: "Invitation has already been redeemed" }, { status: 400 });
+  }
+  if (invite.expiresAt.getTime() <= Date.now()) {
+    return NextResponse.json({ error: "Invitation has expired" }, { status: 400 });
+  }
+  if (invite.accountId === ctx.accountId) {
     return NextResponse.json(
-      { error: "Missing invitation token" },
+      { error: "You are already a member of this account" },
+      { status: 409 },
+    );
+  }
+  if (ctx.account.owner_user_id !== ctx.userId) {
+    return NextResponse.json(
+      { error: "You are already in a shared account; sign up with a different email to join this one" },
+      { status: 409 },
+    );
+  }
+
+  const [memberCount] = await db
+    .select({ value: count() })
+    .from(profiles)
+    .where(eq(profiles.accountId, ctx.accountId));
+  if ((memberCount?.value ?? 0) > 1) {
+    return NextResponse.json(
+      { error: "Your account already has members; sign up with a different email to join this one" },
+      { status: 409 },
+    );
+  }
+
+  if (await hasBusinessData(ctx.accountId)) {
+    return NextResponse.json(
+      { error: "Your account already contains data; sign up with a different email to join this one" },
+      { status: 409 },
+    );
+  }
+
+  const accepted = await db.transaction(async (tx) => {
+    const [acceptedInvite] = await tx
+      .update(accountInvitations)
+      .set({ acceptedAt: new Date(), acceptedByUserId: ctx.userId })
+      .where(and(eq(accountInvitations.id, invite.id), isNull(accountInvitations.acceptedAt)))
+      .returning({ id: accountInvitations.id });
+
+    if (!acceptedInvite) return false;
+
+    await tx
+      .update(profiles)
+      .set({
+        accountId: invite.accountId,
+        accountRole: invite.role,
+        updatedAt: new Date(),
+      })
+      .where(eq(profiles.userId, ctx.userId));
+
+    await tx.delete(crmAccounts).where(eq(crmAccounts.id, ctx.accountId));
+    return true;
+  });
+
+  if (!accepted) {
+    return NextResponse.json(
+      { error: "Invitation has already been redeemed" },
       { status: 400 },
     );
   }
 
-  const supabase = await createClient();
-
-  // The RPC checks `auth.uid()` itself, but failing fast here
-  // gives a cleaner 401 without a Supabase round trip on the
-  // common "user clicked the link before logging in" path.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { data: accountId, error } = await supabase.rpc("redeem_invitation", {
-    p_token_hash: hashInviteToken(token),
-  });
-
-  if (error) return rpcErrorToResponse(error);
-
-  return NextResponse.json({ ok: true, accountId });
+  return NextResponse.json({ ok: true, accountId: invite.accountId });
 }

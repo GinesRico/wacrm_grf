@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import { and, eq } from 'drizzle-orm';
 
+import { db } from '@/db/client';
+import { integrationConnections } from '@/db/schema';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import {
   ARVERA_APPOINTMENTS_DEFAULT_BASE_URL,
@@ -21,56 +24,89 @@ import {
   generateWebhookToken,
   normalizeAppointmentsConfig,
   resolveAppointmentsWebhookToken,
+  type ArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments';
 import { INTERACTIVE_LIMITS } from '@/lib/whatsapp/meta-api';
+
+function serializeConnection(row: typeof integrationConnections.$inferSelect) {
+  return {
+    id: row.id,
+    app_slug: row.appSlug,
+    enabled: row.enabled,
+    config: row.config,
+    status: row.status,
+    last_error: row.lastError,
+    last_checked_at: row.lastCheckedAt?.toISOString() ?? null,
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+function toResolverConnection(
+  credentials: unknown,
+): ArveraAppointmentsConnection {
+  return {
+    id: '',
+    account_id: '',
+    app_slug: ARVERA_APPOINTMENTS_SLUG,
+    enabled: false,
+    encrypted_credentials: (credentials as Record<string, string> | null) ?? {},
+    config: {},
+    status: 'not_configured',
+    last_error: null,
+  };
+}
+
+function defaultConnection() {
+  return {
+    app_slug: ARVERA_APPOINTMENTS_SLUG,
+    enabled: false,
+    config: {
+      base_url: ARVERA_APPOINTMENTS_DEFAULT_BASE_URL,
+      iframe_url: ARVERA_APPOINTMENTS_DEFAULT_IFRAME_URL,
+      public_booking_url: ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
+      default_send_mode: 'booking_link',
+      default_days_ahead: 1,
+      duracion: 45,
+      timezone: 'Europe/Madrid',
+      default_service: 'Cita taller',
+      default_message: ARVERA_APPOINTMENTS_DEFAULT_MESSAGE,
+      cta_button_label: ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL,
+      cta_url_template: ARVERA_APPOINTMENTS_DEFAULT_CTA_URL_TEMPLATE,
+      list_header: ARVERA_APPOINTMENTS_DEFAULT_LIST_HEADER,
+      list_body: ARVERA_APPOINTMENTS_DEFAULT_LIST_BODY,
+      list_footer: ARVERA_APPOINTMENTS_DEFAULT_LIST_FOOTER,
+      list_button_label: ARVERA_APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
+      list_section_title: ARVERA_APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
+      list_row_title: ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_TITLE,
+      list_row_description: ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION,
+    },
+    status: 'not_configured',
+    last_error: null,
+  };
+}
 
 export async function GET(request: Request) {
   try {
     const ctx = await requireRole('admin');
-    const { data, error } = await ctx.supabase
-      .from('integration_connections')
-      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at, encrypted_credentials')
-      .eq('account_id', ctx.accountId)
-      .eq('app_slug', ARVERA_APPOINTMENTS_SLUG)
-      .maybeSingle();
-    if (error) {
-      return NextResponse.json({ error: 'Failed to load connection' }, { status: 500 });
-    }
+    const [data] = await db
+      .select()
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.accountId, ctx.accountId),
+          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG),
+        ),
+      )
+      .limit(1);
 
-    const token = resolveAppointmentsWebhookToken(data as never);
+    const token = resolveAppointmentsWebhookToken(
+      data ? toResolverConnection(data.encryptedCredentials) : null,
+    );
     return NextResponse.json({
-      connection: data
-        ? {
-            ...data,
-            encrypted_credentials: undefined,
-          }
-        : {
-            app_slug: ARVERA_APPOINTMENTS_SLUG,
-            enabled: false,
-            config: {
-              base_url: ARVERA_APPOINTMENTS_DEFAULT_BASE_URL,
-              iframe_url: ARVERA_APPOINTMENTS_DEFAULT_IFRAME_URL,
-              public_booking_url: ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
-              default_send_mode: 'booking_link',
-              default_days_ahead: 1,
-              duracion: 45,
-              timezone: 'Europe/Madrid',
-              default_service: 'Cita taller',
-              default_message: ARVERA_APPOINTMENTS_DEFAULT_MESSAGE,
-              cta_button_label: ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL,
-              cta_url_template: ARVERA_APPOINTMENTS_DEFAULT_CTA_URL_TEMPLATE,
-              list_header: ARVERA_APPOINTMENTS_DEFAULT_LIST_HEADER,
-              list_body: ARVERA_APPOINTMENTS_DEFAULT_LIST_BODY,
-              list_footer: ARVERA_APPOINTMENTS_DEFAULT_LIST_FOOTER,
-              list_button_label: ARVERA_APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
-              list_section_title: ARVERA_APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
-              list_row_title: ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_TITLE,
-              list_row_description: ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION,
-            },
-            status: 'not_configured',
-            last_error: null,
-          },
-      has_api_token: Boolean(data?.encrypted_credentials?.api_token),
+      connection: data ? serializeConnection(data) : defaultConnection(),
+      has_api_token: Boolean(
+        (data?.encryptedCredentials as Record<string, string> | undefined)?.api_token,
+      ),
       webhook_url: token ? buildWebhookUrl(request, token) : null,
     });
   } catch (err) {
@@ -217,19 +253,24 @@ export async function PUT(request: Request) {
     const apiToken = typeof body?.api_token === 'string' ? body.api_token.trim() : '';
     const enabled = body?.enabled === true;
 
-    const { data: existing } = await ctx.supabase
-      .from('integration_connections')
-      .select('encrypted_credentials')
-      .eq('account_id', ctx.accountId)
-      .eq('app_slug', ARVERA_APPOINTMENTS_SLUG)
-      .maybeSingle();
+    const [existing] = await db
+      .select({ encryptedCredentials: integrationConnections.encryptedCredentials })
+      .from(integrationConnections)
+      .where(
+        and(
+          eq(integrationConnections.accountId, ctx.accountId),
+          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG),
+        ),
+      )
+      .limit(1);
 
     const existingCredentials =
-      (existing?.encrypted_credentials as Record<string, string> | undefined) ?? {};
-    const webhookToken = resolveAppointmentsWebhookToken({
-      encrypted_credentials: existingCredentials,
-    } as never) ?? generateWebhookToken();
-    const encrypted_credentials: Record<string, string> = {
+      (existing?.encryptedCredentials as Record<string, string> | undefined) ?? {};
+    const webhookToken =
+      resolveAppointmentsWebhookToken({
+        ...toResolverConnection(existingCredentials),
+      }) ?? generateWebhookToken();
+    const encryptedCredentials: Record<string, string> = {
       ...existingCredentials,
       ...(apiToken ? encryptAppointmentsApiToken(apiToken) : {}),
       webhook_token: encryptWebhookToken(webhookToken),
@@ -237,7 +278,7 @@ export async function PUT(request: Request) {
 
     if (
       enabled &&
-      !encrypted_credentials.api_token &&
+      !encryptedCredentials.api_token &&
       !process.env.ARVERA_APPOINTMENTS_API_TOKEN
     ) {
       return NextResponse.json(
@@ -246,32 +287,40 @@ export async function PUT(request: Request) {
       );
     }
 
-    const { data, error } = await ctx.supabase
-      .from('integration_connections')
-      .upsert(
-        {
-          account_id: ctx.accountId,
-          app_slug: ARVERA_APPOINTMENTS_SLUG,
+    const [data] = await db
+      .insert(integrationConnections)
+      .values({
+        accountId: ctx.accountId,
+        appSlug: ARVERA_APPOINTMENTS_SLUG,
+        enabled,
+        encryptedCredentials,
+        config,
+        status: enabled ? 'active' : 'disabled',
+        lastError: null,
+        lastCheckedAt: new Date(),
+        createdBy: ctx.userId,
+      })
+      .onConflictDoUpdate({
+        target: [integrationConnections.accountId, integrationConnections.appSlug],
+        set: {
           enabled,
-          encrypted_credentials,
+          encryptedCredentials,
           config,
           status: enabled ? 'active' : 'disabled',
-          last_error: null,
-          last_checked_at: new Date().toISOString(),
-          created_by: ctx.userId,
+          lastError: null,
+          lastCheckedAt: new Date(),
+          createdBy: ctx.userId,
+          updatedAt: new Date(),
         },
-        { onConflict: 'account_id,app_slug' },
-      )
-      .select('id, app_slug, enabled, config, status, last_error, last_checked_at, updated_at')
-      .single();
+      })
+      .returning();
 
-    if (error || !data) {
-      console.error('[arvera appointments connection] save failed:', error);
+    if (!data) {
       return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
     }
 
     return NextResponse.json({
-      connection: data,
+      connection: serializeConnection(data),
       has_api_token: true,
       webhook_url: buildWebhookUrl(request, webhookToken),
     });

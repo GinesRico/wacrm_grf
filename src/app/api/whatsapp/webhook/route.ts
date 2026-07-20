@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { legacyDb } from '@/db/legacy-query'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
@@ -17,6 +17,7 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -24,17 +25,8 @@ import {
 // plan's ceiling). Tune as needed.
 export const maxDuration = 60
 
-// Lazy-initialized to avoid build-time crash when env vars are missing
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
+function dbAdmin() {
+  return legacyDb()
 }
 
 interface AppointmentSlotSelection {
@@ -109,7 +101,7 @@ async function resolveSlotTimes(args: {
   date: string
   time: string
 }): Promise<{ startTime: string; endTime: string; service: string | null } | null> {
-  const { data, error } = await supabaseAdmin()
+  const { data, error } = await dbAdmin()
     .from('appointment_availability_messages')
     .select('slots, service')
     .eq('account_id', args.accountId)
@@ -152,7 +144,7 @@ async function buildAppointmentSlotSelection(
   let duration = 45
   let timeZone = 'Europe/Madrid'
   try {
-    const connection = await getArveraAppointmentsConnection(supabaseAdmin(), accountId)
+    const connection = await getArveraAppointmentsConnection(dbAdmin() as never, accountId)
     const config = normalizeAppointmentsConfig(connection?.config)
     duration = config.duracion
     timeZone = config.timezone
@@ -250,7 +242,7 @@ export async function GET(request: Request) {
     }
 
     // Fetch all whatsapp configs to check verify tokens
-    const { data: configs, error: configError } = await supabaseAdmin()
+    const { data: configs, error: configError } = await dbAdmin()
       .from('whatsapp_config')
       .select('id, verify_token')
 
@@ -283,7 +275,7 @@ export async function GET(request: Request) {
       // Fire-and-forget GCM upgrade. Safe to run on every subscribe
       // since it's a no-op once the column is already GCM.
       if (isLegacyFormat(matchedConfig.verify_token)) {
-        void supabaseAdmin()
+        void dbAdmin()
           .from('whatsapp_config')
           .update({ verify_token: encrypt(verifyToken) })
           .eq('id', matchedConfig.id)
@@ -376,7 +368,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       if (isTemplateWebhookField(change.field)) {
         await handleTemplateWebhookChange(
           { field: change.field, value: change.value as unknown },
-          supabaseAdmin(),
+          dbAdmin(),
         )
         continue
       }
@@ -400,7 +392,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // operators see the real cause in logs. ≥2 rows shouldn't happen
       // post-migration 013 (UNIQUE constraint), but a row created
       // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await supabaseAdmin()
+      const { data: configRows, error: configError } = await dbAdmin()
         .from('whatsapp_config')
         .select('*')
         .eq('phone_number_id', phoneNumberId)
@@ -510,7 +502,7 @@ async function handleStatusUpdate(status: {
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
   //    repeat across numbers), so this updates 0..N rows and must not
   //    assume a single row.
-  const { error: msgErr } = await supabaseAdmin()
+  const { error: msgErr } = await dbAdmin()
     .from('messages')
     .update({ status: status.status })
     .eq('message_id', status.id)
@@ -529,7 +521,7 @@ async function handleStatusUpdate(status: {
   //    sent/delivered/read/failed counts automatically.
   const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString()
 
-  const { data: recipient, error: recFetchErr } = await supabaseAdmin()
+  const { data: recipient, error: recFetchErr } = await dbAdmin()
     .from('broadcast_recipients')
     .select('id, status')
     .eq('whatsapp_message_id', status.id)
@@ -548,7 +540,7 @@ async function handleStatusUpdate(status: {
     if (status.status === 'delivered') update.delivered_at = tsIso
     if (status.status === 'read') update.read_at = tsIso
 
-    const { error: recUpdateErr } = await supabaseAdmin()
+    const { error: recUpdateErr } = await dbAdmin()
       .from('broadcast_recipients')
       .update(update)
       .eq('id', recipient.id)
@@ -562,7 +554,7 @@ async function handleStatusUpdate(status: {
   //    Runs last so a slow subscriber can't delay the mirrors above.
   //    Bounded to one row (message_id isn't unique) purely to resolve
   //    the owning account for delivery.
-  const { data: msgRow } = await supabaseAdmin()
+  const { data: msgRow } = await dbAdmin()
     .from('messages')
     .select('conversation_id, conversations(account_id)')
     .eq('message_id', status.id)
@@ -574,7 +566,7 @@ async function handleStatusUpdate(status: {
     const accountId = conv?.account_id
     if (accountId) {
       await dispatchWebhookEvent(
-        supabaseAdmin(),
+        dbAdmin(),
         accountId,
         'message.status_updated',
         {
@@ -601,7 +593,7 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
     // been replied to yet. Account-scoped so a shared inbox reply
     // marks the broadcast as replied regardless of which teammate
     // sent it.
-    const { data: recs, error } = await supabaseAdmin()
+    const { data: recs, error } = await dbAdmin()
       .from('broadcast_recipients')
       .select('id, status, broadcast_id, broadcasts!inner(account_id)')
       .eq('contact_id', contactId)
@@ -613,7 +605,7 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
     if (error || !recs || recs.length === 0) return
 
     const row = recs[0]
-    const { error: updErr } = await supabaseAdmin()
+    const { error: updErr } = await dbAdmin()
       .from('broadcast_recipients')
       .update({ status: 'replied', replied_at: new Date().toISOString() })
       .eq('id', row.id)
@@ -635,7 +627,7 @@ async function lookupInternalIdByMetaId(
   metaId: string,
   conversationId: string
 ): Promise<string | null> {
-  const { data, error } = await supabaseAdmin()
+  const { data, error } = await dbAdmin()
     .from('messages')
     .select('id')
     .eq('message_id', metaId)
@@ -658,6 +650,7 @@ async function lookupInternalIdByMetaId(
  */
 async function handleReaction(
   message: WhatsAppMessage,
+  accountId: string,
   conversationId: string,
   contactId: string
 ) {
@@ -678,7 +671,14 @@ async function handleReaction(
 
   // Empty emoji = removal (per Meta's Cloud API spec).
   if (!reaction.emoji) {
-    const { error: delError } = await supabaseAdmin()
+    const { data: existingReaction } = await dbAdmin()
+      .from('message_reactions')
+      .select('*')
+      .eq('message_id', targetInternalId)
+      .eq('actor_type', 'customer')
+      .eq('actor_id', contactId)
+      .maybeSingle()
+    const { error: delError } = await dbAdmin()
       .from('message_reactions')
       .delete()
       .eq('message_id', targetInternalId)
@@ -686,11 +686,21 @@ async function handleReaction(
       .eq('actor_id', contactId)
     if (delError) {
       console.error('[webhook] reaction delete failed:', delError.message)
+      return
+    }
+    if (existingReaction) {
+      await publishRealtimeEvent('reaction.deleted', {
+        accountId,
+        conversationId,
+        payload: { reaction: existingReaction },
+      }).catch((error) => {
+        console.warn('[realtime] failed to publish reaction.deleted:', error)
+      })
     }
     return
   }
 
-  const { error: upsertError } = await supabaseAdmin()
+  const { data: savedReaction, error: upsertError } = await dbAdmin()
     .from('message_reactions')
     .upsert(
       {
@@ -702,8 +712,20 @@ async function handleReaction(
       },
       { onConflict: 'message_id,actor_type,actor_id' }
     )
+    .select('*')
+    .single()
   if (upsertError) {
     console.error('[webhook] reaction upsert failed:', upsertError.message)
+    return
+  }
+  if (savedReaction) {
+    await publishRealtimeEvent('reaction.updated', {
+      accountId,
+      conversationId,
+      payload: { reaction: savedReaction },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish reaction.updated:', error)
+    })
   }
 }
 
@@ -734,6 +756,14 @@ async function processMessage(
   )
   if (!contactOutcome) return
   const contactRecord = contactOutcome.contact
+  if (contactOutcome.wasCreated) {
+    await publishRealtimeEvent('contact.created', {
+      accountId,
+      payload: { contact: contactRecord },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish contact.created:', error)
+    })
+  }
 
   // Find or create conversation
   const convResult = await findOrCreateConversation(
@@ -751,9 +781,16 @@ async function processMessage(
   // a reaction still fires the event, and a subscriber always sees the
   // thread open before its first message.received.
   if (convResult.created) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
+    await dispatchWebhookEvent(dbAdmin(), accountId, 'conversation.created', {
       conversation_id: conversation.id,
       contact_id: contactRecord.id,
+    })
+    await publishRealtimeEvent('conversation.created', {
+      accountId,
+      conversationId: conversation.id,
+      payload: { conversation },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish conversation.created:', error)
     })
   }
 
@@ -761,7 +798,7 @@ async function processMessage(
   // into `messages`, never bump unread_count, never update last_message_text.
   // Done before parseMessageContent so the media-URL fetch is skipped.
   if (message.type === 'reaction') {
-    await handleReaction(message, conversation.id, contactRecord.id)
+    await handleReaction(message, accountId, conversation.id, contactRecord.id)
     return
   }
 
@@ -786,7 +823,7 @@ async function processMessage(
   }
 
   // Insert message — field names MUST match the messages table schema
-  // (see supabase/migrations/001_initial_schema.sql):
+  // (see database/migrations/001_initial_schema.sql):
   //   conversation_id, sender_type, content_type, content_text,
   //   media_url, template_name, message_id, status, created_at
   // `mediaType` is intentionally unused — the schema has no media_type
@@ -826,14 +863,14 @@ async function processMessage(
   // BEFORE we insert, so the count is accurate. Covers the case where
   // the contact row already exists (manual add / CSV import) but they've
   // never messaged us before — which new_contact_created wouldn't catch.
-  const { count: priorCustomerMsgCount } = await supabaseAdmin()
+  const { count: priorCustomerMsgCount } = await dbAdmin()
     .from('messages')
     .select('id', { count: 'exact', head: true })
     .eq('conversation_id', conversation.id)
     .eq('sender_type', 'customer')
   const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0
 
-  const { error: msgError } = await supabaseAdmin().from('messages').insert({
+  const { data: insertedMessage, error: msgError } = await dbAdmin().from('messages').insert({
     conversation_id: conversation.id,
     sender_type: 'customer',
     content_type: contentType,
@@ -848,7 +885,7 @@ async function processMessage(
     // the column; null for every other content_type so existing inserts
     // behave identically.
     interactive_reply_id: interactiveReplyId,
-  })
+  }).select('*').single()
 
   if (msgError) {
     console.error('Error inserting message:', msgError)
@@ -856,18 +893,50 @@ async function processMessage(
   }
 
   // Update conversation
-  const { error: convError } = await supabaseAdmin()
+  const updatedConversation = {
+    ...conversation,
+    last_message_text: contentText || `[${message.type}]`,
+    last_message_at: new Date().toISOString(),
+    unread_count: (conversation.unread_count || 0) + 1,
+    updated_at: new Date().toISOString(),
+  }
+
+  const { error: convError } = await dbAdmin()
     .from('conversations')
     .update({
-      last_message_text: contentText || `[${message.type}]`,
-      last_message_at: new Date().toISOString(),
-      unread_count: (conversation.unread_count || 0) + 1,
-      updated_at: new Date().toISOString(),
+      last_message_text: updatedConversation.last_message_text,
+      last_message_at: updatedConversation.last_message_at,
+      unread_count: updatedConversation.unread_count,
+      updated_at: updatedConversation.updated_at,
     })
     .eq('id', conversation.id)
 
   if (convError) {
     console.error('Error updating conversation:', convError)
+  }
+
+  await publishRealtimeEvent('conversation.updated', {
+    accountId,
+    conversationId: conversation.id,
+    payload: { conversation: updatedConversation },
+  }).catch((error) => {
+    console.warn('[realtime] failed to publish conversation.updated:', error)
+  })
+
+  if (insertedMessage) {
+    await publishRealtimeEvent('message.created', {
+      accountId,
+      conversationId: conversation.id,
+      payload: {
+        message: insertedMessage,
+        contact: {
+          name: contactRecord.name,
+          phone: contactRecord.phone,
+        },
+      },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish message.created:', error)
+    })
   }
 
   // If this contact was a recent broadcast recipient, flag the reply
@@ -1009,7 +1078,7 @@ async function processMessage(
   // when the account has no matching endpoint and never throws.
   // (conversation.created is emitted earlier, right after the thread is
   // opened.)
-  await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+  await dispatchWebhookEvent(dbAdmin(), accountId, 'message.received', {
     conversation_id: conversation.id,
     contact_id: contactRecord.id,
     whatsapp_message_id: message.id,
@@ -1189,7 +1258,7 @@ async function findOrCreateContact(
   // helper backs the manual contact form and CSV import, so all three
   // paths agree on what "same number" means (issue #212).
   const existingContact = await findExistingContact(
-    supabaseAdmin(),
+    dbAdmin(),
     accountId,
     phone,
   )
@@ -1197,7 +1266,7 @@ async function findOrCreateContact(
   if (existingContact) {
     // Update name if it changed
     if (name && name !== existingContact.name) {
-      await supabaseAdmin()
+      await dbAdmin()
         .from('contacts')
         .update({ name, updated_at: new Date().toISOString() })
         .eq('id', existingContact.id)
@@ -1209,7 +1278,7 @@ async function findOrCreateContact(
   // user_id is the NOT NULL FK audit column (no inbound message
   // has a single "user who created" it — we attribute to the
   // WhatsApp config owner as a stable default).
-  const { data: newContact, error: createError } = await supabaseAdmin()
+  const { data: newContact, error: createError } = await dbAdmin()
     .from('contacts')
     .insert({
       account_id: accountId,
@@ -1226,7 +1295,7 @@ async function findOrCreateContact(
     // unique index (migration 022) rejected the duplicate. Re-resolve
     // the existing row instead of dropping the message.
     if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(supabaseAdmin(), accountId, phone)
+      const raced = await findExistingContact(dbAdmin(), accountId, phone)
       if (raced) return { contact: raced, wasCreated: false }
     }
     console.error('Error creating contact:', createError)
@@ -1244,7 +1313,7 @@ async function findOrCreateConversation(
   departmentId: string | null,
 ) {
   // Look for existing conversation in this account for the inbound line.
-  const { data: existing, error: findError } = await supabaseAdmin()
+  const { data: existing, error: findError } = await dbAdmin()
     .from('conversations')
     .select('*')
     .eq('account_id', accountId)
@@ -1254,7 +1323,7 @@ async function findOrCreateConversation(
 
   if (!findError && existing) {
     if (existing.status === 'closed') {
-      const { data: reopened, error: reopenError } = await supabaseAdmin()
+      const { data: reopened, error: reopenError } = await dbAdmin()
         .from('conversations')
         .update({
           status: 'pending',
@@ -1279,7 +1348,7 @@ async function findOrCreateConversation(
 
   // Create new conversation. Same tenancy + audit split as
   // findOrCreateContact above.
-  const { data: newConv, error: createError } = await supabaseAdmin()
+  const { data: newConv, error: createError } = await dbAdmin()
     .from('conversations')
     .insert({
       account_id: accountId,

@@ -1,7 +1,16 @@
+import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
+import { db } from "@/db/client";
+import {
+  conversations,
+  departmentMembers,
+  departments,
+  profiles,
+  whatsappConfig,
+} from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 
 const DEFAULT_COLOR = "#22c55e";
 
@@ -12,15 +21,13 @@ function normalizeColor(value: unknown): string {
 }
 
 async function assertDepartment(accountId: string, departmentId: string) {
-  const { data, error } = await supabaseAdmin()
-    .from("departments")
-    .select("id")
-    .eq("account_id", accountId)
-    .eq("id", departmentId)
-    .maybeSingle();
+  const [department] = await db
+    .select({ id: departments.id })
+    .from(departments)
+    .where(and(eq(departments.accountId, accountId), eq(departments.id, departmentId)))
+    .limit(1);
 
-  if (error) throw error;
-  if (!data) {
+  if (!department) {
     return NextResponse.json({ error: "Department not found." }, { status: 404 });
   }
   return null;
@@ -33,14 +40,11 @@ async function validMemberIds(accountId: string, requested: unknown): Promise<st
   );
   if (unique.length === 0) return [];
 
-  const { data, error } = await supabaseAdmin()
-    .from("profiles")
-    .select("user_id")
-    .eq("account_id", accountId)
-    .in("user_id", unique);
-
-  if (error) throw error;
-  const allowed = new Set(((data ?? []) as { user_id: string }[]).map((row) => row.user_id));
+  const rows = await db
+    .select({ userId: profiles.userId })
+    .from(profiles)
+    .where(and(eq(profiles.accountId, accountId), inArray(profiles.userId, unique)));
+  const allowed = new Set(rows.map((row) => row.userId));
   return unique.filter((id) => allowed.has(id));
 }
 
@@ -49,13 +53,13 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
     const { id } = await context.params;
     const missing = await assertDepartment(ctx.accountId, id);
     if (missing) return missing;
 
     const body = await request.json().catch(() => ({}));
-    const patch: { name?: string; color?: string } = {};
+    const patch: Partial<typeof departments.$inferInsert> = {};
     if (typeof body?.name === "string") {
       const name = body.name.trim();
       if (!name) {
@@ -65,36 +69,32 @@ export async function PATCH(
     }
     if (body?.color !== undefined) patch.color = normalizeColor(body.color);
 
-    const db = supabaseAdmin();
     if (Object.keys(patch).length > 0) {
-      const { error } = await db
-        .from("departments")
-        .update(patch)
-        .eq("account_id", ctx.accountId)
-        .eq("id", id);
-      if (error) throw error;
+      await db
+        .update(departments)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(and(eq(departments.accountId, ctx.accountId), eq(departments.id, id)));
     }
 
     if (Array.isArray(body?.member_user_ids)) {
       const memberIds = await validMemberIds(ctx.accountId, body.member_user_ids);
-      const { error: deleteError } = await db
-        .from("department_members")
-        .delete()
-        .eq("account_id", ctx.accountId)
-        .eq("department_id", id);
-      if (deleteError) throw deleteError;
+      await db
+        .delete(departmentMembers)
+        .where(
+          and(
+            eq(departmentMembers.accountId, ctx.accountId),
+            eq(departmentMembers.departmentId, id),
+          ),
+        );
 
       if (memberIds.length > 0) {
-        const { error: insertError } = await db
-          .from("department_members")
-          .insert(
-            memberIds.map((userId) => ({
-              account_id: ctx.accountId,
-              department_id: id,
-              user_id: userId,
-            })),
-          );
-        if (insertError) throw insertError;
+        await db.insert(departmentMembers).values(
+          memberIds.map((userId) => ({
+            accountId: ctx.accountId,
+            departmentId: id,
+            userId,
+          })),
+        );
       }
     }
 
@@ -109,32 +109,41 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
     const { id } = await context.params;
     const missing = await assertDepartment(ctx.accountId, id);
     if (missing) return missing;
 
-    const db = supabaseAdmin();
-    const { data: fallback } = await db
-      .from("departments")
-      .select("id")
-      .eq("account_id", ctx.accountId)
-      .neq("id", id)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const [fallback] = await db
+      .select({ id: departments.id })
+      .from(departments)
+      .where(and(eq(departments.accountId, ctx.accountId), ne(departments.id, id)))
+      .orderBy(asc(departments.createdAt))
+      .limit(1);
 
-    await Promise.all([
-      db.from("whatsapp_config").update({ department_id: fallback?.id ?? null }).eq("account_id", ctx.accountId).eq("department_id", id),
-      db.from("conversations").update({ department_id: fallback?.id ?? null }).eq("account_id", ctx.accountId).eq("department_id", id),
-    ]);
-
-    const { error } = await db
-      .from("departments")
-      .delete()
-      .eq("account_id", ctx.accountId)
-      .eq("id", id);
-    if (error) throw error;
+    await db.transaction(async (tx) => {
+      await tx
+        .update(whatsappConfig)
+        .set({ departmentId: fallback?.id ?? null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(whatsappConfig.accountId, ctx.accountId),
+            eq(whatsappConfig.departmentId, id),
+          ),
+        );
+      await tx
+        .update(conversations)
+        .set({ departmentId: fallback?.id ?? null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(conversations.accountId, ctx.accountId),
+            eq(conversations.departmentId, id),
+          ),
+        );
+      await tx
+        .delete(departments)
+        .where(and(eq(departments.accountId, ctx.accountId), eq(departments.id, id)));
+    });
 
     return NextResponse.json({ ok: true });
   } catch (err) {

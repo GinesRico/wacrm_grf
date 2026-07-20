@@ -1,5 +1,7 @@
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { db as appDb } from '@/db/client';
+import { integrationConnections } from '@/db/schema';
+import { and, eq } from 'drizzle-orm';
 import type { PaymentTemplateValueSource } from './payment-template-params';
 
 export {
@@ -132,22 +134,35 @@ export function resolveApiKey(connection?: ArveraConnection | null): string | nu
 }
 
 export async function getArveraConnection(
-  db: SupabaseClient,
+  _unusedDb: unknown,
   accountId: string,
 ): Promise<ArveraConnection | null> {
-  const { data, error } = await db
-    .from('integration_connections')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('app_slug', ARVERA_PAYMENTS_SLUG)
-    .maybeSingle();
+  const [row] = await appDb
+    .select()
+    .from(integrationConnections)
+    .where(
+      and(
+        eq(integrationConnections.accountId, accountId),
+        eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG),
+      ),
+    )
+    .limit(1);
 
-  if (error) throw new Error(`Could not load Arvera connection: ${error.message}`);
-  return (data as ArveraConnection | null) ?? null;
+  if (!row) return null;
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    app_slug: row.appSlug,
+    enabled: row.enabled,
+    encrypted_credentials: row.encryptedCredentials as Record<string, string>,
+    config: row.config as Partial<ArveraConnectionConfig>,
+    status: row.status,
+    last_error: row.lastError,
+  };
 }
 
 export async function requireActiveArveraConnection(
-  db: SupabaseClient,
+  db: unknown,
   accountId: string,
 ): Promise<{ connection: ArveraConnection; config: ArveraConnectionConfig; apiKey: string }> {
   const connection = await getArveraConnection(db, accountId);

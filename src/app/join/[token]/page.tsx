@@ -52,7 +52,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { createClient } from '@/lib/supabase/client';
+import { authClient } from '@/lib/better-auth/client';
 
 interface PeekOk {
   ok: true;
@@ -66,39 +66,14 @@ interface PeekFail {
 }
 type PeekResult = PeekOk | PeekFail;
 
-const ROLE_LABEL: Record<PeekOk['role'], string> = {
-  admin: 'Admin',
-  agent: 'Agent',
-  viewer: 'Viewer',
-};
-
-const FAIL_COPY: Record<PeekFail['reason'], { title: string; body: string }> = {
-  not_found: {
-    title: 'Invite not found',
-    body: 'This link doesn’t match a valid invitation. Double-check the URL or ask the person who invited you to send a new one.',
-  },
-  used: {
-    title: 'Invite already used',
-    body: 'This invitation has already been accepted. If that wasn’t you, ask the account admin to send a fresh link.',
-  },
-  expired: {
-    title: 'Invite expired',
-    body: 'This invitation has expired. Ask the account admin to send a new one — they take a few seconds to generate.',
-  },
-  server_error: {
-    title: 'Something went wrong',
-    body: 'We couldn’t verify this invitation right now. Try refreshing the page in a moment.',
-  },
-};
-
 export default function JoinPage() {
   const t = useTranslations('JoinPage');
   const params = useParams<{ token: string }>();
   const token = params?.token;
 
   const [peek, setPeek] = useState<PeekResult | null>(null);
-  // Local auth probe — the AuthProvider lives inside the (dashboard)
-  // route group, so it doesn't reach this page. We hit Supabase
+  // Local auth probe: the AuthProvider lives inside the (dashboard)
+  // route group, so it doesn't reach this page.
   // directly the same way `/login` and `/signup` do.
   const [authedUserId, setAuthedUserId] = useState<string | null | undefined>(
     undefined, // undefined = unknown / still loading; null = signed out
@@ -122,11 +97,11 @@ export default function JoinPage() {
         fetch(`/api/invitations/${encodeURIComponent(token)}/peek`, {
           cache: 'no-store',
         }),
-        createClient().auth.getUser(),
+        authClient.getSession(),
       ]);
       const peekBody = (await peekRes.json()) as PeekResult;
       setPeek(peekBody);
-      setAuthedUserId(authRes.data.user?.id ?? null);
+      setAuthedUserId(authRes.data?.user?.id ?? null);
     } catch (err) {
       console.error('[join] peek error:', err);
       setPeek({ ok: false, reason: 'server_error' });
@@ -147,12 +122,12 @@ export default function JoinPage() {
           fetch(`/api/invitations/${encodeURIComponent(token)}/peek`, {
             cache: 'no-store',
           }),
-          createClient().auth.getUser(),
+          authClient.getSession(),
         ]);
         const peekBody = (await peekRes.json()) as PeekResult;
         if (cancelled) return;
         setPeek(peekBody);
-        setAuthedUserId(authRes.data.user?.id ?? null);
+        setAuthedUserId(authRes.data?.user?.id ?? null);
       } catch (err) {
         console.error('[join] peek error:', err);
         if (cancelled) return;
@@ -207,7 +182,7 @@ export default function JoinPage() {
   const handleSignOutAndRetry = useCallback(async () => {
     setSigningOut(true);
     try {
-      await createClient().auth.signOut();
+      await authClient.signOut();
       // Hard reload so the new auth state propagates everywhere
       // (middleware, AuthProvider). Preserves the invite token in
       // the URL so the rebuilt page renders the signed-out CTA path.
@@ -430,3 +405,5 @@ export default function JoinPage() {
     </Card>
   );
 }
+
+

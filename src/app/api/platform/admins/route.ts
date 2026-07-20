@@ -1,25 +1,32 @@
 import { NextResponse } from 'next/server'
+import { asc, eq } from 'drizzle-orm'
 
-import { toErrorResponse } from '@/lib/auth/account'
+import { db } from '@/db/client'
+import { authUser, platformAdmins } from '@/db/schema'
+import { toErrorResponse } from '@/lib/auth/errors'
 import { requirePlatformAdmin } from '@/lib/platform/admin'
-import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function serializeAdmin(admin: typeof platformAdmins.$inferSelect) {
+  return {
+    id: admin.id,
+    email: admin.email,
+    user_id: admin.userId,
+    created_at: admin.createdAt.toISOString(),
+  }
+}
 
 export async function GET() {
   try {
     await requirePlatformAdmin()
-    const { data, error } = await supabaseAdmin()
-      .from('platform_admins')
-      .select('id, email, user_id, created_at')
-      .order('created_at', { ascending: true })
 
-    if (error) {
-      console.error('[GET /api/platform/admins] fetch error:', error)
-      return NextResponse.json({ error: 'Failed to load platform admins' }, { status: 500 })
-    }
+    const admins = await db
+      .select()
+      .from(platformAdmins)
+      .orderBy(asc(platformAdmins.createdAt))
 
-    return NextResponse.json({ admins: data ?? [] })
+    return NextResponse.json({ admins: admins.map(serializeAdmin) })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -35,33 +42,33 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid email' }, { status: 400 })
     }
 
-    const admin = supabaseAdmin()
-    const { data: users, error: usersError } = await admin.auth.admin.listUsers()
-    if (usersError) {
-      console.error('[POST /api/platform/admins] list users error:', usersError)
-      return NextResponse.json({ error: 'Failed to resolve auth user' }, { status: 500 })
-    }
+    const [user] = await db
+      .select({ id: authUser.id })
+      .from(authUser)
+      .where(eq(authUser.email, email))
+      .limit(1)
 
-    const user = users.users.find((item) => item.email?.toLowerCase() === email)
-    const { data, error } = await admin
-      .from('platform_admins')
-      .upsert(
-        {
-          email,
-          user_id: user?.id ?? null,
-          created_by_user_id: ctx.userId,
+    const [admin] = await db
+      .insert(platformAdmins)
+      .values({
+        email,
+        userId: user?.id ?? null,
+        createdByUserId: ctx.userId,
+      })
+      .onConflictDoUpdate({
+        target: platformAdmins.email,
+        set: {
+          userId: user?.id ?? null,
+          updatedAt: new Date(),
         },
-        { onConflict: 'email' },
-      )
-      .select('id, email, user_id, created_at')
-      .single()
+      })
+      .returning()
 
-    if (error || !data) {
-      console.error('[POST /api/platform/admins] upsert error:', error)
+    if (!admin) {
       return NextResponse.json({ error: 'Failed to save platform admin' }, { status: 500 })
     }
 
-    return NextResponse.json({ admin: data }, { status: 201 })
+    return NextResponse.json({ admin: serializeAdmin(admin) }, { status: 201 })
   } catch (err) {
     return toErrorResponse(err)
   }

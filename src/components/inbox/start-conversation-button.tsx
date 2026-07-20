@@ -20,7 +20,6 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/ui/select";
-import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import type { Contact } from "@/types";
 
@@ -142,41 +141,18 @@ export function StartConversationButton({
   const loadData = useCallback(async () => {
     setLoadingData(true);
     try {
-      const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
-      if (!user) return;
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("account_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      const accountId = profile?.account_id as string | undefined;
-      if (!accountId) return;
-
       const [contactsRes, linesRes] = await Promise.all([
-        supabase
-          .from("contacts")
-          .select("*")
-          .eq("account_id", accountId)
-          .order("updated_at", { ascending: false })
-          .limit(50),
-        supabase
-          .from("whatsapp_config")
-          .select("id, label, phone_number_id, status, is_default")
-          .eq("account_id", accountId)
-          .order("is_default", { ascending: false })
-          .order("created_at", { ascending: true }),
+        fetch("/api/inbox/forward-contacts", { cache: "no-store" }),
+        fetch("/api/inbox/transfer-options", { cache: "no-store" }),
       ]);
+      const contactsPayload = await contactsRes.json().catch(() => ({}));
+      const linesPayload = await linesRes.json().catch(() => ({}));
 
-      if (contactsRes.error) throw contactsRes.error;
-      if (linesRes.error) throw linesRes.error;
+      if (!contactsRes.ok) throw contactsPayload;
+      if (!linesRes.ok) throw linesPayload;
 
-      const nextLines = (linesRes.data ?? []) as WhatsAppLine[];
-      setContacts((contactsRes.data ?? []) as Contact[]);
+      const nextLines = (linesPayload.lines ?? []) as WhatsAppLine[];
+      setContacts(((contactsPayload.contacts ?? []) as Contact[]).slice(0, 50));
       setLines(nextLines);
       setLineId((current) => current || nextLines[0]?.id || "");
     } catch (error) {

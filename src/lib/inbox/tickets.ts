@@ -1,10 +1,18 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { and, eq, ilike, isNull, sql } from "drizzle-orm";
 
+import { db } from "@/db/client";
+import {
+  conversations as conversationsTable,
+  departments,
+  departmentMembers,
+  messages,
+  profiles,
+  whatsappConfig,
+} from "@/db/schema";
 import type { Conversation, ConversationStatus } from "@/types";
 import {
-  CONVERSATION_SELECT,
+  getInboxConversationById,
   hydrateAssignedAgents,
-  normalizeConversation,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 
@@ -71,19 +79,15 @@ function systemMessageForAction(action: InboxAction, agentName: string) {
 }
 
 async function resolveAgentName(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   userId: string,
 ) {
-  const { data, error } = await db
-    .from("profiles")
-    .select("full_name, email")
-    .eq("account_id", accountId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (error) throw error;
-  const row = data as { full_name?: string | null; email?: string | null } | null;
+  const [row] = await db
+    .select({ full_name: profiles.fullName, email: profiles.email })
+    .from(profiles)
+    .where(and(eq(profiles.accountId, accountId), eq(profiles.userId, userId)))
+    .limit(1);
   return row?.full_name?.trim() || row?.email?.trim() || "un usuario";
 }
 
@@ -194,46 +198,86 @@ function matchesTextSearch(
 }
 
 export async function listInboxConversations(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   params: ListInboxParams,
 ) {
-  const [
-    { data: allDepartmentRows, error: allDepartmentsError },
-    { data: departmentRows, error: departmentError },
-  ] = await Promise.all([
+  const [allDepartmentRows, departmentRows] = await Promise.all([
     db
-      .from("departments")
-      .select("id")
-      .eq("account_id", params.accountId),
+      .select({ id: departments.id })
+      .from(departments)
+      .where(eq(departments.accountId, params.accountId)),
     db
-      .from("department_members")
-      .select("department_id")
-      .eq("account_id", params.accountId)
-      .eq("user_id", params.userId),
+      .select({ department_id: departmentMembers.departmentId })
+      .from(departmentMembers)
+      .where(
+        and(
+          eq(departmentMembers.accountId, params.accountId),
+          eq(departmentMembers.userId, params.userId),
+        ),
+      ),
   ]);
 
-  if (allDepartmentsError) throw allDepartmentsError;
-  if (departmentError) throw departmentError;
-
-  const departmentIds = ((departmentRows ?? []) as { department_id: string }[])
+  const departmentIds = departmentRows
     .map((row) => row.department_id)
     .filter(Boolean);
 
-  const { data, error } = await db
-    .from("conversations")
-    .select(CONVERSATION_SELECT)
-    .eq("account_id", params.accountId)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
-    .order("updated_at", { ascending: false });
-
-  if (error) throw error;
+  const result = await db.execute(sql`
+    select
+      c.*,
+      case
+        when ct.id is null then null
+        else json_build_object(
+          'id', ct.id,
+          'user_id', ct.user_id,
+          'account_id', ct.account_id,
+          'phone', ct.phone,
+          'phone_normalized', ct.phone_normalized,
+          'name', ct.name,
+          'email', ct.email,
+          'company', ct.company,
+          'avatar_url', ct.avatar_url,
+          'created_at', ct.created_at,
+          'updated_at', ct.updated_at,
+          'tags', coalesce(tags.items, '[]'::json)
+        )
+      end as contact,
+      case
+        when wc.id is null then null
+        else json_build_object('id', wc.id, 'label', wc.label, 'phone_number_id', wc.phone_number_id)
+      end as whatsapp_config,
+      case
+        when d.id is null then null
+        else json_build_object('id', d.id, 'name', d.name, 'color', d.color)
+      end as department
+    from conversations c
+    left join contacts ct on ct.id = c.contact_id
+    left join whatsapp_config wc on wc.id = c.whatsapp_config_id
+    left join departments d on d.id = c.department_id
+    left join lateral (
+      select json_agg(
+        json_build_object(
+          'id', t.id,
+          'user_id', t.user_id,
+          'name', t.name,
+          'color', t.color,
+          'created_at', t.created_at
+        )
+        order by t.name asc
+      ) as items
+      from contact_tags ctag
+      join tags t on t.id = ctag.tag_id
+      where ctag.contact_id = ct.id
+    ) tags on true
+    where c.account_id = ${params.accountId}
+    order by c.last_message_at desc nulls last, c.updated_at desc
+  `);
 
   const conversations = await hydrateAssignedAgents(
-    db,
+    null,
     params.accountId,
-    normalizeConversations((data ?? []) as never[]),
+    normalizeConversations((result.rows ?? []) as never[]),
   );
-  const hasDepartmentQueues = ((allDepartmentRows ?? []) as { id: string }[]).length > 0;
+  const hasDepartmentQueues = allDepartmentRows.length > 0;
   const visibleByDepartment =
     !hasDepartmentQueues
       ? conversations
@@ -257,14 +301,13 @@ export async function listInboxConversations(
 
   let matchingMessageConversationIds = new Set<string>();
   if (params.search) {
-    const { data: messageRows, error: messageError } = await db
-      .from("messages")
-      .select("conversation_id")
-      .ilike("content_text", `%${params.search}%`)
+    const messageRows = await db
+      .select({ conversation_id: messages.conversationId })
+      .from(messages)
+      .where(ilike(messages.contentText, `%${params.search}%`))
       .limit(500);
-    if (messageError) throw messageError;
     matchingMessageConversationIds = new Set(
-      (messageRows ?? [])
+      messageRows
         .map((row) => (row as { conversation_id?: string }).conversation_id)
         .filter((id): id is string => Boolean(id)),
     );
@@ -284,66 +327,67 @@ export async function listInboxConversations(
 }
 
 async function assertAssignableAgent(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   assignedAgentId: string | null | undefined,
 ) {
   if (!assignedAgentId) return;
-  const { data, error } = await db
-    .from("profiles")
-    .select("user_id")
-    .eq("account_id", accountId)
-    .eq("user_id", assignedAgentId)
-    .maybeSingle();
+  const [row] = await db
+    .select({ user_id: profiles.userId })
+    .from(profiles)
+    .where(
+      and(eq(profiles.accountId, accountId), eq(profiles.userId, assignedAgentId)),
+    )
+    .limit(1);
 
-  if (error) throw error;
-  if (!data) {
+  if (!row) {
     throw new InboxWorkflowError("Assigned agent is not a member of this account.", 400);
   }
 }
 
 async function assertAssignableLine(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   whatsappConfigId: string | null | undefined,
 ) {
   if (whatsappConfigId === undefined || whatsappConfigId === null) return;
 
-  const { data, error } = await db
-    .from("whatsapp_config")
-    .select("id")
-    .eq("account_id", accountId)
-    .eq("id", whatsappConfigId)
-    .maybeSingle();
+  const [row] = await db
+    .select({ id: whatsappConfig.id })
+    .from(whatsappConfig)
+    .where(
+      and(
+        eq(whatsappConfig.accountId, accountId),
+        eq(whatsappConfig.id, whatsappConfigId),
+      ),
+    )
+    .limit(1);
 
-  if (error) throw error;
-  if (!data) {
+  if (!row) {
     throw new InboxWorkflowError("WhatsApp line is not part of this account.", 400);
   }
 }
 
 async function assertAssignableDepartment(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   accountId: string,
   departmentId: string | null | undefined,
 ) {
   if (departmentId === undefined || departmentId === null) return;
 
-  const { data, error } = await db
-    .from("departments")
-    .select("id")
-    .eq("account_id", accountId)
-    .eq("id", departmentId)
-    .maybeSingle();
+  const [row] = await db
+    .select({ id: departments.id })
+    .from(departments)
+    .where(and(eq(departments.accountId, accountId), eq(departments.id, departmentId)))
+    .limit(1);
 
-  if (error) throw error;
-  if (!data) {
+  if (!row) {
     throw new InboxWorkflowError("Department is not part of this account.", 400);
   }
 }
 
 export async function mutateInboxConversation(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   params: {
     accountId: string;
     userId: string;
@@ -354,14 +398,21 @@ export async function mutateInboxConversation(
     departmentId?: string | null;
   },
 ) {
-  const { data: current, error: findError } = await db
-    .from("conversations")
-    .select("id, status, assigned_agent_id")
-    .eq("id", params.conversationId)
-    .eq("account_id", params.accountId)
-    .maybeSingle();
+  const [current] = await db
+    .select({
+      id: conversationsTable.id,
+      status: conversationsTable.status,
+      assigned_agent_id: conversationsTable.assignedAgentId,
+    })
+    .from(conversationsTable)
+    .where(
+      and(
+        eq(conversationsTable.id, params.conversationId),
+        eq(conversationsTable.accountId, params.accountId),
+      ),
+    )
+    .limit(1);
 
-  if (findError) throw findError;
   if (!current) throw new InboxWorkflowError("Conversation not found.", 404);
 
   await assertAssignableAgent(db, params.accountId, params.assignedAgentId);
@@ -377,43 +428,57 @@ export async function mutateInboxConversation(
     params.departmentId,
   );
 
-  let query = db
-    .from("conversations")
-    .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("id", params.conversationId)
-    .eq("account_id", params.accountId);
+  const set = {
+    ...(patch.status !== undefined ? { status: patch.status } : {}),
+    ...(patch.assigned_agent_id !== undefined
+      ? { assignedAgentId: patch.assigned_agent_id }
+      : {}),
+    ...(patch.whatsapp_config_id !== undefined
+      ? { whatsappConfigId: patch.whatsapp_config_id }
+      : {}),
+    ...(patch.department_id !== undefined ? { departmentId: patch.department_id } : {}),
+    updatedAt: new Date(),
+  };
 
-  if (params.action === "accept") {
-    query = query.eq("status", "pending").is("assigned_agent_id", null);
-  }
+  const where =
+    params.action === "accept"
+      ? and(
+          eq(conversationsTable.id, params.conversationId),
+          eq(conversationsTable.accountId, params.accountId),
+          eq(conversationsTable.status, "pending"),
+          isNull(conversationsTable.assignedAgentId),
+        )
+      : and(
+          eq(conversationsTable.id, params.conversationId),
+          eq(conversationsTable.accountId, params.accountId),
+        );
 
-  const { data: updatedRows, error: updateError } = await query
-    .select(CONVERSATION_SELECT)
-    .limit(1);
+  const updatedRows = await db
+    .update(conversationsTable)
+    .set(set)
+    .where(where)
+    .returning({ id: conversationsTable.id });
 
-  if (updateError) throw updateError;
-  if (!updatedRows || updatedRows.length === 0) {
+  if (updatedRows.length === 0) {
     throw new InboxWorkflowError("This chat is already being handled by another agent.", 409);
   }
 
-  const [updated] = await hydrateAssignedAgents(
-    db,
-    params.accountId,
-    [normalizeConversation(updatedRows[0] as never)],
-  );
+  const updated = await getInboxConversationById(params.accountId, params.conversationId);
+  if (!updated) throw new InboxWorkflowError("Conversation not found.", 404);
 
-  const agentName = await resolveAgentName(db, params.accountId, params.userId);
+  const agentName = await resolveAgentName(null, params.accountId, params.userId);
   const systemText = systemMessageForAction(params.action, agentName);
   if (systemText) {
-    const { error: messageError } = await db.from("messages").insert({
-      conversation_id: params.conversationId,
-      sender_type: "bot",
-      sender_id: params.userId,
-      content_type: "system",
-      content_text: systemText,
-      status: "sent",
-    });
-    if (messageError) {
+    try {
+      await db.insert(messages).values({
+        conversationId: params.conversationId,
+        senderType: "bot",
+        senderId: params.userId,
+        contentType: "system",
+        contentText: systemText,
+        status: "sent",
+      });
+    } catch (messageError) {
       console.error("Failed to create inbox system message:", messageError);
     }
   }
@@ -422,27 +487,21 @@ export async function mutateInboxConversation(
 }
 
 export async function deleteInboxConversation(
-  db: SupabaseClient,
+  _unusedClient: unknown,
   params: {
     accountId: string;
     conversationId: string;
   },
 ) {
-  const { data: current, error: findError } = await db
-    .from("conversations")
-    .select("id")
-    .eq("id", params.conversationId)
-    .eq("account_id", params.accountId)
-    .maybeSingle();
+  const deleted = await db
+    .delete(conversationsTable)
+    .where(
+      and(
+        eq(conversationsTable.id, params.conversationId),
+        eq(conversationsTable.accountId, params.accountId),
+      ),
+    )
+    .returning({ id: conversationsTable.id });
 
-  if (findError) throw findError;
-  if (!current) throw new InboxWorkflowError("Conversation not found.", 404);
-
-  const { error } = await db
-    .from("conversations")
-    .delete()
-    .eq("id", params.conversationId)
-    .eq("account_id", params.accountId);
-
-  if (error) throw error;
+  if (deleted.length === 0) throw new InboxWorkflowError("Conversation not found.", 404);
 }

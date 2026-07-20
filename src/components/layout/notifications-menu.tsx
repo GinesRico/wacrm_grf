@@ -6,8 +6,11 @@ import { useTranslations } from "next-intl";
 import { Bell, CheckCheck, Loader2, UserPlus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
-import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/use-auth";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 import { cn } from "@/lib/utils";
 import type { Notification } from "@/types";
 import {
@@ -37,21 +40,15 @@ export function NotificationsMenu() {
 
   const load = useCallback(async () => {
     if (!accountId) return;
-    const supabase = createClient();
-    const { data, error: fetchErr } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("account_id", accountId)
-      .order("created_at", { ascending: false })
-      .limit(20);
-
-    if (fetchErr) {
-      setError(fetchErr.message);
+    const response = await fetch("/api/notifications", { cache: "no-store" });
+    if (!response.ok) {
+      setError(await response.text());
       return;
     }
+    const data = (await response.json()) as { notifications: Notification[] };
 
     setError(null);
-    setNotifications((data ?? []) as Notification[]);
+    setNotifications(data.notifications);
   }, [accountId]);
 
   useEffect(() => {
@@ -60,40 +57,41 @@ export function NotificationsMenu() {
   }, [load]);
 
   useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel("notifications-header-menu")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
-            if (accountId && row.account_id !== accountId) return;
-            setNotifications((prev) => {
-              if (!prev) return [row];
-              if (prev.some((n) => n.id === row.id)) return prev;
-              return [row, ...prev].slice(0, 20);
-            });
-          } else if (payload.eventType === "UPDATE") {
-            const row = payload.new as Notification;
-            setNotifications(
-              (prev) =>
-                prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
-                prev,
-            );
-          } else if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Notification>;
-            setNotifications(
-              (prev) => prev?.filter((n) => n.id !== oldRow.id) ?? prev,
-            );
-          }
-        },
-      )
-      .subscribe();
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const handleCreated = (event: { payload: { notification: Notification } }) => {
+      const row = event.payload.notification;
+      setNotifications((prev) => {
+        if (!prev) return [row];
+        if (prev.some((n) => n.id === row.id)) return prev;
+        return [row, ...prev].slice(0, 20);
+      });
+    };
+    const handleUpdated = (event: { payload: { notification: Notification } }) => {
+      const row = event.payload.notification;
+      setNotifications(
+        (prev) =>
+          prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ?? prev,
+      );
+    };
+    const handleDeleted = (event: {
+      payload: { notification: Partial<Notification> };
+    }) => {
+      const row = event.payload.notification;
+      setNotifications((prev) => prev?.filter((n) => n.id !== row.id) ?? prev);
+    };
+
+    channel.bind("notification.created", handleCreated);
+    channel.bind("notification.updated", handleUpdated);
+    channel.bind("notification.deleted", handleDeleted);
 
     return () => {
-      supabase.removeChannel(channel);
+      channel.unbind("notification.created", handleCreated);
+      channel.unbind("notification.updated", handleUpdated);
+      channel.unbind("notification.deleted", handleDeleted);
+      unsubscribeRealtimeChannel(channelName);
     };
   }, [accountId]);
 
@@ -107,14 +105,13 @@ export function NotificationsMenu() {
           ) ?? prev,
       );
 
-      const supabase = createClient();
-      const { error: updateErr } = await supabase
-        .from("notifications")
-        .update({ read_at: now })
-        .eq("id", id)
-        .is("read_at", null);
+      const response = await fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      });
 
-      if (updateErr) {
+      if (!response.ok) {
         toast.error(t("markReadFailed"));
         void load();
       }
@@ -140,14 +137,14 @@ export function NotificationsMenu() {
       (prev) => prev?.map((n) => (n.read_at ? n : { ...n, read_at: now })) ?? prev,
     );
 
-    const supabase = createClient();
-    const { error: updateErr } = await supabase
-      .from("notifications")
-      .update({ read_at: now })
-      .is("read_at", null);
+    const response = await fetch("/api/notifications", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true }),
+    });
 
     setMarkingAll(false);
-    if (updateErr) {
+    if (!response.ok) {
       toast.error(t("markAllReadFailed"));
       void load();
     }

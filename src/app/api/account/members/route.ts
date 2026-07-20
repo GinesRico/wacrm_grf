@@ -13,76 +13,64 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { asc, eq } from "drizzle-orm";
 
-import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
+import { db } from "@/db/client";
+import { departmentMembers, profiles } from "@/db/schema";
+import { getCurrentDbAccount } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember } from "@/types";
 
-interface ProfileRow {
-  user_id: string;
-  full_name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-  account_role: string;
-  created_at: string;
-}
-
 export async function GET() {
   try {
-    const ctx = await getCurrentAccount();
+    const ctx = await getCurrentDbAccount();
 
-    // RLS on profiles allows reading any row whose account matches
-    // the caller's, so this query is naturally account-scoped.
-    const [{ data, error }, { data: departmentRows, error: departmentError }] =
+    const [profileRows, departmentRows] =
       await Promise.all([
-        ctx.supabase
-          .from("profiles")
-          .select("user_id, full_name, email, avatar_url, account_role, created_at")
-          .eq("account_id", ctx.accountId)
-          .order("created_at", { ascending: true }),
-        ctx.supabase
-          .from("department_members")
-          .select("department_id, user_id")
-          .eq("account_id", ctx.accountId),
+        db
+          .select({
+            userId: profiles.userId,
+            fullName: profiles.fullName,
+            email: profiles.email,
+            avatarUrl: profiles.avatarUrl,
+            accountRole: profiles.accountRole,
+            createdAt: profiles.createdAt,
+          })
+          .from(profiles)
+          .where(eq(profiles.accountId, ctx.accountId))
+          .orderBy(asc(profiles.createdAt)),
+        db
+          .select({
+            departmentId: departmentMembers.departmentId,
+            userId: departmentMembers.userId,
+          })
+          .from(departmentMembers)
+          .where(eq(departmentMembers.accountId, ctx.accountId)),
       ]);
-
-    if (error) {
-      console.error("[GET /api/account/members] fetch error:", error);
-      return NextResponse.json(
-        { error: "Failed to load members" },
-        { status: 500 },
-      );
-    }
-    if (departmentError) {
-      console.error("[GET /api/account/members] department fetch error:", departmentError);
-      return NextResponse.json(
-        { error: "Failed to load member departments" },
-        { status: 500 },
-      );
-    }
 
     const canSeeEmails = canManageMembers(ctx.role);
     const departmentIdsByUser = new Map<string, string[]>();
-    for (const row of (departmentRows ?? []) as { department_id: string; user_id: string }[]) {
-      const list = departmentIdsByUser.get(row.user_id) ?? [];
-      list.push(row.department_id);
-      departmentIdsByUser.set(row.user_id, list);
+    for (const row of departmentRows) {
+      const list = departmentIdsByUser.get(row.userId) ?? [];
+      list.push(row.departmentId);
+      departmentIdsByUser.set(row.userId, list);
     }
 
-    const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
+    const members: AccountMember[] = profileRows.flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
-      if (!isAccountRole(row.account_role)) return [];
+      if (!isAccountRole(row.accountRole)) return [];
       return [
         {
-          user_id: row.user_id,
-          full_name: row.full_name ?? "",
+          user_id: row.userId,
+          full_name: row.fullName ?? "",
           email: canSeeEmails ? row.email : null,
-          avatar_url: row.avatar_url,
-          role: row.account_role,
-          joined_at: row.created_at,
-          department_ids: departmentIdsByUser.get(row.user_id) ?? [],
+          avatar_url: row.avatarUrl,
+          role: row.accountRole,
+          joined_at: row.createdAt.toISOString(),
+          department_ids: departmentIdsByUser.get(row.userId) ?? [],
         },
       ];
     });

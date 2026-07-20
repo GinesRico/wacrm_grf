@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createClient } from "@/lib/supabase/client";
 import type { MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -188,35 +187,15 @@ export function TemplatePicker({
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        if (!cancelled) {
-          setTemplates([]);
-          setLoading(false);
-        }
-        return;
-      }
-
-      // Scope by RLS (message_templates_select → is_account_member), NOT by
-      // user_id. Templates are account-owned, so filtering on the caller's
-      // user_id hid templates that a teammate created — leaving them unable
-      // to send approved templates in a shared account.
-      const { data, error } = await supabase
-        .from("message_templates")
-        .select("*")
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
+      const res = await fetch("/api/inbox/templates", { cache: "no-store" });
+      const payload = await res.json().catch(() => ({}));
 
       if (cancelled) return;
-      if (error) {
-        console.error("Failed to fetch templates:", error);
+      if (!res.ok) {
+        console.error("Failed to fetch templates:", payload);
         setTemplates([]);
       } else {
-        setTemplates((data as MessageTemplate[]) ?? []);
+        setTemplates((payload.templates as MessageTemplate[] | undefined) ?? []);
       }
       setLoading(false);
     })();
@@ -398,7 +377,7 @@ export function TemplatePicker({
                 </div>
                 {headerMediaUrl || selected.header_media_url ? (
                   <div className="overflow-hidden rounded-md border border-border bg-muted">
-                    {/* eslint-disable-next-line @next/next/no-img-element -- Supabase public URLs are dynamic user uploads. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element -- Alarik public URLs are dynamic user uploads. */}
                     <img
                       src={headerMediaUrl || selected.header_media_url}
                       alt={t("headerImagePreview")}

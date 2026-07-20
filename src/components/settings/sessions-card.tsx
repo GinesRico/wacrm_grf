@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, LogOut } from 'lucide-react';
 
-import { createClient } from '@/lib/supabase/client';
+import { authClient } from '@/lib/better-auth/client';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -25,19 +25,28 @@ import { useTranslations } from 'next-intl';
 
 export function SessionsCard() {
   const t = useTranslations('Settings.profile');
-  const supabase = createClient();
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   const onConfirm = async () => {
     setSigningOut(true);
     try {
-      // scope: 'global' revokes every refresh token for this user
-      // across all devices; the next auth-state change on this tab
-      // triggers the usual redirect.
-      const { error } = await supabase.auth.signOut({ scope: 'global' });
-      if (error) {
-        toast.error(t('signOutFailed', { message: error.message }));
+      const revoke = await authClient.revokeOtherSessions();
+      if (revoke.error) {
+        toast.error(
+          t('signOutFailed', {
+            message: revoke.error.message ?? 'Could not revoke sessions',
+          }),
+        );
+        return;
+      }
+      const signOut = await authClient.signOut();
+      if (signOut.error) {
+        toast.error(
+          t('signOutFailed', {
+            message: signOut.error.message ?? 'Could not sign out',
+          }),
+        );
         return;
       }
       window.location.href = '/login';

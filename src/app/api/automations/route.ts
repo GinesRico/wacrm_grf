@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { requireRole, toErrorResponse } from '@/lib/auth/account'
-import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { desc, eq } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { automations } from '@/db/schema'
+import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { getTemplate } from '@/lib/automations/templates'
 import { insertSteps, type BuilderStepInput } from '@/lib/automations/steps-tree'
+import { serializeAutomation } from '@/lib/automations/serialize'
 import {
   validateStepsForActivation,
   validateTriggerForActivation,
@@ -11,53 +14,25 @@ import {
 import { assertCanCreateAutomation } from '@/lib/platform/entitlements'
 
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { data, error } = await supabase
-    .from('automations')
-    .select('*')
-    .order('created_at', { ascending: false })
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ automations: data ?? [] })
-}
-
-export async function POST(request: Request) {
-  // Creating an automation is a write — the RLS automations_insert policy
-  // requires `agent`, but this route inserts via the service-role client
-  // which bypasses RLS, so the role must be enforced here.
   try {
-    await requireRole('admin')
+    const { accountId } = await getCurrentAccount()
+    const rows = await db
+      .select()
+      .from(automations)
+      .where(eq(automations.accountId, accountId))
+      .orderBy(desc(automations.createdAt))
+
+    return NextResponse.json({ automations: rows.map(serializeAutomation) })
   } catch (err) {
     return toErrorResponse(err)
   }
+}
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  // Resolve the caller's account_id — `automations.account_id` is NOT
-  // NULL post-017, so an INSERT without it trips the not-null constraint
-  // even though the admin client bypasses RLS.
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('account_id')
-    .eq('user_id', user.id)
-    .single()
-  const accountId = profile?.account_id as string | undefined
-  if (!accountId) {
-    return NextResponse.json(
-      { error: 'Your profile is not linked to an account.' },
-      { status: 403 },
-    )
-  }
+export async function POST(request: Request) {
+  let ctx
   try {
-    await assertCanCreateAutomation(supabase, accountId)
+    ctx = await requireRole('admin')
+    await assertCanCreateAutomation(null, ctx.accountId)
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -91,10 +66,6 @@ export async function POST(request: Request) {
     )
   }
 
-  // Block activation of a clearly broken automation up-front instead of
-  // letting every trigger silently produce a failed log row. Drafts
-  // (is_active=false) are allowed to be incomplete so users can save
-  // progress mid-build.
   if (is_active) {
     const issues = [
       ...validateTriggerForActivation(effectiveTriggerType, effectiveTriggerConfig ?? {}),
@@ -110,26 +81,21 @@ export async function POST(request: Request) {
     }
   }
 
-  const admin = supabaseAdmin()
-  const { data: automation, error: insertErr } = await admin
-    .from('automations')
-    .insert({
-      user_id: user.id,
-      account_id: accountId,
+  const [automation] = await db
+    .insert(automations)
+    .values({
+      userId: ctx.userId,
+      accountId: ctx.accountId,
       name: effectiveName,
       description: effectiveDescription ?? null,
-      trigger_type: effectiveTriggerType,
-      trigger_config: effectiveTriggerConfig ?? {},
-      is_active: !!is_active,
+      triggerType: effectiveTriggerType,
+      triggerConfig: effectiveTriggerConfig ?? {},
+      isActive: !!is_active,
     })
-    .select()
-    .single()
+    .returning()
 
-  if (insertErr || !automation) {
-    return NextResponse.json(
-      { error: insertErr?.message ?? 'insert failed' },
-      { status: 500 },
-    )
+  if (!automation) {
+    return NextResponse.json({ error: 'insert failed' }, { status: 500 })
   }
 
   if (effectiveSteps && effectiveSteps.length > 0) {
@@ -137,5 +103,5 @@ export async function POST(request: Request) {
     if (err) return NextResponse.json({ error: err }, { status: 500 })
   }
 
-  return NextResponse.json({ automation }, { status: 201 })
+  return NextResponse.json({ automation: serializeAutomation(automation) }, { status: 201 })
 }

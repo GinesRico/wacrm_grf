@@ -1,7 +1,10 @@
+import { asc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { supabaseAdmin } from "@/lib/flows/admin-client";
+import { db } from "@/db/client";
+import { departmentMembers, departments } from "@/db/schema";
+import { requireDbRole } from "@/lib/auth/current-account";
+import { toErrorResponse } from "@/lib/auth/errors";
 import type { Department } from "@/types";
 
 const DEFAULT_COLOR = "#22c55e";
@@ -12,40 +15,52 @@ function normalizeColor(value: unknown): string {
     : DEFAULT_COLOR;
 }
 
-async function loadDepartments(accountId: string): Promise<Department[]> {
-  const db = supabaseAdmin();
-  const [{ data: departments, error }, { data: members, error: membersError }] =
-    await Promise.all([
-      db
-        .from("departments")
-        .select("*")
-        .eq("account_id", accountId)
-        .order("name", { ascending: true }),
-      db
-        .from("department_members")
-        .select("department_id, user_id")
-        .eq("account_id", accountId),
-    ]);
+function serializeDepartment(
+  department: typeof departments.$inferSelect,
+  memberUserIds: string[],
+): Department {
+  return {
+    id: department.id,
+    account_id: department.accountId,
+    name: department.name,
+    color: department.color,
+    created_at: department.createdAt.toISOString(),
+    updated_at: department.updatedAt.toISOString(),
+    member_user_ids: memberUserIds,
+  };
+}
 
-  if (error) throw error;
-  if (membersError) throw membersError;
+async function loadDepartments(accountId: string): Promise<Department[]> {
+  const [departmentRows, memberRows] = await Promise.all([
+    db
+      .select()
+      .from(departments)
+      .where(eq(departments.accountId, accountId))
+      .orderBy(asc(departments.name)),
+    db
+      .select({
+        departmentId: departmentMembers.departmentId,
+        userId: departmentMembers.userId,
+      })
+      .from(departmentMembers)
+      .where(eq(departmentMembers.accountId, accountId)),
+  ]);
 
   const membersByDepartment = new Map<string, string[]>();
-  for (const row of (members ?? []) as { department_id: string; user_id: string }[]) {
-    const list = membersByDepartment.get(row.department_id) ?? [];
-    list.push(row.user_id);
-    membersByDepartment.set(row.department_id, list);
+  for (const row of memberRows) {
+    const list = membersByDepartment.get(row.departmentId) ?? [];
+    list.push(row.userId);
+    membersByDepartment.set(row.departmentId, list);
   }
 
-  return ((departments ?? []) as Department[]).map((department) => ({
-    ...department,
-    member_user_ids: membersByDepartment.get(department.id) ?? [],
-  }));
+  return departmentRows.map((department) =>
+    serializeDepartment(department, membersByDepartment.get(department.id) ?? []),
+  );
 }
 
 export async function GET() {
   try {
-    const ctx = await requireRole("viewer");
+    const ctx = await requireDbRole("viewer");
     return NextResponse.json({
       departments: await loadDepartments(ctx.accountId),
     });
@@ -56,7 +71,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireDbRole("admin");
     const body = await request.json().catch(() => ({}));
     const name = typeof body?.name === "string" ? body.name.trim() : "";
 
@@ -64,15 +79,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Department name is required." }, { status: 400 });
     }
 
-    const { error } = await supabaseAdmin()
-      .from("departments")
-      .insert({
-        account_id: ctx.accountId,
-        name,
-        color: normalizeColor(body?.color),
-      });
-
-    if (error) throw error;
+    await db.insert(departments).values({
+      accountId: ctx.accountId,
+      name,
+      color: normalizeColor(body?.color),
+    });
 
     return NextResponse.json({
       departments: await loadDepartments(ctx.accountId),

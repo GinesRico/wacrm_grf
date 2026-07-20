@@ -18,12 +18,12 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
+import { desc, eq } from 'drizzle-orm';
 
-import {
-  getCurrentAccount,
-  requireRole,
-  toErrorResponse,
-} from '@/lib/auth/account';
+import { db } from '@/db/client';
+import { apiKeys } from '@/db/schema';
+import { getCurrentDbAccount, requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
 import { generateApiKey } from '@/lib/api-keys/keys';
 import { normalizeScopes } from '@/lib/api-keys/scopes';
 import {
@@ -40,30 +40,32 @@ const MAX_EXPIRY_DAYS = 365;
 
 // Columns safe to expose. `key_hash` is deliberately excluded — it
 // never leaves the server.
-const SAFE_COLUMNS =
-  'id, name, key_prefix, scopes, last_used_at, expires_at, revoked_at, created_at';
+function serializeKey(key: typeof apiKeys.$inferSelect) {
+  return {
+    id: key.id,
+    name: key.name,
+    key_prefix: key.keyPrefix,
+    scopes: key.scopes,
+    last_used_at: key.lastUsedAt?.toISOString() ?? null,
+    expires_at: key.expiresAt?.toISOString() ?? null,
+    revoked_at: key.revokedAt?.toISOString() ?? null,
+    created_at: key.createdAt.toISOString(),
+  };
+}
 
 export async function GET() {
   try {
     // Any member can view the roster (RLS allows it); we just need a
     // resolved account context.
-    const ctx = await getCurrentAccount();
+    const ctx = await getCurrentDbAccount();
 
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .select(SAFE_COLUMNS)
-      .eq('account_id', ctx.accountId)
-      .order('created_at', { ascending: false });
+    const keys = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.accountId, ctx.accountId))
+      .orderBy(desc(apiKeys.createdAt));
 
-    if (error) {
-      console.error('[GET /api/account/api-keys] fetch error:', error);
-      return NextResponse.json(
-        { error: 'Failed to load API keys' },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ keys: data ?? [] });
+    return NextResponse.json({ keys: keys.map(serializeKey) });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -71,8 +73,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const ctx = await requireRole('admin');
-    await assertFeatureEnabled(ctx.supabase, ctx.accountId, 'api');
+    const ctx = await requireDbRole('admin');
+    await assertFeatureEnabled(null, ctx.accountId, 'api');
 
     const limit = checkRateLimit(
       `admin:apiKeyCreate:${ctx.userId}`,
@@ -110,7 +112,7 @@ export async function POST(request: Request) {
       );
     }
 
-    let expiresAt: string | null = null;
+    let expiresAt: Date | null = null;
     const rawExpiry = body?.expiresInDays;
     if (
       typeof rawExpiry === 'number' &&
@@ -120,27 +122,25 @@ export async function POST(request: Request) {
       const days = Math.min(Math.floor(rawExpiry), MAX_EXPIRY_DAYS);
       expiresAt = new Date(
         Date.now() + days * 24 * 60 * 60 * 1000
-      ).toISOString();
+      );
     }
 
     const { plaintext, hash, prefix } = generateApiKey();
 
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .insert({
-        account_id: ctx.accountId,
-        created_by: ctx.userId,
+    const [key] = await db
+      .insert(apiKeys)
+      .values({
+        accountId: ctx.accountId,
+        createdBy: ctx.userId,
         name: rawName,
-        key_prefix: prefix,
-        key_hash: hash,
+        keyPrefix: prefix,
+        keyHash: hash,
         scopes,
-        expires_at: expiresAt,
+        expiresAt,
       })
-      .select(SAFE_COLUMNS)
-      .single();
+      .returning();
 
-    if (error || !data) {
-      console.error('[POST /api/account/api-keys] insert error:', error);
+    if (!key) {
       return NextResponse.json(
         { error: 'Failed to create API key' },
         { status: 500 }
@@ -149,7 +149,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        key: data,
+        key: serializeKey(key),
         // Plaintext — shown to the admin exactly once.
         plaintext,
       },

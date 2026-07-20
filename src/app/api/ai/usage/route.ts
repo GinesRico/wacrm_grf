@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server'
+import { and, desc, eq, gte } from 'drizzle-orm'
+import { db } from '@/db/client'
+import { aiUsageLog } from '@/db/schema'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { daysAgoStart, lastNDayKeys, localDayKey } from '@/lib/dashboard/date-utils'
 
@@ -30,7 +33,7 @@ interface UsageRow {
  */
 export async function GET(request: Request) {
   try {
-    const { supabase, accountId } = await requireRole('admin')
+    const { accountId } = await requireRole('admin')
 
     const url = new URL(request.url)
     const rawDays = Number(url.searchParams.get('days'))
@@ -51,25 +54,20 @@ export async function GET(request: Request) {
     // chart (see lib/dashboard/date-utils).
     const since = daysAgoStart(days - 1)
 
-    const { data, error } = await supabase
-      .from('ai_usage_log')
-      .select(
-        'created_at, mode, provider, model, prompt_tokens, completion_tokens, total_tokens',
-      )
-      .eq('account_id', accountId)
-      .gte('created_at', since.toISOString())
-      .order('created_at', { ascending: false })
-      .limit(MAX_ROWS + 1)
-
-    if (error) {
-      console.error('[ai/usage GET] fetch error:', error)
-      return NextResponse.json(
-        { error: 'Failed to load usage' },
-        { status: 500 },
-      )
-    }
-
-    const all = (data ?? []) as UsageRow[]
+    const all: UsageRow[] = (await db
+      .select()
+      .from(aiUsageLog)
+      .where(and(eq(aiUsageLog.accountId, accountId), gte(aiUsageLog.createdAt, since)))
+      .orderBy(desc(aiUsageLog.createdAt))
+      .limit(MAX_ROWS + 1)).map((row) => ({
+      created_at: row.createdAt.toISOString(),
+      mode: row.mode as UsageRow['mode'],
+      provider: row.provider,
+      model: row.model,
+      prompt_tokens: row.promptTokens,
+      completion_tokens: row.completionTokens,
+      total_tokens: row.totalTokens,
+    }))
     const truncated = all.length > MAX_ROWS
     const rows = truncated ? all.slice(0, MAX_ROWS) : all
 

@@ -23,7 +23,7 @@ vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 vi.mock('./admin-client', () => ({
-  supabaseAdmin: () => ({
+  dbAdmin: () => ({
     from: (table: string) => {
       if (table === 'automations') {
         // .select().eq().eq().in().limit() → active auto-responders

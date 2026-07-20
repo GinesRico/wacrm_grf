@@ -1,7 +1,5 @@
-import { createClient } from "@/lib/supabase/client";
-
 /**
- * Shared media-upload helper for Supabase Storage buckets that use the
+ * Shared media-upload helper for account-scoped media buckets that use the
  * account-scoped path convention introduced in migration 020
  * (`flow-media`) and reused by migration 023 (`chat-media`):
  *
@@ -35,7 +33,7 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
 
 /**
  * Build the account-scoped object path for an upload. Pure + exported so
- * it can be unit-tested without a Supabase client.
+ * it can be unit-tested without a database client.
  *
  * - `basename` is stripped of its extension, lower-cased non-safe chars
  *   are collapsed to `_`, and it's capped at 40 chars (falls back to
@@ -80,41 +78,22 @@ export async function uploadAccountMedia(
   bucket: string,
   file: File,
 ): Promise<UploadAccountMediaResult> {
-  const supabase = createClient();
+  const form = new FormData();
+  form.set("bucket", bucket);
+  form.set("file", file);
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    throw new Error("Not signed in.");
-  }
-
-  // Resolve account_id so the path is account-scoped (matches the
-  // bucket's RLS write policy from migration 020/023). User-scoped
-  // paths would be rejected.
-  const { data: profile, error: profileErr } = await supabase
-    .from("profiles")
-    .select("account_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profileErr || !profile?.account_id) {
-    throw new Error("Could not resolve your account.");
-  }
-
-  const path = buildMediaPath(profile.account_id as string, file.name);
-  const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
-    cacheControl: "3600",
-    upsert: false,
-    contentType: file.type,
+  const response = await fetch("/api/storage/account-media", {
+    method: "POST",
+    body: form,
   });
-  if (upErr) throw new Error(upErr.message);
+  const payload = (await response.json().catch(() => ({}))) as
+    | UploadAccountMediaResult
+    | { error?: string };
+  if (!response.ok) {
+    throw new Error("error" in payload && payload.error ? payload.error : "Upload failed.");
+  }
 
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(path);
-
-  return { publicUrl, path };
+  return payload as UploadAccountMediaResult;
 }
 
 /**
@@ -131,7 +110,15 @@ export async function deleteAccountMedia(
   bucket: string,
   path: string,
 ): Promise<void> {
-  const supabase = createClient();
-  const { error } = await supabase.storage.from(bucket).remove([path]);
-  if (error) throw new Error(error.message);
+  const response = await fetch("/api/storage/account-media", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bucket, path }),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(payload.error ?? "Delete failed.");
+  }
 }
