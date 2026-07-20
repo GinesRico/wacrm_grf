@@ -20,6 +20,12 @@ import type {
   PipelineDonutData,
 } from "@/lib/dashboard/types";
 
+function toIso(value: Date | string | number | null | undefined): string {
+  if (value instanceof Date) return value.toISOString();
+  if (value == null) return new Date(0).toISOString();
+  return new Date(value).toISOString();
+}
+
 export async function GET(request: Request) {
   try {
     const ctx = await getCurrentDbAccount();
@@ -144,7 +150,7 @@ export async function GET(request: Request) {
     const messagesToday = (messagesTodayResult.rows[0] as { count?: number } | undefined)?.count ?? 0;
     const messagesYesterday = (messagesYesterdayResult.rows[0] as { count?: number } | undefined)?.count ?? 0;
     const messageSeriesRows = messageSeriesResult.rows as Array<{
-      created_at: Date;
+      created_at: Date | string;
       sender_type: string;
     }>;
     const stageRows = pipelineResult.rows as Array<{
@@ -179,7 +185,7 @@ export async function GET(request: Request) {
     const keys = lastNDayKeys(range);
     const buckets = new Map(keys.map((key) => [key, { incoming: 0, outgoing: 0 }]));
     for (const row of messageSeriesRows) {
-      const key = localDayKey(row.created_at.toISOString());
+      const key = localDayKey(toIso(row.created_at));
       const bucket = buckets.get(key);
       if (!bucket) continue;
       if (row.sender_type === "customer") bucket.incoming += 1;
@@ -213,7 +219,7 @@ export async function GET(request: Request) {
       totalValue: slices.reduce((sum, stage) => sum + stage.totalValue, 0),
     };
 
-    const activity = (activityRows.rows as Array<{ kind: string; id: string; label: string; at: Date }>).map(
+    const activity = (activityRows.rows as Array<{ kind: string; id: string; label: string; at: Date | string }>).map(
       (row) => ({
         id: `${row.kind}-${row.id}`,
         kind: row.kind,
@@ -221,7 +227,7 @@ export async function GET(request: Request) {
           row.kind === "broadcast"
             ? `Broadcast "${row.label}" created`
             : `New contact: ${row.label}`,
-        at: row.at instanceof Date ? row.at.toISOString() : String(row.at),
+        at: toIso(row.at),
         href: row.kind === "broadcast" ? "/broadcasts" : "/contacts",
       }),
     );
