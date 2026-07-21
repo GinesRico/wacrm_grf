@@ -62,8 +62,8 @@ export function getRealtimeClient(): Pusher {
     wsPort: config.port,
     wssPort: config.port,
     forceTLS: config.forceTLS,
-    enabledTransports: [config.forceTLS ? "wss" : "ws"],
-    disableStats: true,
+    enabledTransports: ["ws"],
+    enableStats: false,
     authorizer: (channel) => ({
       authorize: async (socketId, callback) => {
         try {
