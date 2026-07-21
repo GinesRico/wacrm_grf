@@ -83,7 +83,10 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           setRealtimeClientConfig(payload);
           getRealtimeClient().connect();
           channelName = accountChannelName;
-          subscribeRealtimeChannel(accountChannelName);
+          const channel = subscribeRealtimeChannel(accountChannelName);
+          channel.bind("realtime.debug", (event: unknown) => {
+            console.info("[realtime] debug event received", event);
+          });
           console.info("[realtime] initialized", {
             host: payload.host,
             port: payload.port,

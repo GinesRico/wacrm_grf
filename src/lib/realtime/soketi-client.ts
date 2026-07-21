@@ -12,6 +12,7 @@ export interface RealtimeClientConfig {
 
 let client: Pusher | null = null;
 let runtimeConfig: RealtimeClientConfig | null = null;
+let debugBound = false;
 
 export function setRealtimeClientConfig(config: RealtimeClientConfig) {
   runtimeConfig = config;
@@ -79,11 +80,31 @@ export function getRealtimeClient(): Pusher {
     }),
   });
 
+  if (!debugBound) {
+    debugBound = true;
+    client.connection.bind("state_change", (states: unknown) => {
+      console.info("[realtime] connection state", states);
+    });
+    client.connection.bind("error", (error: unknown) => {
+      console.error("[realtime] connection error", error);
+    });
+  }
+
   return client;
 }
 
 export function subscribeRealtimeChannel(channelName: string): Channel {
-  return getRealtimeClient().subscribe(channelName);
+  const channel = getRealtimeClient().subscribe(channelName);
+  channel.bind("pusher:subscription_succeeded", () => {
+    console.info("[realtime] subscription succeeded", { channel: channelName });
+  });
+  channel.bind("pusher:subscription_error", (error: unknown) => {
+    console.error("[realtime] subscription error", {
+      channel: channelName,
+      error,
+    });
+  });
+  return channel;
 }
 
 export function unsubscribeRealtimeChannel(channelName: string) {

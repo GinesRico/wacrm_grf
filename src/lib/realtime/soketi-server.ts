@@ -13,7 +13,8 @@ export type RealtimeEventName =
   | "notification.created"
   | "notification.updated"
   | "notification.deleted"
-  | "presence.updated";
+  | "presence.updated"
+  | "realtime.debug";
 
 export interface RealtimeEvent<TPayload = unknown> {
   eventId: string;
