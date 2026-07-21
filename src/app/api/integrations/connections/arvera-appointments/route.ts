@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { integrationConnections } from '@/db/schema';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { ensureIntegrationApp } from '@/lib/integrations/apps';
 import {
   ARVERA_APPOINTMENTS_DEFAULT_BASE_URL,
   ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL,
@@ -42,7 +43,7 @@ function serializeConnection(row: typeof integrationConnections.$inferSelect) {
 }
 
 function toResolverConnection(
-  credentials: unknown,
+  credentials: unknown
 ): ArveraAppointmentsConnection {
   return {
     id: '',
@@ -94,18 +95,19 @@ export async function GET(request: Request) {
       .where(
         and(
           eq(integrationConnections.accountId, ctx.accountId),
-          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG),
-        ),
+          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG)
+        )
       )
       .limit(1);
 
     const token = resolveAppointmentsWebhookToken(
-      data ? toResolverConnection(data.encryptedCredentials) : null,
+      data ? toResolverConnection(data.encryptedCredentials) : null
     );
     return NextResponse.json({
       connection: data ? serializeConnection(data) : defaultConnection(),
       has_api_token: Boolean(
-        (data?.encryptedCredentials as Record<string, string> | undefined)?.api_token,
+        (data?.encryptedCredentials as Record<string, string> | undefined)
+          ?.api_token
       ),
       webhook_url: token ? buildWebhookUrl(request, token) : null,
     });
@@ -154,7 +156,8 @@ export async function PUT(request: Request) {
           ? body.public_booking_url
           : ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL,
       default_send_mode:
-        body?.default_send_mode === 'interactive_list' || body?.default_send_mode === 'cta_url'
+        body?.default_send_mode === 'interactive_list' ||
+        body?.default_send_mode === 'cta_url'
           ? body.default_send_mode
           : 'booking_link',
       default_days_ahead: Number(body?.default_days_ahead),
@@ -172,11 +175,13 @@ export async function PUT(request: Request) {
           ? body.default_message.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_MESSAGE,
       cta_button_label:
-        typeof body?.cta_button_label === 'string' && body.cta_button_label.trim()
+        typeof body?.cta_button_label === 'string' &&
+        body.cta_button_label.trim()
           ? body.cta_button_label.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_CTA_BUTTON_LABEL,
       cta_url_template:
-        typeof body?.cta_url_template === 'string' && body.cta_url_template.trim()
+        typeof body?.cta_url_template === 'string' &&
+        body.cta_url_template.trim()
           ? body.cta_url_template.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_CTA_URL_TEMPLATE,
       list_header:
@@ -192,11 +197,13 @@ export async function PUT(request: Request) {
           ? body.list_footer.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_LIST_FOOTER,
       list_button_label:
-        typeof body?.list_button_label === 'string' && body.list_button_label.trim()
+        typeof body?.list_button_label === 'string' &&
+        body.list_button_label.trim()
           ? body.list_button_label.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_LIST_BUTTON_LABEL,
       list_section_title:
-        typeof body?.list_section_title === 'string' && body.list_section_title.trim()
+        typeof body?.list_section_title === 'string' &&
+        body.list_section_title.trim()
           ? body.list_section_title.trim()
           : ARVERA_APPOINTMENTS_DEFAULT_LIST_SECTION_TITLE,
       list_row_title:
@@ -213,13 +220,13 @@ export async function PUT(request: Request) {
       if (config.cta_button_label.length > 20) {
         return NextResponse.json(
           { error: 'El texto del boton CTA no puede superar 20 caracteres' },
-          { status: 400 },
+          { status: 400 }
         );
       }
       if (!config.cta_url_template.includes('{{short_url}}')) {
         return NextResponse.json(
           { error: 'La URL del boton debe incluir {{short_url}}' },
-          { status: 400 },
+          { status: 400 }
         );
       }
     }
@@ -227,45 +234,55 @@ export async function PUT(request: Request) {
       if (config.list_header.length > INTERACTIVE_LIMITS.headerTextMaxLength) {
         return NextResponse.json(
           { error: 'El encabezado de lista no puede superar 60 caracteres' },
-          { status: 400 },
+          { status: 400 }
         );
       }
       if (config.list_body.length > INTERACTIVE_LIMITS.bodyMaxLength) {
         return NextResponse.json(
           { error: 'El cuerpo de lista no puede superar 1024 caracteres' },
-          { status: 400 },
+          { status: 400 }
         );
       }
       if (config.list_footer.length > INTERACTIVE_LIMITS.footerMaxLength) {
         return NextResponse.json(
           { error: 'El pie de lista no puede superar 60 caracteres' },
-          { status: 400 },
+          { status: 400 }
         );
       }
-      if (config.list_button_label.length > INTERACTIVE_LIMITS.buttonTitleMaxLength) {
+      if (
+        config.list_button_label.length >
+        INTERACTIVE_LIMITS.buttonTitleMaxLength
+      ) {
         return NextResponse.json(
-          { error: 'La etiqueta del boton de lista no puede superar 20 caracteres' },
-          { status: 400 },
+          {
+            error:
+              'La etiqueta del boton de lista no puede superar 20 caracteres',
+          },
+          { status: 400 }
         );
       }
     }
 
-    const apiToken = typeof body?.api_token === 'string' ? body.api_token.trim() : '';
+    const apiToken =
+      typeof body?.api_token === 'string' ? body.api_token.trim() : '';
     const enabled = body?.enabled === true;
 
     const [existing] = await db
-      .select({ encryptedCredentials: integrationConnections.encryptedCredentials })
+      .select({
+        encryptedCredentials: integrationConnections.encryptedCredentials,
+      })
       .from(integrationConnections)
       .where(
         and(
           eq(integrationConnections.accountId, ctx.accountId),
-          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG),
-        ),
+          eq(integrationConnections.appSlug, ARVERA_APPOINTMENTS_SLUG)
+        )
       )
       .limit(1);
 
     const existingCredentials =
-      (existing?.encryptedCredentials as Record<string, string> | undefined) ?? {};
+      (existing?.encryptedCredentials as Record<string, string> | undefined) ??
+      {};
     const webhookToken =
       resolveAppointmentsWebhookToken({
         ...toResolverConnection(existingCredentials),
@@ -283,9 +300,11 @@ export async function PUT(request: Request) {
     ) {
       return NextResponse.json(
         { error: 'API token is required before enabling Citas Arvera' },
-        { status: 400 },
+        { status: 400 }
       );
     }
+
+    await ensureIntegrationApp(db, ARVERA_APPOINTMENTS_SLUG);
 
     const [data] = await db
       .insert(integrationConnections)
@@ -301,7 +320,10 @@ export async function PUT(request: Request) {
         createdBy: ctx.userId,
       })
       .onConflictDoUpdate({
-        target: [integrationConnections.accountId, integrationConnections.appSlug],
+        target: [
+          integrationConnections.accountId,
+          integrationConnections.appSlug,
+        ],
         set: {
           enabled,
           encryptedCredentials,
@@ -316,7 +338,10 @@ export async function PUT(request: Request) {
       .returning();
 
     if (!data) {
-      return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Failed to save connection' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({

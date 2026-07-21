@@ -169,6 +169,13 @@
       "when": 1784535127487,
       "tag": "0023_famous_siren",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784653200000,
+      "tag": "0024_seed_arvera_integration_apps",
+      "breakpoints": true
     }
   ]
 }

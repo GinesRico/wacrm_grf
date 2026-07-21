@@ -4,6 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { integrationApps, integrationConnections } from '@/db/schema';
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account';
+import { ARVERA_INTEGRATION_APP_DEFINITIONS } from '@/lib/integrations/apps';
 import { ARVERA_APPOINTMENTS_SLUG } from '@/lib/integrations/arvera-appointments';
 import { ARVERA_PAYMENTS_SLUG } from '@/lib/integrations/arvera-payments';
 
@@ -22,10 +23,7 @@ export async function GET() {
   try {
     const ctx = await getCurrentAccount();
     const [apps, connections] = await Promise.all([
-      db
-        .select()
-        .from(integrationApps)
-        .orderBy(asc(integrationApps.name)),
+      db.select().from(integrationApps).orderBy(asc(integrationApps.name)),
       db
         .select()
         .from(integrationConnections)
@@ -36,7 +34,7 @@ export async function GET() {
       connections.map((connection) => [
         connection.appSlug,
         serializeConnection(connection),
-      ]),
+      ])
     );
     const rows: Record<string, unknown>[] = apps.map((app) => ({
       slug: app.slug,
@@ -48,19 +46,13 @@ export async function GET() {
 
     if (!rows.some((app) => app.slug === ARVERA_PAYMENTS_SLUG)) {
       rows.push({
-        slug: ARVERA_PAYMENTS_SLUG,
-        name: 'Pagos Arvera',
-        category: 'payments',
-        description: 'Create Redsys payment links through the Arvera payments API.',
+        ...ARVERA_INTEGRATION_APP_DEFINITIONS[ARVERA_PAYMENTS_SLUG],
         connection: bySlug.get(ARVERA_PAYMENTS_SLUG) ?? null,
       });
     }
     if (!rows.some((app) => app.slug === ARVERA_APPOINTMENTS_SLUG)) {
       rows.push({
-        slug: ARVERA_APPOINTMENTS_SLUG,
-        name: 'Citas Arvera',
-        category: 'appointments',
-        description: 'Send appointment availability and receive appointment events.',
+        ...ARVERA_INTEGRATION_APP_DEFINITIONS[ARVERA_APPOINTMENTS_SLUG],
         connection: bySlug.get(ARVERA_APPOINTMENTS_SLUG) ?? null,
       });
     }

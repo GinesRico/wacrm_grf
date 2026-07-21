@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '@/db/client';
 import { integrationConnections } from '@/db/schema';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
+import { ensureIntegrationApp } from '@/lib/integrations/apps';
 import {
   ARVERA_DEFAULT_BASE_URL,
   ARVERA_DEFAULT_CTA_BUTTON_LABEL,
@@ -49,8 +50,8 @@ export async function GET() {
       .where(
         and(
           eq(integrationConnections.accountId, ctx.accountId),
-          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG),
-        ),
+          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG)
+        )
       )
       .limit(1);
 
@@ -97,9 +98,14 @@ export async function PUT(request: Request) {
     } | null;
 
     const config = normalizeConfig({
-      base_url: typeof body?.base_url === 'string' ? body.base_url : ARVERA_DEFAULT_BASE_URL,
+      base_url:
+        typeof body?.base_url === 'string'
+          ? body.base_url
+          : ARVERA_DEFAULT_BASE_URL,
       auth_header:
-        body?.auth_header === 'x_api_key' ? 'x_api_key' : 'authorization_bearer',
+        body?.auth_header === 'x_api_key'
+          ? 'x_api_key'
+          : 'authorization_bearer',
       default_message:
         typeof body?.default_message === 'string' && body.default_message.trim()
           ? body.default_message.trim()
@@ -109,11 +115,13 @@ export async function PUT(request: Request) {
           ? body.delivery_mode
           : 'text',
       cta_button_label:
-        typeof body?.cta_button_label === 'string' && body.cta_button_label.trim()
+        typeof body?.cta_button_label === 'string' &&
+        body.cta_button_label.trim()
           ? body.cta_button_label.trim()
           : ARVERA_DEFAULT_CTA_BUTTON_LABEL,
       cta_url_template:
-        typeof body?.cta_url_template === 'string' && body.cta_url_template.trim()
+        typeof body?.cta_url_template === 'string' &&
+        body.cta_url_template.trim()
           ? body.cta_url_template.trim()
           : ARVERA_DEFAULT_CTA_URL_TEMPLATE,
       template_name:
@@ -121,17 +129,22 @@ export async function PUT(request: Request) {
           ? body.template_name.trim()
           : undefined,
       template_language:
-        typeof body?.template_language === 'string' && body.template_language.trim()
+        typeof body?.template_language === 'string' &&
+        body.template_language.trim()
           ? body.template_language.trim()
           : undefined,
-      template_body_params: normalizeTemplateSourceMap(body?.template_body_params),
-      template_button_params: normalizeTemplateSourceMap(body?.template_button_params),
+      template_body_params: normalizeTemplateSourceMap(
+        body?.template_body_params
+      ),
+      template_button_params: normalizeTemplateSourceMap(
+        body?.template_button_params
+      ),
     });
 
     if (config.delivery_mode === 'template' && !config.template_name) {
       return NextResponse.json(
         { error: 'Select a Meta template before enabling template delivery' },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -139,13 +152,13 @@ export async function PUT(request: Request) {
       if (config.cta_button_label.length > 20) {
         return NextResponse.json(
           { error: 'El texto del boton CTA no puede superar 20 caracteres' },
-          { status: 400 },
+          { status: 400 }
         );
       }
       if (!config.cta_url_template.includes('{{payment_url}}')) {
         return NextResponse.json(
           { error: 'La URL del boton debe incluir {{payment_url}}' },
-          { status: 400 },
+          { status: 400 }
         );
       }
     }
@@ -154,26 +167,35 @@ export async function PUT(request: Request) {
     const enabled = body?.enabled === true;
 
     const [existing] = await db
-      .select({ encryptedCredentials: integrationConnections.encryptedCredentials })
+      .select({
+        encryptedCredentials: integrationConnections.encryptedCredentials,
+      })
       .from(integrationConnections)
       .where(
         and(
           eq(integrationConnections.accountId, ctx.accountId),
-          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG),
-        ),
+          eq(integrationConnections.appSlug, ARVERA_PAYMENTS_SLUG)
+        )
       )
       .limit(1);
 
     const encryptedCredentials = apiKey
       ? encryptApiKey(apiKey)
-      : ((existing?.encryptedCredentials as Record<string, string> | undefined) ?? {});
+      : ((existing?.encryptedCredentials as
+          Record<string, string> | undefined) ?? {});
 
-    if (enabled && !encryptedCredentials.api_key && !process.env.PAYMENT_LINKS_API_KEY) {
+    if (
+      enabled &&
+      !encryptedCredentials.api_key &&
+      !process.env.PAYMENT_LINKS_API_KEY
+    ) {
       return NextResponse.json(
         { error: 'API key is required before enabling Pagos Arvera' },
-        { status: 400 },
+        { status: 400 }
       );
     }
+
+    await ensureIntegrationApp(db, ARVERA_PAYMENTS_SLUG);
 
     const [data] = await db
       .insert(integrationConnections)
@@ -189,7 +211,10 @@ export async function PUT(request: Request) {
         createdBy: ctx.userId,
       })
       .onConflictDoUpdate({
-        target: [integrationConnections.accountId, integrationConnections.appSlug],
+        target: [
+          integrationConnections.accountId,
+          integrationConnections.appSlug,
+        ],
         set: {
           enabled,
           encryptedCredentials,
@@ -204,17 +229,23 @@ export async function PUT(request: Request) {
       .returning();
 
     if (!data) {
-      return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Failed to save connection' },
+        { status: 500 }
+      );
     }
 
-    return NextResponse.json({ connection: serializeConnection(data), has_api_key: true });
+    return NextResponse.json({
+      connection: serializeConnection(data),
+      has_api_key: true,
+    });
   } catch (err) {
     return toErrorResponse(err);
   }
 }
 
 function normalizeTemplateSourceMap(
-  value: unknown,
+  value: unknown
 ): Record<string, PaymentTemplateValueSource> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(
@@ -222,7 +253,7 @@ function normalizeTemplateSourceMap(
       ([key, source]) =>
         /^\d+$/.test(key) &&
         typeof source === 'string' &&
-        PAYMENT_TEMPLATE_VALUE_SOURCES.has(source as PaymentTemplateValueSource),
-    ),
+        PAYMENT_TEMPLATE_VALUE_SOURCES.has(source as PaymentTemplateValueSource)
+    )
   ) as Record<string, PaymentTemplateValueSource>;
 }
