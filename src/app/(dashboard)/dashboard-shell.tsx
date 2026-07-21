@@ -11,6 +11,8 @@ import { useIncomingMessageAlerts } from "@/hooks/use-incoming-message-alerts";
 import {
   getRealtimeClient,
   setRealtimeClientConfig,
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
   type RealtimeClientConfig,
 } from "@/lib/realtime/soketi-client";
 
@@ -20,7 +22,7 @@ import {
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const t = useTranslations("DashboardShell");
-  const { user, loading } = useAuth();
+  const { user, loading, accountId } = useAuth();
   const router = useRouter();
   const [realtimeReady, setRealtimeReady] = useState(false);
   const [realtimeError, setRealtimeError] = useState<string | null>(null);
@@ -40,6 +42,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let channelName: string | null = null;
 
     if (!user) {
       setRealtimeReady(false);
@@ -73,6 +76,10 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         if (!cancelled) {
           setRealtimeClientConfig(payload);
           getRealtimeClient().connect();
+          channelName = accountId ? `private-account-${accountId}` : null;
+          if (channelName) {
+            subscribeRealtimeChannel(channelName);
+          }
           setRealtimeReady(true);
         }
       } catch (error) {
@@ -89,8 +96,11 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 
     return () => {
       cancelled = true;
+      if (channelName) {
+        unsubscribeRealtimeChannel(channelName);
+      }
     };
-  }, [user]);
+  }, [accountId, user]);
 
   if (loading) {
     return (
