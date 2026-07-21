@@ -22,7 +22,7 @@ import {
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const t = useTranslations("DashboardShell");
-  const { user, loading, accountId } = useAuth();
+  const { user, loading, profileLoading, accountId } = useAuth();
   const router = useRouter();
   const [realtimeReady, setRealtimeReady] = useState(false);
   const [realtimeError, setRealtimeError] = useState<string | null>(null);
@@ -47,6 +47,11 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     if (!user) {
       setRealtimeReady(false);
       setRealtimeError(null);
+      return;
+    }
+    if (!accountId) {
+      setRealtimeReady(false);
+      setRealtimeError(profileLoading ? null : "Realtime account is not ready.");
       return;
     }
 
@@ -74,12 +79,17 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           );
         }
         if (!cancelled) {
+          const accountChannelName = `private-account-${accountId}`;
           setRealtimeClientConfig(payload);
           getRealtimeClient().connect();
-          channelName = accountId ? `private-account-${accountId}` : null;
-          if (channelName) {
-            subscribeRealtimeChannel(channelName);
-          }
+          channelName = accountChannelName;
+          subscribeRealtimeChannel(accountChannelName);
+          console.info("[realtime] initialized", {
+            host: payload.host,
+            port: payload.port,
+            forceTLS: payload.forceTLS,
+            channel: accountChannelName,
+          });
           setRealtimeReady(true);
         }
       } catch (error) {
@@ -100,7 +110,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         unsubscribeRealtimeChannel(channelName);
       }
     };
-  }, [accountId, user]);
+  }, [accountId, profileLoading, user]);
 
   if (loading) {
     return (
