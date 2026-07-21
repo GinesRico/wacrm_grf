@@ -9,6 +9,7 @@ import { Header } from "@/components/layout/header";
 import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 import { useIncomingMessageAlerts } from "@/hooks/use-incoming-message-alerts";
 import {
+  getRealtimeClient,
   setRealtimeClientConfig,
   type RealtimeClientConfig,
 } from "@/lib/realtime/soketi-client";
@@ -71,6 +72,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         }
         if (!cancelled) {
           setRealtimeClientConfig(payload);
+          getRealtimeClient().connect();
           setRealtimeReady(true);
         }
       } catch (error) {
