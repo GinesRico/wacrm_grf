@@ -38,6 +38,43 @@ function previewTextForMessage(message: Message) {
   return `[${message.content_type}]`;
 }
 
+function messageTimestampMs(message: Message) {
+  const parsed = Date.parse(message.created_at);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isOptimisticMatch(optimistic: Message, real: Message) {
+  if (!optimistic.id.startsWith("temp-") || real.id.startsWith("temp-")) {
+    return false;
+  }
+  if (optimistic.conversation_id !== real.conversation_id) return false;
+  if (optimistic.sender_type !== real.sender_type) return false;
+  if (optimistic.content_type !== real.content_type) return false;
+  if ((optimistic.content_text ?? "") !== (real.content_text ?? "")) return false;
+  if ((optimistic.media_url ?? "") !== (real.media_url ?? "")) return false;
+  if ((optimistic.template_name ?? "") !== (real.template_name ?? "")) return false;
+  if ((optimistic.reply_to_message_id ?? "") !== (real.reply_to_message_id ?? "")) {
+    return false;
+  }
+
+  const optimisticMs = messageTimestampMs(optimistic);
+  const realMs = messageTimestampMs(real);
+  return !optimisticMs || !realMs || Math.abs(realMs - optimisticMs) < 120_000;
+}
+
+function mergeRealtimeMessage(messages: Message[], message: Message) {
+  if (messages.some((m) => m.id === message.id)) return messages;
+
+  const optimisticIdx = messages.findIndex((m) => isOptimisticMatch(m, message));
+  if (optimisticIdx >= 0) {
+    const next = messages.slice();
+    next[optimisticIdx] = message;
+    return next;
+  }
+
+  return [...messages, message];
+}
+
 export default function InboxPage() {
   const t = useTranslations("Inbox.page");
   const router = useRouter();
@@ -66,6 +103,20 @@ export default function InboxPage() {
    * once on conversationId-change as usual.
    */
   const [resyncToken, setResyncToken] = useState(0);
+  const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleInboxResync = useCallback(() => {
+    if (resyncTimerRef.current) return;
+    resyncTimerRef.current = setTimeout(() => {
+      resyncTimerRef.current = null;
+      setResyncToken((n) => n + 1);
+    }, 250);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+    };
+  }, []);
 
   /**
    * Whether the desktop contact sidebar (tags / deals / notes) is shown.
@@ -200,13 +251,7 @@ export default function InboxPage() {
           newMsg.conversation_id === activeConversation.id
         ) {
           setMessages((prev) => {
-            // Avoid duplicates
-            if (prev.some((m) => m.id === newMsg.id)) return prev;
-            // Replace optimistic message if it exists
-            const withoutOptimistic = prev.filter(
-              (m) => !m.id.startsWith("temp-")
-            );
-            return [...withoutOptimistic, newMsg];
+            return mergeRealtimeMessage(prev, newMsg);
           });
         }
 
@@ -264,6 +309,7 @@ export default function InboxPage() {
       const conv = event.new;
 
       if (event.eventType === "INSERT") {
+        scheduleInboxResync();
         // Prepend immediately for snappy UX so the new conv shows in the
         // list right away, then hydrate to fill in the `contact` join
         // (realtime payloads never include joins). Skip both if we
@@ -279,6 +325,7 @@ export default function InboxPage() {
       }
 
       if (event.eventType === "UPDATE") {
+        scheduleInboxResync();
         if (knownConvIdsRef.current.has(conv.id)) {
           // If this UPDATE is for the conv the user is currently viewing,
           // suppress the incoming unread_count — the user is reading it
@@ -315,7 +362,7 @@ export default function InboxPage() {
         }
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation, hydrateConversation, scheduleInboxResync]
   );
 
   const handleContactEvent = useCallback(
@@ -572,19 +619,43 @@ export default function InboxPage() {
   );
 
   const handleConversationUpdated = useCallback((conversation: Conversation) => {
+    scheduleInboxResync();
     setConversations((prev) => {
+      const existing = prev.find((c) => c.id === conversation.id);
+      const merged = existing
+        ? {
+            ...existing,
+            ...conversation,
+            contact: conversation.contact ?? existing.contact,
+            whatsapp_config:
+              conversation.whatsapp_config ?? existing.whatsapp_config,
+            department: conversation.department ?? existing.department,
+            assigned_agent:
+              conversation.assigned_agent ?? existing.assigned_agent,
+          }
+        : conversation;
       const withoutExisting = prev.filter((c) => c.id !== conversation.id);
-      return sortConversationsByActivity([conversation, ...withoutExisting]);
+      return sortConversationsByActivity([merged, ...withoutExisting]);
     });
     setActiveConversation((prev) =>
-      prev?.id === conversation.id ? { ...prev, ...conversation } : prev,
+      prev?.id === conversation.id
+        ? {
+            ...prev,
+            ...conversation,
+            contact: conversation.contact ?? prev.contact,
+            whatsapp_config:
+              conversation.whatsapp_config ?? prev.whatsapp_config,
+            department: conversation.department ?? prev.department,
+            assigned_agent: conversation.assigned_agent ?? prev.assigned_agent,
+          }
+        : prev,
     );
     if (conversation.contact) {
       setActiveContact((prev) =>
         activeConversation?.id === conversation.id ? conversation.contact ?? prev : prev,
       );
     }
-  }, [activeConversation?.id]);
+  }, [activeConversation?.id, scheduleInboxResync]);
 
   // Mobile "back" — deselect the conversation so the list pane comes
   // back. Also clears the ?c= param so a refresh lands on the list
@@ -614,10 +685,7 @@ export default function InboxPage() {
   }, []);
 
   const handleNewMessage = useCallback((msg: Message) => {
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === msg.id)) return prev;
-      return [...prev, msg];
-    });
+    setMessages((prev) => mergeRealtimeMessage(prev, msg));
   }, []);
 
   const handleUpdateMessage = useCallback(
