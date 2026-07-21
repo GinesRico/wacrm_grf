@@ -8,6 +8,10 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 import { useIncomingMessageAlerts } from "@/hooks/use-incoming-message-alerts";
+import {
+  setRealtimeClientConfig,
+  type RealtimeClientConfig,
+} from "@/lib/realtime/soketi-client";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
@@ -17,7 +21,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const t = useTranslations("DashboardShell");
   const { user, loading } = useAuth();
   const router = useRouter();
-  useIncomingMessageAlerts(Boolean(user));
+  const [realtimeReady, setRealtimeReady] = useState(false);
+  const [realtimeError, setRealtimeError] = useState<string | null>(null);
+  useIncomingMessageAlerts(Boolean(user) && realtimeReady);
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
   // always visible and this stays at `false` (ignored by the component).
@@ -31,6 +37,59 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     }
   }, [user, loading, router]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user) {
+      setRealtimeReady(false);
+      setRealtimeError(null);
+      return;
+    }
+
+    const loadRealtimeConfig = async () => {
+      setRealtimeReady(false);
+      setRealtimeError(null);
+      try {
+        const response = await fetch("/api/realtime/config", {
+          cache: "no-store",
+        });
+        const payload = (await response.json().catch(() => ({}))) as
+          | RealtimeClientConfig
+          | { error?: string };
+        if (
+          !response.ok ||
+          "error" in payload ||
+          !("key" in payload) ||
+          !("host" in payload) ||
+          !("forceTLS" in payload)
+        ) {
+          throw new Error(
+            "error" in payload && payload.error
+              ? payload.error
+              : "Realtime config failed.",
+          );
+        }
+        if (!cancelled) {
+          setRealtimeClientConfig(payload);
+          setRealtimeReady(true);
+        }
+      } catch (error) {
+        console.error("[realtime] failed to load config:", error);
+        if (!cancelled) {
+          setRealtimeError(
+            error instanceof Error ? error.message : "Realtime config failed.",
+          );
+        }
+      }
+    };
+
+    void loadRealtimeConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
@@ -43,6 +102,19 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  if (!realtimeReady) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <p className="text-sm text-muted-foreground">
+            {realtimeError ?? t("loading")}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

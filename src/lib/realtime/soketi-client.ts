@@ -2,31 +2,58 @@
 
 import Pusher, { type Channel } from "pusher-js";
 
+export interface RealtimeClientConfig {
+  key: string;
+  host: string;
+  port?: number;
+  forceTLS: boolean;
+  cluster?: string;
+}
+
 let client: Pusher | null = null;
+let runtimeConfig: RealtimeClientConfig | null = null;
+
+export function setRealtimeClientConfig(config: RealtimeClientConfig) {
+  runtimeConfig = config;
+  if (client) {
+    client.disconnect();
+    client = null;
+  }
+}
+
+function envConfig(): RealtimeClientConfig | null {
+  const key = process.env.NEXT_PUBLIC_SOKETI_APP_KEY;
+  const host = process.env.NEXT_PUBLIC_SOKETI_HOST;
+  if (!key || !host) return null;
+
+  return {
+    key,
+    host,
+    port: process.env.NEXT_PUBLIC_SOKETI_PORT
+      ? Number(process.env.NEXT_PUBLIC_SOKETI_PORT)
+      : undefined,
+    forceTLS: process.env.NEXT_PUBLIC_SOKETI_TLS !== "false",
+    cluster: process.env.NEXT_PUBLIC_SOKETI_CLUSTER ?? "mt1",
+  };
+}
 
 export function getRealtimeClient(): Pusher {
   if (client) return client;
 
-  const key = process.env.NEXT_PUBLIC_SOKETI_APP_KEY;
-  const host = process.env.NEXT_PUBLIC_SOKETI_HOST;
-  if (!key || !host) {
+  const config = runtimeConfig ?? envConfig();
+  if (!config?.key || !config.host) {
     throw new Error(
       "NEXT_PUBLIC_SOKETI_APP_KEY and NEXT_PUBLIC_SOKETI_HOST are required.",
     );
   }
 
-  const forceTLS = process.env.NEXT_PUBLIC_SOKETI_TLS !== "false";
-  client = new Pusher(key, {
-    cluster: process.env.NEXT_PUBLIC_SOKETI_CLUSTER ?? "mt1",
-    wsHost: host,
-    wsPort: process.env.NEXT_PUBLIC_SOKETI_PORT
-      ? Number(process.env.NEXT_PUBLIC_SOKETI_PORT)
-      : undefined,
-    wssPort: process.env.NEXT_PUBLIC_SOKETI_PORT
-      ? Number(process.env.NEXT_PUBLIC_SOKETI_PORT)
-      : undefined,
-    forceTLS,
-    enabledTransports: [forceTLS ? "wss" : "ws"],
+  client = new Pusher(config.key, {
+    cluster: config.cluster ?? "mt1",
+    wsHost: config.host,
+    wsPort: config.port,
+    wssPort: config.port,
+    forceTLS: config.forceTLS,
+    enabledTransports: [config.forceTLS ? "wss" : "ws"],
     disableStats: true,
     authorizer: (channel) => ({
       authorize: async (socketId, callback) => {
