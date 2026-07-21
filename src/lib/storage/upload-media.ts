@@ -44,19 +44,72 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
 export function buildMediaPath(
   accountId: string,
   fileName: string,
-  now: number = Date.now(),
+  now: number = Date.now()
 ): string {
   // Only treat the trailing segment as an extension when there's a real
   // one — a bare name like "README" has no extension and falls back to
   // "bin" rather than becoming "readme".
   const hasExt = /\.[^.]+$/.test(fileName);
-  const ext = hasExt ? fileName.split(".").pop()!.toLowerCase() : "bin";
+  const ext = hasExt ? fileName.split('.').pop()!.toLowerCase() : 'bin';
   const safeBase =
     fileName
-      .replace(/\.[^.]+$/, "")
-      .replace(/[^a-zA-Z0-9_-]+/g, "_")
-      .slice(0, 40) || "file";
+      .replace(/\.[^.]+$/, '')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .slice(0, 40) || 'file';
   return `account-${accountId}/${now}-${safeBase}.${ext}`;
+}
+
+const MIME_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+  'audio/aac': 'aac',
+  'audio/amr': 'amr',
+  'audio/mpeg': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/ogg': 'ogg',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+    'pptx',
+  'text/plain': 'txt',
+};
+
+function extensionFromMimeType(mimeType: string | null | undefined): string {
+  if (!mimeType) return 'bin';
+  return MIME_EXTENSIONS[mimeType.toLowerCase().split(';')[0].trim()] ?? 'bin';
+}
+
+/**
+ * Build an account-scoped path for customer-sent WhatsApp media copied from
+ * Meta into Alarik. Keeps received files grouped under `incoming/` while
+ * preserving the same first path segment expected by account cleanup.
+ */
+export function buildIncomingMediaPath(args: {
+  accountId: string;
+  mediaId: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  now?: number;
+}): string {
+  const ext = extensionFromMimeType(args.mimeType);
+  const sourceName = args.fileName?.trim() || `${args.mediaId}.${ext}`;
+  const path = buildMediaPath(
+    args.accountId,
+    sourceName,
+    args.now ?? Date.now()
+  );
+  return path.replace(
+    `account-${args.accountId}/`,
+    `account-${args.accountId}/incoming/`
+  );
 }
 
 export interface UploadAccountMediaResult {
@@ -76,21 +129,22 @@ export interface UploadAccountMediaResult {
  */
 export async function uploadAccountMedia(
   bucket: string,
-  file: File,
+  file: File
 ): Promise<UploadAccountMediaResult> {
   const form = new FormData();
-  form.set("bucket", bucket);
-  form.set("file", file);
+  form.set('bucket', bucket);
+  form.set('file', file);
 
-  const response = await fetch("/api/storage/account-media", {
-    method: "POST",
+  const response = await fetch('/api/storage/account-media', {
+    method: 'POST',
     body: form,
   });
   const payload = (await response.json().catch(() => ({}))) as
-    | UploadAccountMediaResult
-    | { error?: string };
+    UploadAccountMediaResult | { error?: string };
   if (!response.ok) {
-    throw new Error("error" in payload && payload.error ? payload.error : "Upload failed.");
+    throw new Error(
+      'error' in payload && payload.error ? payload.error : 'Upload failed.'
+    );
   }
 
   return payload as UploadAccountMediaResult;
@@ -108,17 +162,17 @@ export async function uploadAccountMedia(
  */
 export async function deleteAccountMedia(
   bucket: string,
-  path: string,
+  path: string
 ): Promise<void> {
-  const response = await fetch("/api/storage/account-media", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
+  const response = await fetch('/api/storage/account-media', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ bucket, path }),
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
       error?: string;
     };
-    throw new Error(payload.error ?? "Delete failed.");
+    throw new Error(payload.error ?? 'Delete failed.');
   }
 }

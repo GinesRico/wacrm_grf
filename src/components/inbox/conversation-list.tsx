@@ -1,16 +1,16 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { matchesContactFilters } from "@/lib/inbox/contact-filters";
-import type { InboxScope, InboxSubtab, InboxTab } from "@/lib/inbox/tickets";
-import { cn } from "@/lib/utils";
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { matchesContactFilters } from '@/lib/inbox/contact-filters';
+import type { InboxScope, InboxSubtab, InboxTab } from '@/lib/inbox/tickets';
+import { cn } from '@/lib/utils';
 import type {
   Conversation,
   Department,
   InteractiveMessagePayload,
   Message,
   Tag,
-} from "@/types";
+} from '@/types';
 import {
   Search,
   ChevronDown,
@@ -33,27 +33,27 @@ import {
   LayoutTemplate,
   MessageSquare,
   ExternalLink,
-} from "lucide-react";
-import { format, type Locale } from "date-fns";
-import { es } from "date-fns/locale";
-import { useLocale, useTranslations } from "next-intl";
-import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+} from 'lucide-react';
+import { format, type Locale } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { useLocale, useTranslations } from 'next-intl';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { useAuth } from "@/hooks/use-auth";
-import { WhatsAppText } from "./whatsapp-text";
-import { TransferChatDialog } from "./transfer-chat-dialog";
+} from '@/components/ui/dropdown-menu';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { useAuth } from '@/hooks/use-auth';
+import { WhatsAppText } from './whatsapp-text';
+import { TransferChatDialog } from './transfer-chat-dialog';
 import {
   resolveTemplateButtonUrl,
   toInteractiveTemplateButton,
-} from "@/lib/inbox/template-buttons";
+} from '@/lib/inbox/template-buttons';
 
 interface ConversationListProps {
   activeConversationId: string | null;
@@ -78,104 +78,107 @@ interface InboxCounts {
 }
 
 type MediaPreviewKind =
-  | "image"
-  | "audio"
-  | "video"
-  | "sticker"
-  | "document"
-  | "location"
-  | "template"
-  | "interactive"
-  | "unsupported";
+  | 'image'
+  | 'audio'
+  | 'video'
+  | 'sticker'
+  | 'document'
+  | 'location'
+  | 'template'
+  | 'interactive'
+  | 'unsupported';
 
 function parseMediaPreviewToken(text: string): MediaPreviewKind | null {
   const normalized = text.trim().toLowerCase();
   if (
-    normalized === "[unsupported]" ||
-    normalized.startsWith("[unsupported message type:")
+    normalized === '[unsupported]' ||
+    normalized.startsWith('[unsupported message type:')
   ) {
-    return "unsupported";
+    return 'unsupported';
   }
   switch (normalized) {
-    case "[image]":
-    case "image":
-    case "imagen":
-      return "image";
-    case "[audio]":
-    case "audio":
-    case "nota de voz":
-      return "audio";
-    case "[video]":
-    case "video":
-      return "video";
-    case "[sticker]":
-    case "sticker":
-      return "sticker";
-    case "[document]":
-    case "document":
-    case "documento":
-      return "document";
-    case "[location]":
-    case "location":
-    case "ubicacion":
-    case "ubicación":
-      return "location";
-    case "[template]":
-    case "template":
-    case "plantilla":
-      return "template";
-    case "[interactive]":
-    case "interactive":
-      return "interactive";
-    case "unsupported":
-      return "unsupported";
+    case '[image]':
+    case 'image':
+    case 'imagen':
+      return 'image';
+    case '[audio]':
+    case 'audio':
+    case 'nota de voz':
+      return 'audio';
+    case '[video]':
+    case 'video':
+      return 'video';
+    case '[sticker]':
+    case 'sticker':
+      return 'sticker';
+    case '[document]':
+    case 'document':
+    case 'documento':
+      return 'document';
+    case '[location]':
+    case 'location':
+    case 'ubicacion':
+    case 'ubicación':
+      return 'location';
+    case '[template]':
+    case 'template':
+    case 'plantilla':
+      return 'template';
+    case '[interactive]':
+    case 'interactive':
+      return 'interactive';
+    case 'unsupported':
+      return 'unsupported';
     default:
       return null;
   }
 }
 
-function mediaPreviewLabel(kind: MediaPreviewKind, t: ReturnType<typeof useTranslations>) {
+function mediaPreviewLabel(
+  kind: MediaPreviewKind,
+  t: ReturnType<typeof useTranslations>
+) {
   switch (kind) {
-    case "image":
-      return t("mediaImage");
-    case "audio":
-      return t("mediaAudio");
-    case "video":
-      return t("mediaVideo");
-    case "sticker":
-      return t("mediaSticker");
-    case "document":
-      return t("mediaDocument");
-    case "location":
-      return t("mediaLocation");
-    case "template":
-      return t("mediaTemplate");
-    case "interactive":
-      return t("mediaInteractive");
-    case "unsupported":
-      return t("mediaUnsupported");
+    case 'image':
+      return t('mediaImage');
+    case 'audio':
+      return t('mediaAudio');
+    case 'video':
+      return t('mediaVideo');
+    case 'sticker':
+      return t('mediaSticker');
+    case 'document':
+      return t('mediaDocument');
+    case 'location':
+      return t('mediaLocation');
+    case 'template':
+      return t('mediaTemplate');
+    case 'interactive':
+      return t('mediaInteractive');
+    case 'unsupported':
+      return t('mediaUnsupported');
   }
 }
 
 function MediaPreviewIcon({ kind }: { kind: MediaPreviewKind }) {
   switch (kind) {
-    case "image":
+    case 'image':
       return <ImageIcon className="size-3.5" />;
-    case "audio":
+    case 'audio':
       return <Mic className="size-3.5" />;
-    case "video":
+    case 'video':
       return <Video className="size-3.5" />;
-    case "sticker":
+    case 'sticker':
       return <MessageSquare className="size-3.5" />;
-    case "document":
+    case 'document':
       return <FileText className="size-3.5" />;
-    case "location":
+    case 'location':
       return <MapPin className="size-3.5" />;
-    case "template":
+    case 'template':
       return <LayoutTemplate className="size-3.5" />;
-    case "interactive":
+    case 'interactive':
       return <MessageSquare className="size-3.5" />;
-    case "unsupported":
+    case 'unsupported':
       return <MessageSquare className="size-3.5" />;
   }
 }
@@ -194,7 +197,7 @@ function ConversationPreviewText({
 
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 text-muted-foreground">
+      <span className="text-muted-foreground shrink-0">
         <MediaPreviewIcon kind={kind} />
       </span>
       <span className="truncate">{mediaPreviewLabel(kind, t)}</span>
@@ -211,17 +214,18 @@ export function ConversationList({
   onConversationUpdated,
   resyncToken = 0,
 }: ConversationListProps) {
-  const t = useTranslations("Inbox.conversationList");
-  const tThread = useTranslations("Inbox.messageThread");
+  const t = useTranslations('Inbox.conversationList');
+  const tThread = useTranslations('Inbox.messageThread');
   const locale = useLocale();
-  const dateLocale = locale.startsWith("es") ? es : undefined;
+  const dateLocale = locale.startsWith('es') ? es : undefined;
   const { user } = useAuth();
+  const currentUserId = user?.id;
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [tab, setTab] = useState<InboxTab>("inbox");
-  const [subtab, setSubtab] = useState<InboxSubtab>("open");
-  const [scope, setScope] = useState<InboxScope>("mine");
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [tab, setTab] = useState<InboxTab>('inbox');
+  const [subtab, setSubtab] = useState<InboxSubtab>('open');
+  const [scope, setScope] = useState<InboxScope>('mine');
   const [counts, setCounts] = useState<InboxCounts>({
     inboxOpen: 0,
     inboxPending: 0,
@@ -239,16 +243,20 @@ export function ConversationList({
   // Broadcast audience filtering. Company is an exact match on the field.
   const [tags, setTags] = useState<Tag[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<string[]>([]);
+  const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<string[]>(
+    []
+  );
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
-  const effectiveScope: InboxScope = tab === "inbox" ? scope : "all";
+  const effectiveScope: InboxScope = tab === 'inbox' ? scope : 'all';
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable identity across parent rerenders.
   const onConversationsLoadedRef = useRef(onConversationsLoaded);
   const conversationsCountRef = useRef(conversations.length);
-  const fetchKeyRef = useRef("");
+  const fetchKeyRef = useRef('');
+  const fetchSeqRef = useRef(0);
+  const activeStatusRef = useRef<Conversation['status'] | null>(null);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
     conversationsCountRef.current = conversations.length;
@@ -261,36 +269,57 @@ export function ConversationList({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const fetchSeq = ++fetchSeqRef.current;
 
     (async () => {
-      const fetchKey = [tab, subtab, effectiveScope, debouncedSearch].join("|");
+      const fetchKey = [tab, subtab, effectiveScope, debouncedSearch].join('|');
       const shouldShowLoading =
         fetchKey !== fetchKeyRef.current || conversationsCountRef.current === 0;
       fetchKeyRef.current = fetchKey;
       if (shouldShowLoading) setLoading(true);
-      const params = new URLSearchParams({ tab, subtab, scope: effectiveScope });
-      if (debouncedSearch) params.set("search", debouncedSearch);
+      try {
+        const params = new URLSearchParams({
+          tab,
+          subtab,
+          scope: effectiveScope,
+        });
+        if (debouncedSearch) params.set('search', debouncedSearch);
 
-      const res = await fetch(`/api/inbox/conversations?${params.toString()}`);
-      const payload = await res.json().catch(() => ({}));
+        const res = await fetch(
+          `/api/inbox/conversations?${params.toString()}`,
+          {
+            cache: 'no-store',
+            signal: controller.signal,
+          }
+        );
+        const payload = await res.json().catch(() => ({}));
 
-      if (cancelled) return;
+        if (cancelled || fetchSeq !== fetchSeqRef.current) return;
 
-      if (!res.ok) {
-        console.error("Failed to fetch conversations:", payload);
-        setLoading(false);
-        return;
+        if (!res.ok) {
+          console.error('Failed to fetch conversations:', payload);
+          return;
+        }
+
+        onConversationsLoadedRef.current(payload.conversations ?? []);
+        setCounts(
+          payload.counts ?? { inboxOpen: 0, inboxPending: 0, resolved: 0 }
+        );
+      } catch (error) {
+        if (!cancelled && !controller.signal.aborted) {
+          console.error('Failed to fetch conversations:', error);
+        }
+      } finally {
+        if (!cancelled && fetchSeq === fetchSeqRef.current) {
+          setLoading(false);
+        }
       }
-
-      onConversationsLoadedRef.current(payload.conversations ?? []);
-      setCounts(
-        payload.counts ?? { inboxOpen: 0, inboxPending: 0, resolved: 0 },
-      );
-      if (shouldShowLoading) setLoading(false);
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [tab, subtab, effectiveScope, debouncedSearch, resyncToken]);
 
@@ -300,8 +329,8 @@ export function ConversationList({
     let cancelled = false;
     (async () => {
       const [tagsRes, departmentRes] = await Promise.all([
-        fetch("/api/tags", { cache: "no-store" }),
-        fetch("/api/departments", { cache: "no-store" }),
+        fetch('/api/tags', { cache: 'no-store' }),
+        fetch('/api/departments', { cache: 'no-store' }),
       ]);
       const tagsPayload = await tagsRes.json().catch(() => ({}));
       const departmentPayload = await departmentRes.json().catch(() => ({}));
@@ -309,7 +338,9 @@ export function ConversationList({
         setTags((tagsPayload.tags as Tag[] | undefined) ?? []);
       }
       if (!cancelled && departmentRes.ok) {
-        setDepartments((departmentPayload.departments as Department[] | undefined) ?? []);
+        setDepartments(
+          (departmentPayload.departments as Department[] | undefined) ?? []
+        );
       }
     })();
     return () => {
@@ -335,24 +366,25 @@ export function ConversationList({
   const filtered = useMemo(() => {
     let result = conversations;
 
-    if (tab === "resolved") {
-      result = result.filter((c) => c.status === "closed");
-    } else if (tab === "inbox") {
+    if (tab === 'resolved') {
+      result = result.filter((c) => c.status === 'closed');
+    } else if (tab === 'inbox') {
       result = result.filter((c) => c.status === subtab);
     }
 
-    if (effectiveScope === "mine") {
+    if (effectiveScope === 'mine') {
       result = result.filter(
         (c) =>
-          c.status === "pending" ||
-          !user?.id ||
-          c.assigned_agent_id === user.id,
+          c.status === 'pending' ||
+          !currentUserId ||
+          c.assigned_agent_id === currentUserId
       );
     }
 
     if (selectedDepartmentIds.length > 0) {
       result = result.filter(
-        (c) => c.department_id && selectedDepartmentIds.includes(c.department_id),
+        (c) =>
+          c.department_id && selectedDepartmentIds.includes(c.department_id)
       );
     }
 
@@ -361,7 +393,7 @@ export function ConversationList({
         matchesContactFilters(c, {
           tagIds: selectedTagIds,
           company: selectedCompany,
-        }),
+        })
       );
     }
 
@@ -371,22 +403,23 @@ export function ConversationList({
     tab,
     subtab,
     effectiveScope,
-    user?.id,
+    currentUserId,
     selectedDepartmentIds,
     selectedTagIds,
     selectedCompany,
   ]);
 
   const visiblePendingCount = useMemo(() => {
-    let result = conversations.filter((c) => c.status === "pending");
+    let result = conversations.filter((c) => c.status === 'pending');
 
-    if (effectiveScope === "mine") {
-      result = result.filter((c) => c.status === "pending");
+    if (effectiveScope === 'mine') {
+      result = result.filter((c) => c.status === 'pending');
     }
 
     if (selectedDepartmentIds.length > 0) {
       result = result.filter(
-        (c) => c.department_id && selectedDepartmentIds.includes(c.department_id),
+        (c) =>
+          c.department_id && selectedDepartmentIds.includes(c.department_id)
       );
     }
 
@@ -395,7 +428,7 @@ export function ConversationList({
         matchesContactFilters(c, {
           tagIds: selectedTagIds,
           company: selectedCompany,
-        }),
+        })
       );
     }
 
@@ -410,10 +443,10 @@ export function ConversationList({
 
   useEffect(() => {
     if (loading) return;
-    if (tab !== "inbox" || subtab !== "open") return;
+    if (tab !== 'inbox' || subtab !== 'open') return;
     if (filtered.length > 0) return;
     if (counts.inboxPending > 0 || visiblePendingCount > 0) {
-      setSubtab("pending");
+      queueMicrotask(() => setSubtab('pending'));
     }
   }, [
     counts.inboxPending,
@@ -424,15 +457,50 @@ export function ConversationList({
     visiblePendingCount,
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const activeStatus =
+      conversations.find(
+        (conversation) => conversation.id === activeConversationId
+      )?.status ?? null;
+    const previousStatus = activeStatusRef.current;
+    activeStatusRef.current = activeStatus;
+
+    if (previousStatus !== 'closed') {
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (activeStatus === 'open') {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setTab('inbox');
+        setSubtab('open');
+      });
+    } else if (activeStatus === 'pending') {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setTab('inbox');
+        setSubtab('pending');
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConversationId, conversations]);
+
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
-      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
     );
   }, []);
 
   const toggleDepartment = useCallback((id: string) => {
     setSelectedDepartmentIds((prev) =>
-      prev.includes(id) ? prev.filter((departmentId) => departmentId !== id) : [...prev, id],
+      prev.includes(id)
+        ? prev.filter((departmentId) => departmentId !== id)
+        : [...prev, id]
     );
   }, []);
 
@@ -441,21 +509,22 @@ export function ConversationList({
     setSelectedCompany(null);
   }, []);
 
-  const hasContactFilters = selectedTagIds.length > 0 || selectedCompany !== null;
+  const hasContactFilters =
+    selectedTagIds.length > 0 || selectedCompany !== null;
 
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setSearch(e.target.value);
-      if (tab !== "search") setTab("search");
+      if (tab !== 'search') setTab('search');
     },
-    [tab],
+    [tab]
   );
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
       onSelect(conv);
     },
-    [onSelect],
+    [onSelect]
   );
 
   const handleAccept = useCallback(
@@ -463,75 +532,77 @@ export function ConversationList({
       if (acceptingId) return;
       setAcceptingId(conversation.id);
       try {
-        const res = await fetch("/api/inbox/conversations", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/inbox/conversations', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: "accept",
+            action: 'accept',
             conversation_id: conversation.id,
           }),
         });
         const payload = await res.json().catch(() => ({}));
         if (!res.ok || !payload.conversation) {
-          console.error("Failed to accept conversation:", payload);
+          console.error('Failed to accept conversation:', payload);
           return;
         }
         onConversationUpdated(payload.conversation);
         onSelect(payload.conversation);
-        setTab("inbox");
-        setSubtab("open");
+        setTab('inbox');
+        setSubtab('open');
       } finally {
         setAcceptingId(null);
       }
     },
-    [acceptingId, onConversationUpdated, onSelect],
+    [acceptingId, onConversationUpdated, onSelect]
   );
 
-  const handlePreview = useCallback(
-    async (conversation: Conversation) => {
-      setPreviewConversation(conversation);
-      setPreviewMessages([]);
-      setPreviewLoading(true);
+  const handlePreview = useCallback(async (conversation: Conversation) => {
+    setPreviewConversation(conversation);
+    setPreviewMessages([]);
+    setPreviewLoading(true);
 
-      const res = await fetch(`/api/inbox/messages?conversation_id=${conversation.id}`, {
-        cache: "no-store",
-      });
-      const payload = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        console.error("Failed to load conversation preview:", payload);
-        setPreviewMessages([]);
-      } else {
-        setPreviewMessages(((payload.messages as Message[] | undefined) ?? []).slice(-30));
+    const res = await fetch(
+      `/api/inbox/messages?conversation_id=${conversation.id}`,
+      {
+        cache: 'no-store',
       }
+    );
+    const payload = await res.json().catch(() => ({}));
 
-      setPreviewLoading(false);
-    },
-    [],
-  );
+    if (!res.ok) {
+      console.error('Failed to load conversation preview:', payload);
+      setPreviewMessages([]);
+    } else {
+      setPreviewMessages(
+        ((payload.messages as Message[] | undefined) ?? []).slice(-30)
+      );
+    }
+
+    setPreviewLoading(false);
+  }, []);
 
   const patchConversation = useCallback(
-    async (conversation: Conversation, action: "accept" | "resolve") => {
-      const res = await fetch("/api/inbox/conversations", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+    async (conversation: Conversation, action: 'accept' | 'resolve') => {
+      const res = await fetch('/api/inbox/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, conversation_id: conversation.id }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.conversation) {
-        console.error("Failed to update conversation:", payload);
+        console.error('Failed to update conversation:', payload);
         return;
       }
       onConversationUpdated(payload.conversation);
-      if (action === "accept") {
+      if (action === 'accept') {
         onSelect(payload.conversation);
-        setTab("inbox");
-        setSubtab("open");
+        setTab('inbox');
+        setSubtab('open');
         setPreviewConversation(null);
         setPreviewMessages([]);
         return;
       }
-      if (action === "resolve") {
+      if (action === 'resolve') {
         setPreviewConversation(null);
         setPreviewMessages([]);
         if (activeConversationId === conversation.id) {
@@ -541,274 +612,279 @@ export function ConversationList({
       }
       setPreviewConversation(payload.conversation);
     },
-    [activeConversationId, onClearSelection, onConversationUpdated, onSelect],
+    [activeConversationId, onClearSelection, onConversationUpdated, onSelect]
   );
 
   return (
     <div
       className={cn(
-        "flex h-full min-w-0 w-full flex-col border-r border-border bg-card lg:w-[23.75rem]",
+        'border-border bg-card flex h-full w-full min-w-0 flex-col border-r lg:w-[23.75rem]'
       )}
     >
-      <div className="min-w-0 border-b border-border">
-        <div className="flex min-w-0 items-center border-b border-border px-2 pt-2">
+      <div className="border-border min-w-0 border-b">
+        <div className="border-border flex min-w-0 items-center border-b px-2 pt-2">
           <div className="grid min-w-0 flex-1 grid-cols-3">
             <TabButton
-              active={tab === "inbox"}
-              onClick={() => setTab("inbox")}
-              label={t("tabInbox")}
+              active={tab === 'inbox'}
+              onClick={() => setTab('inbox')}
+              label={t('tabInbox')}
               icon={Inbox}
             />
             <TabButton
-              active={tab === "resolved"}
-              onClick={() => setTab("resolved")}
-              label={t("tabResolved")}
+              active={tab === 'resolved'}
+              onClick={() => setTab('resolved')}
+              label={t('tabResolved')}
               icon={CheckSquare}
             />
             <TabButton
-              active={tab === "search"}
-              onClick={() => setTab("search")}
-              label={t("tabSearch")}
+              active={tab === 'search'}
+              onClick={() => setTab('search')}
+              label={t('tabSearch')}
               icon={Search}
             />
           </div>
         </div>
 
         <div className="space-y-2 px-3 pt-3 pb-0">
-            <div className="flex items-center gap-2">
-              <div className="relative min-w-0 flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={handleSearchChange}
-                  placeholder={
-                    tab === "inbox"
-                      ? t("searchInboxPlaceholder")
-                      : t("searchPlaceholder")
-                  }
-                  className="h-10 rounded-full border-border bg-background pl-9 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
-                />
-              </div>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  title={t("departmentFilter")}
-                  aria-label={t("departmentFilter")}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:border-primary/30 hover:bg-primary/10 hover:text-primary"
-                >
-                  <Building2 className="h-4 w-4" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                  {departments.length === 0 ? (
-                    <DropdownMenuItem disabled>
-                      {t("noDepartmentsAvailable")}
-                    </DropdownMenuItem>
-                  ) : (
-                    departments.map((department) => (
-                      <DropdownMenuCheckboxItem
-                        key={department.id}
-                        checked={selectedDepartmentIds.includes(department.id)}
-                        onCheckedChange={() => toggleDepartment(department.id)}
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span
-                            className="size-2 rounded-full"
-                            style={{ backgroundColor: department.color }}
-                          />
-                          <span className="truncate">{department.name}</span>
-                        </span>
-                      </DropdownMenuCheckboxItem>
-                    ))
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <button
-                type="button"
-                disabled={tab !== "inbox"}
-                onClick={() =>
-                  setScope((value) => (value === "mine" ? "all" : "mine"))
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+              <Input
+                value={search}
+                onChange={handleSearchChange}
+                placeholder={
+                  tab === 'inbox'
+                    ? t('searchInboxPlaceholder')
+                    : t('searchPlaceholder')
                 }
-                title={
-                  effectiveScope === "mine" ? t("scopeMine") : t("scopeAll")
-                }
-                aria-label={
-                  effectiveScope === "mine" ? t("scopeMine") : t("scopeAll")
-                }
-                className={cn(
-                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors",
-                  effectiveScope === "mine"
-                    ? "border-primary/30 bg-primary/10 text-primary"
-                    : "border-border bg-background text-muted-foreground hover:text-foreground",
-                  tab !== "inbox" && "cursor-default opacity-80",
-                )}
-              >
-                {effectiveScope === "mine" ? (
-                  <User className="h-4 w-4" />
-                ) : (
-                  <Users className="h-4 w-4" />
-                )}
-              </button>
+                className="border-border bg-background text-foreground placeholder-muted-foreground focus:border-primary/50 h-10 rounded-full pr-3 pl-9 text-sm"
+              />
             </div>
 
-            {tab === "inbox" && (
-              <div className="grid min-w-0 grid-cols-2">
-                <SubtabButton
-                  active={subtab === "open"}
-                  onClick={() => setSubtab("open")}
-                  label={t("subtabOpen")}
-                  count={counts.inboxOpen}
-                />
-                <SubtabButton
-                  active={subtab === "pending"}
-                  onClick={() => setSubtab("pending")}
-                  label={t("subtabPending")}
-                  count={counts.inboxPending}
-                />
-              </div>
-            )}
-
-        {(tags.length > 0 || companies.length > 0) && (
-          <div className="flex flex-wrap items-center gap-1">
-            {tags.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  className={cn(
-                    "inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
-                    selectedTagIds.length > 0
-                      ? "text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {t("tags")}
-                  {selectedTagIds.length > 0 && (
-                    <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                      {selectedTagIds.length}
-                    </span>
-                  )}
-                  <ChevronDown className="h-3 w-3" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="max-h-64 w-56 border-border bg-popover"
-                >
-                  {tags.map((tag) => (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                title={t('departmentFilter')}
+                aria-label={t('departmentFilter')}
+                className="border-border bg-background text-muted-foreground hover:border-primary/30 hover:bg-primary/10 hover:text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors"
+              >
+                <Building2 className="h-4 w-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {departments.length === 0 ? (
+                  <DropdownMenuItem disabled>
+                    {t('noDepartmentsAvailable')}
+                  </DropdownMenuItem>
+                ) : (
+                  departments.map((department) => (
                     <DropdownMenuCheckboxItem
-                      key={tag.id}
-                      checked={selectedTagIds.includes(tag.id)}
-                      onCheckedChange={() => toggleTag(tag.id)}
-                      className="text-sm text-popover-foreground"
+                      key={department.id}
+                      checked={selectedDepartmentIds.includes(department.id)}
+                      onCheckedChange={() => toggleDepartment(department.id)}
                     >
-                      <span className="flex items-center gap-2">
+                      <span className="flex min-w-0 items-center gap-2">
                         <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={{ backgroundColor: tag.color }}
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: department.color }}
                         />
-                        <span className="truncate">{tag.name}</span>
+                        <span className="truncate">{department.name}</span>
                       </span>
                     </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-            {companies.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  className={cn(
-                    "inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs hover:bg-muted",
-                    selectedCompany
-                      ? "text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <span className="truncate">{selectedCompany ?? t("company")}</span>
-                  <ChevronDown className="h-3 w-3 shrink-0" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="start"
-                  className="max-h-64 w-56 border-border bg-popover"
-                >
-                  <DropdownMenuItem
-                    onClick={() => setSelectedCompany(null)}
-                    className={cn(
-                      "text-sm",
-                      selectedCompany === null
-                        ? "text-primary"
-                        : "text-popover-foreground",
-                    )}
-                  >
-                    {t("allCompanies")}
-                  </DropdownMenuItem>
-                  {companies.map((co) => (
-                    <DropdownMenuItem
-                      key={co}
-                      onClick={() => setSelectedCompany(co)}
-                      className={cn(
-                        "text-sm",
-                        selectedCompany === co
-                          ? "text-primary"
-                          : "text-popover-foreground",
-                      )}
-                    >
-                      <span className="truncate">{co}</span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        )}
-
-        {hasContactFilters && (
-          <div className="flex flex-wrap items-center gap-1">
-            {selectedTagIds.map((id) => {
-              const tag = tagsById.get(id);
-              return (
-                <button
-                  key={id}
-                  onClick={() => toggleTag(id)}
-                  className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
-                >
-                  <span
-                    className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: tag?.color ?? "var(--muted-foreground)" }}
-                  />
-                  <span className="max-w-24 truncate">{tag?.name ?? t("tags")}</span>
-                  <X className="h-3 w-3" />
-                </button>
-              );
-            })}
-            {selectedCompany && (
-              <button
-                onClick={() => setSelectedCompany(null)}
-                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground hover:bg-muted/70"
-              >
-                <span className="max-w-24 truncate">{selectedCompany}</span>
-                <X className="h-3 w-3" />
-              </button>
-            )}
             <button
-              onClick={clearContactFilters}
-              className="px-1 text-[11px] text-muted-foreground hover:text-foreground"
+              type="button"
+              disabled={tab !== 'inbox'}
+              onClick={() =>
+                setScope((value) => (value === 'mine' ? 'all' : 'mine'))
+              }
+              title={effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')}
+              aria-label={
+                effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')
+              }
+              className={cn(
+                'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors',
+                effectiveScope === 'mine'
+                  ? 'border-primary/30 bg-primary/10 text-primary'
+                  : 'border-border bg-background text-muted-foreground hover:text-foreground',
+                tab !== 'inbox' && 'cursor-default opacity-80'
+              )}
             >
-              {t("clearAll")}
+              {effectiveScope === 'mine' ? (
+                <User className="h-4 w-4" />
+              ) : (
+                <Users className="h-4 w-4" />
+              )}
             </button>
           </div>
-        )}
+
+          {tab === 'inbox' && (
+            <div className="grid min-w-0 grid-cols-2">
+              <SubtabButton
+                active={subtab === 'open'}
+                onClick={() => setSubtab('open')}
+                label={t('subtabOpen')}
+                count={counts.inboxOpen}
+              />
+              <SubtabButton
+                active={subtab === 'pending'}
+                onClick={() => setSubtab('pending')}
+                label={t('subtabPending')}
+                count={counts.inboxPending}
+              />
+            </div>
+          )}
+
+          {(tags.length > 0 || companies.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1">
+              {tags.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    className={cn(
+                      'hover:bg-muted inline-flex h-7 items-center justify-center gap-1 rounded-md px-2 text-xs',
+                      selectedTagIds.length > 0
+                        ? 'text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {t('tags')}
+                    {selectedTagIds.length > 0 && (
+                      <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
+                        {selectedTagIds.length}
+                      </span>
+                    )}
+                    <ChevronDown className="h-3 w-3" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    className="border-border bg-popover max-h-64 w-56"
+                  >
+                    {tags.map((tag) => (
+                      <DropdownMenuCheckboxItem
+                        key={tag.id}
+                        checked={selectedTagIds.includes(tag.id)}
+                        onCheckedChange={() => toggleTag(tag.id)}
+                        className="text-popover-foreground text-sm"
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: tag.color }}
+                          />
+                          <span className="truncate">{tag.name}</span>
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+
+              {companies.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    className={cn(
+                      'hover:bg-muted inline-flex h-7 max-w-40 items-center justify-center gap-1 rounded-md px-2 text-xs',
+                      selectedCompany
+                        ? 'text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    <span className="truncate">
+                      {selectedCompany ?? t('company')}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    className="border-border bg-popover max-h-64 w-56"
+                  >
+                    <DropdownMenuItem
+                      onClick={() => setSelectedCompany(null)}
+                      className={cn(
+                        'text-sm',
+                        selectedCompany === null
+                          ? 'text-primary'
+                          : 'text-popover-foreground'
+                      )}
+                    >
+                      {t('allCompanies')}
+                    </DropdownMenuItem>
+                    {companies.map((co) => (
+                      <DropdownMenuItem
+                        key={co}
+                        onClick={() => setSelectedCompany(co)}
+                        className={cn(
+                          'text-sm',
+                          selectedCompany === co
+                            ? 'text-primary'
+                            : 'text-popover-foreground'
+                        )}
+                      >
+                        <span className="truncate">{co}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+          )}
+
+          {hasContactFilters && (
+            <div className="flex flex-wrap items-center gap-1">
+              {selectedTagIds.map((id) => {
+                const tag = tagsById.get(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleTag(id)}
+                    className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+                  >
+                    <span
+                      className="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor:
+                          tag?.color ?? 'var(--muted-foreground)',
+                      }}
+                    />
+                    <span className="max-w-24 truncate">
+                      {tag?.name ?? t('tags')}
+                    </span>
+                    <X className="h-3 w-3" />
+                  </button>
+                );
+              })}
+              {selectedCompany && (
+                <button
+                  onClick={() => setSelectedCompany(null)}
+                  className="bg-muted text-foreground hover:bg-muted/70 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
+                >
+                  <span className="max-w-24 truncate">{selectedCompany}</span>
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+              <button
+                onClick={clearContactFilters}
+                className="text-muted-foreground hover:text-foreground px-1 text-[11px]"
+              >
+                {t('clearAll')}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      <ScrollArea
-        className={cn("min-h-0 flex-1", tab !== "inbox" && "pt-px")}
-      >
+      <ScrollArea className={cn('min-h-0 flex-1', tab !== 'inbox' && 'pt-px')}>
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-8 text-center">
-            <p className="text-sm text-muted-foreground">{t("noConversations")}</p>
+            <p className="text-muted-foreground text-sm">
+              {t('noConversations')}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col">
@@ -839,8 +915,8 @@ export function ConversationList({
             setPreviewMessages([]);
           }
         }}
-        onAccept={(conversation) => patchConversation(conversation, "accept")}
-        onResolve={(conversation) => patchConversation(conversation, "resolve")}
+        onAccept={(conversation) => patchConversation(conversation, 'accept')}
+        onResolve={(conversation) => patchConversation(conversation, 'resolve')}
         t={t}
         tTransfer={tThread}
         currentUserId={user?.id}
@@ -867,14 +943,14 @@ function TabButton({
       onClick={onClick}
       title={label}
       className={cn(
-        "relative flex min-w-0 items-center justify-center gap-1.5 px-1 text-xs font-medium transition-colors sm:px-2",
-        "h-14 border-b-2",
+        'relative flex min-w-0 items-center justify-center gap-1.5 px-1 text-xs font-medium transition-colors sm:px-2',
+        'h-14 border-b-2',
         active
-          ? "border-primary text-foreground"
-          : "border-transparent text-muted-foreground hover:text-foreground",
+          ? 'border-primary text-foreground'
+          : 'text-muted-foreground hover:text-foreground border-transparent'
       )}
     >
-      <Icon className={cn("h-4 w-4 shrink-0", active && "text-primary")} />
+      <Icon className={cn('h-4 w-4 shrink-0', active && 'text-primary')} />
       <span className="min-w-0 truncate">{label}</span>
     </button>
   );
@@ -896,15 +972,15 @@ function SubtabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "relative flex h-10 min-w-0 items-center justify-center gap-1 border-b-2 px-1 text-sm font-medium transition-colors sm:px-2",
+        'relative flex h-10 min-w-0 items-center justify-center gap-1 border-b-2 px-1 text-sm font-medium transition-colors sm:px-2',
         active
-          ? "border-primary text-foreground"
-          : "border-border text-muted-foreground hover:text-foreground",
+          ? 'border-primary text-foreground'
+          : 'border-border text-muted-foreground hover:text-foreground'
       )}
     >
       <span className="min-w-0 truncate">{label}</span>
       {count > 0 && (
-        <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+        <span className="bg-primary text-primary-foreground ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
           {count}
         </span>
       )}
@@ -934,7 +1010,7 @@ function ConversationItem({
   t,
 }: ConversationItemProps) {
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || t("unknown");
+  const displayName = contact?.name || contact?.phone || t('unknown');
   const initials = displayName.charAt(0).toUpperCase();
   const lineName =
     conversation.whatsapp_config?.label ||
@@ -946,44 +1022,44 @@ function ConversationItem({
   const assignedAgentName =
     assignedAgent?.full_name || assignedAgent?.email || null;
   const assignedInitial = assignedAgentName?.charAt(0).toUpperCase() ?? null;
-  const opensDirectly = conversation.status !== "pending";
+  const opensDirectly = conversation.status !== 'pending';
 
   const handleClick = useCallback(() => {
     if (opensDirectly) onSelect(conversation);
   }, [conversation, onSelect, opensDirectly]);
 
   const lastMessageTime = conversation.last_message_at
-    ? format(new Date(conversation.last_message_at), "HH:mm", {
+    ? format(new Date(conversation.last_message_at), 'HH:mm', {
         locale: dateLocale,
       })
-    : "";
+    : '';
   return (
     <div
       className={cn(
-        "relative flex w-full items-stretch gap-3 border-b border-border/70 pl-3 text-left transition-colors hover:bg-muted/50",
-        isActive && "bg-muted/70",
+        'border-border/70 hover:bg-muted/50 relative flex w-full items-stretch gap-3 border-b pl-3 text-left transition-colors',
+        isActive && 'bg-muted/70'
       )}
     >
       <span
         className={cn(
-          "absolute inset-y-0 left-0 w-1",
+          'absolute inset-y-0 left-0 w-1',
           !department &&
-            (conversation.status === "open"
-            ? "bg-primary"
-            : conversation.status === "pending"
-              ? "bg-destructive"
-              : "bg-muted-foreground"),
+            (conversation.status === 'open'
+              ? 'bg-primary'
+              : conversation.status === 'pending'
+                ? 'bg-destructive'
+                : 'bg-muted-foreground')
         )}
         style={department ? { backgroundColor: department.color } : undefined}
       />
       <div
-        role={opensDirectly ? "button" : undefined}
+        role={opensDirectly ? 'button' : undefined}
         tabIndex={opensDirectly ? 0 : undefined}
         onClick={opensDirectly ? handleClick : undefined}
         onKeyDown={
           opensDirectly
             ? (event) => {
-                if (event.key === "Enter" || event.key === " ") {
+                if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
                   handleClick();
                 }
@@ -993,7 +1069,7 @@ function ConversationItem({
         className="flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 text-left"
       >
         <div className="relative h-11 w-11 shrink-0">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+          <div className="bg-muted text-foreground flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium">
             {contact?.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -1008,8 +1084,8 @@ function ConversationItem({
 
           {assignedInitial && (
             <span
-              title={`${t("agent")}: ${assignedAgentName}`}
-              className="absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-card bg-primary/10 px-1 text-[10px] font-bold leading-none text-primary shadow-sm"
+              title={`${t('agent')}: ${assignedAgentName}`}
+              className="border-card bg-primary/10 text-primary absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[10px] leading-none font-bold shadow-sm"
             >
               {assignedInitial}
             </span>
@@ -1018,45 +1094,45 @@ function ConversationItem({
 
         <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-foreground">
+            <span className="text-foreground block truncate text-sm font-medium">
               {displayName}
             </span>
             <div className="mt-0.5 min-w-0 pt-0.5">
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="text-muted-foreground truncate text-xs">
                 <ConversationPreviewText
-                  text={conversation.last_message_text || t("noMessagesYet")}
+                  text={conversation.last_message_text || t('noMessagesYet')}
                   t={t}
                 />
               </p>
             </div>
           </div>
           <div className="flex w-8 shrink-0 flex-col items-center gap-1">
-            <span className="h-3 text-[10px] leading-3 text-muted-foreground">
+            <span className="text-muted-foreground h-3 text-[10px] leading-3">
               {lastMessageTime}
             </span>
             <div className="flex h-4 items-center gap-1">
               <span
                 role="button"
                 tabIndex={0}
-                title={t("preview")}
-                aria-label={t("preview")}
+                title={t('preview')}
+                aria-label={t('preview')}
                 onClick={(event) => {
                   event.stopPropagation();
                   onPreview(conversation);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
+                  if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     event.stopPropagation();
                     onPreview(conversation);
                   }
                 }}
-                className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-4 w-4 items-center justify-center rounded-full"
               >
                 <Eye className="h-3.5 w-3.5" />
               </span>
               {conversation.unread_count > 0 && (
-                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">
                   {conversation.unread_count}
                 </span>
               )}
@@ -1064,8 +1140,8 @@ function ConversationItem({
             <div className="flex h-4 items-center">
               {lineInitial && (
                 <span
-                  title={`${t("line")}: ${lineName}`}
-                  className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-bold leading-none text-muted-foreground"
+                  title={`${t('line')}: ${lineName}`}
+                  className="bg-muted text-muted-foreground inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-bold"
                 >
                   {lineInitial}
                 </span>
@@ -1075,18 +1151,18 @@ function ConversationItem({
         </div>
       </div>
 
-      {conversation.status === "pending" && (
+      {conversation.status === 'pending' && (
         <button
           type="button"
           disabled={accepting}
           onClick={() => onAccept(conversation)}
-          className="group flex w-14 shrink-0 items-center justify-center overflow-hidden bg-primary text-primary-foreground transition-all duration-200 ease-out hover:w-24 hover:bg-primary/90 disabled:opacity-60"
-          title={t("accept")}
-          aria-label={t("accept")}
+          className="group bg-primary text-primary-foreground hover:bg-primary/90 flex w-14 shrink-0 items-center justify-center overflow-hidden transition-all duration-200 ease-out hover:w-24 disabled:opacity-60"
+          title={t('accept')}
+          aria-label={t('accept')}
         >
           <Check className="h-5 w-5" />
-          <span className="ml-0 max-w-0 overflow-hidden whitespace-nowrap text-xs font-bold opacity-0 transition-all duration-200 group-hover:ml-2 group-hover:max-w-16 group-hover:opacity-100">
-            {t("accept")}
+          <span className="ml-0 max-w-0 overflow-hidden text-xs font-bold whitespace-nowrap opacity-0 transition-all duration-200 group-hover:ml-2 group-hover:max-w-16 group-hover:opacity-100">
+            {t('accept')}
           </span>
         </button>
       )}
@@ -1118,14 +1194,14 @@ function ConversationPreviewDialog({
   onConversationUpdated: (conversation: Conversation) => void;
 }) {
   const [transferOpen, setTransferOpen] = useState(false);
-  const [transferAgentId, setTransferAgentId] = useState("");
-  const [transferLineId, setTransferLineId] = useState("");
-  const [transferDepartmentId, setTransferDepartmentId] = useState("");
+  const [transferAgentId, setTransferAgentId] = useState('');
+  const [transferLineId, setTransferLineId] = useState('');
+  const [transferDepartmentId, setTransferDepartmentId] = useState('');
   const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
     Record<string, InteractiveMessagePayload>
   >({});
   const contact = conversation?.contact;
-  const displayName = contact?.name || contact?.phone || t("unknown");
+  const displayName = contact?.name || contact?.phone || t('unknown');
   const initials = displayName.charAt(0).toUpperCase();
   const lineName =
     conversation?.whatsapp_config?.label ||
@@ -1140,11 +1216,11 @@ function ConversationPreviewDialog({
 
   const handleTransferSubmit = useCallback(async () => {
     if (!conversation) return;
-    const res = await fetch("/api/inbox/conversations", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch('/api/inbox/conversations', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action: "assign",
+        action: 'assign',
         conversation_id: conversation.id,
         assigned_agent_id: transferAgentId || null,
         whatsapp_config_id: transferLineId || null,
@@ -1153,20 +1229,28 @@ function ConversationPreviewDialog({
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || !payload.conversation) {
-      console.error("Failed to transfer conversation:", payload);
+      console.error('Failed to transfer conversation:', payload);
       return;
     }
     onConversationUpdated(payload.conversation);
     setTransferOpen(false);
-  }, [conversation, onConversationUpdated, transferAgentId, transferDepartmentId, transferLineId]);
+  }, [
+    conversation,
+    onConversationUpdated,
+    transferAgentId,
+    transferDepartmentId,
+    transferLineId,
+  ]);
 
   useEffect(() => {
     const templateNames = Array.from(
       new Set(
         messages
-          .filter((message) => !message.interactive_payload && message.template_name)
-          .map((message) => message.template_name as string),
-      ),
+          .filter(
+            (message) => !message.interactive_payload && message.template_name
+          )
+          .map((message) => message.template_name as string)
+      )
     );
 
     if (templateNames.length === 0) {
@@ -1176,15 +1260,15 @@ function ConversationPreviewDialog({
     let cancelled = false;
 
     (async () => {
-      const res = await fetch("/api/inbox/template-previews", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/inbox/template-previews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ names: templateNames }),
       });
       const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) {
-        console.error("Failed to fetch preview template buttons:", payload);
+        console.error('Failed to fetch preview template buttons:', payload);
         return;
       }
 
@@ -1198,15 +1282,15 @@ function ConversationPreviewDialog({
         const previewButtons = buttons
           .map(toInteractiveTemplateButton)
           .filter((button): button is NonNullable<typeof button> =>
-            Boolean(button),
+            Boolean(button)
           );
 
-        if (typeof row.name === "string" && previewButtons.length > 0) {
+        if (typeof row.name === 'string' && previewButtons.length > 0) {
           payloads[row.name] = {
-            kind: "buttons",
-            body: "",
+            kind: 'buttons',
+            body: '',
             footer:
-              typeof row.footer_text === "string" && row.footer_text.length > 0
+              typeof row.footer_text === 'string' && row.footer_text.length > 0
                 ? row.footer_text
                 : undefined,
             buttons: previewButtons,
@@ -1230,9 +1314,9 @@ function ConversationPreviewDialog({
       >
         {conversation && (
           <>
-            <div className="flex items-center gap-3 border-b border-border bg-card px-4 py-3">
+            <div className="border-border bg-card flex items-center gap-3 border-b px-4 py-3">
               <div className="relative h-11 w-11 shrink-0">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
+                <div className="bg-muted text-foreground flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium">
                   {contact?.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -1246,8 +1330,8 @@ function ConversationPreviewDialog({
                 </div>
                 {assignedInitial && (
                   <span
-                    title={`${t("agent")}: ${assignedAgentName}`}
-                    className="absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border border-card bg-primary/10 px-1 text-[10px] font-bold leading-none text-primary shadow-sm"
+                    title={`${t('agent')}: ${assignedAgentName}`}
+                    className="border-card bg-primary/10 text-primary absolute -bottom-0.5 left-0 inline-flex h-4 min-w-4 items-center justify-center rounded-full border px-1 text-[10px] leading-none font-bold shadow-sm"
                   >
                     {assignedInitial}
                   </span>
@@ -1258,11 +1342,11 @@ function ConversationPreviewDialog({
                 <DialogTitle className="truncate text-sm font-semibold">
                   {displayName}
                 </DialogTitle>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="text-muted-foreground mt-1 flex items-center gap-1.5 text-xs">
                   {lineInitial && (
                     <span
-                      title={`${t("line")}: ${lineName}`}
-                      className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-bold leading-none text-muted-foreground"
+                      title={`${t('line')}: ${lineName}`}
+                      className="bg-muted text-muted-foreground inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-bold"
                     >
                       {lineInitial}
                     </span>
@@ -1271,24 +1355,24 @@ function ConversationPreviewDialog({
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2 pr-8">
-                {conversation.status === "pending" && (
+                {conversation.status === 'pending' && (
                   <button
                     type="button"
                     onClick={() => onAccept(conversation)}
-                    title={t("accept")}
-                    aria-label={t("accept")}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                    title={t('accept')}
+                    aria-label={t('accept')}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center rounded-md"
                   >
                     <Check className="h-4 w-4" />
                   </button>
                 )}
-                {conversation.status !== "closed" && (
+                {conversation.status !== 'closed' && (
                   <button
                     type="button"
                     onClick={() => onResolve(conversation)}
-                    title={t("resolve")}
-                    aria-label={t("resolve")}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+                    title={t('resolve')}
+                    aria-label={t('resolve')}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center rounded-md"
                   >
                     <CheckSquare className="h-4 w-4" />
                   </button>
@@ -1296,29 +1380,29 @@ function ConversationPreviewDialog({
                 <button
                   type="button"
                   onClick={() => {
-                    setTransferAgentId(conversation.assigned_agent_id ?? "");
-                    setTransferLineId(conversation.whatsapp_config_id ?? "");
-                    setTransferDepartmentId(conversation.department_id ?? "");
+                    setTransferAgentId(conversation.assigned_agent_id ?? '');
+                    setTransferLineId(conversation.whatsapp_config_id ?? '');
+                    setTransferDepartmentId(conversation.department_id ?? '');
                     setTransferOpen(true);
                   }}
-                  title={t("transfer")}
-                  aria-label={t("transfer")}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-primary hover:bg-muted"
+                  title={t('transfer')}
+                  aria-label={t('transfer')}
+                  className="border-border bg-background text-primary hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md border"
                 >
                   <Forward className="h-4 w-4" />
                 </button>
               </div>
             </div>
 
-            <ScrollArea className="h-[58vh] bg-background bg-[url('/inbox-doodle.svg')] bg-repeat">
+            <ScrollArea className="bg-background h-[58vh] bg-[url('/inbox-doodle.svg')] bg-repeat">
               <div className="space-y-2 p-4">
                 {loading ? (
-                  <p className="text-center text-xs text-muted-foreground">
-                    {t("loadingPreview")}
+                  <p className="text-muted-foreground text-center text-xs">
+                    {t('loadingPreview')}
                   </p>
                 ) : messages.length === 0 ? (
-                  <p className="text-center text-xs text-muted-foreground">
-                    {t("noMessagesYet")}
+                  <p className="text-muted-foreground text-center text-xs">
+                    {t('noMessagesYet')}
                   </p>
                 ) : (
                   messages.map((message) => (
@@ -1363,8 +1447,8 @@ function PreviewTemplateActions({
   onPrimary: boolean;
 }) {
   const buttonClass = cn(
-    "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
-    onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
+    'flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium',
+    onPrimary ? 'border-primary/20 text-primary' : 'border-border text-primary'
   );
 
   return (
@@ -1372,14 +1456,14 @@ function PreviewTemplateActions({
       {payload.footer ? (
         <p
           className={cn(
-            "px-1 py-1.5 text-[11px]",
-            onPrimary ? "text-foreground/60" : "text-muted-foreground",
+            'px-1 py-1.5 text-[11px]',
+            onPrimary ? 'text-foreground/60' : 'text-muted-foreground'
           )}
         >
           <WhatsAppText text={payload.footer} />
         </p>
       ) : null}
-      {payload.kind === "buttons" ? (
+      {payload.kind === 'buttons' ? (
         payload.buttons.map((button, index) => {
           const href = resolveTemplateButtonUrl(button);
           const content = (
@@ -1422,8 +1506,10 @@ function PreviewTemplateActions({
           type="button"
           disabled
           className={cn(
-            "flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium",
-            onPrimary ? "border-primary/20 text-primary" : "border-border text-primary",
+            'flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium',
+            onPrimary
+              ? 'border-primary/20 text-primary'
+              : 'border-border text-primary'
           )}
         >
           <CornerDownLeft className="size-3" />
@@ -1436,12 +1522,12 @@ function PreviewTemplateActions({
 
 function mergePreviewTemplatePayload(
   payload?: InteractiveMessagePayload | null,
-  fallback?: InteractiveMessagePayload | null,
+  fallback?: InteractiveMessagePayload | null
 ) {
   if (!payload) return fallback ?? null;
   if (
-    payload.kind !== "buttons" ||
-    fallback?.kind !== "buttons" ||
+    payload.kind !== 'buttons' ||
+    fallback?.kind !== 'buttons' ||
     payload.buttons.some((button) => button.url)
   ) {
     return payload;
@@ -1456,7 +1542,8 @@ function mergePreviewTemplatePayload(
       type: button.type ?? fallback.buttons[index]?.type,
       url: button.url ?? fallback.buttons[index]?.url,
       example: button.example ?? fallback.buttons[index]?.example,
-      phone_number: button.phone_number ?? fallback.buttons[index]?.phone_number,
+      phone_number:
+        button.phone_number ?? fallback.buttons[index]?.phone_number,
     })),
   } satisfies InteractiveMessagePayload;
 }
@@ -1468,46 +1555,47 @@ function PreviewMessageBubble({
   message: Message;
   templateFallbackPayload?: InteractiveMessagePayload | null;
 }) {
-  const tBubble = useTranslations("Inbox.bubble");
-  const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const tBubble = useTranslations('Inbox.bubble');
+  const isAgent =
+    message.sender_type === 'agent' || message.sender_type === 'bot';
   const templatePayload = mergePreviewTemplatePayload(
     message.interactive_payload,
-    templateFallbackPayload,
+    templateFallbackPayload
   );
   const isDeleted = Boolean(message.deleted_at);
   const fallback =
-    message.content_type === "image"
-      ? "Imagen"
-      : message.content_type === "audio"
-        ? "Nota de voz"
-        : message.content_type === "sticker"
-          ? "Sticker"
-          : message.content_type === "document"
-            ? "Documento"
-            : "";
+    message.content_type === 'image'
+      ? 'Imagen'
+      : message.content_type === 'audio'
+        ? 'Nota de voz'
+        : message.content_type === 'sticker'
+          ? 'Sticker'
+          : message.content_type === 'document'
+            ? 'Documento'
+            : '';
   const text = message.content_text || fallback;
 
   return (
-    <div className={cn("flex", isAgent ? "justify-end" : "justify-start")}>
+    <div className={cn('flex', isAgent ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          "max-w-[78%] rounded-lg px-3 py-2 text-sm shadow-sm",
+          'max-w-[78%] rounded-lg px-3 py-2 text-sm shadow-sm',
           isDeleted
             ? isAgent
-              ? "border border-primary/20 bg-primary/10 text-primary/80"
-              : "border border-border bg-muted/60 text-muted-foreground"
+              ? 'border-primary/20 bg-primary/10 text-primary/80 border'
+              : 'border-border bg-muted/60 text-muted-foreground border'
             : isAgent
-              ? "bg-primary/15 text-foreground"
-              : "bg-card text-card-foreground",
+              ? 'bg-primary/15 text-foreground'
+              : 'bg-card text-card-foreground'
         )}
       >
         {isDeleted ? (
           <div className="flex flex-col gap-1">
-            <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
+            <span className="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
               <Ban className="size-3" />
-              {tBubble("deletedTitle")}
+              {tBubble('deletedTitle')}
             </span>
-            <span className="whitespace-pre-wrap break-words text-xs opacity-80">
+            <span className="text-xs break-words whitespace-pre-wrap opacity-80">
               <WhatsAppText text={text} />
             </span>
           </div>
@@ -1516,36 +1604,39 @@ function PreviewMessageBubble({
             {message.is_forwarded ? (
               <div
                 className={cn(
-                  "mb-1 flex items-center gap-1 text-xs italic",
-                  isAgent ? "text-primary" : "text-muted-foreground",
+                  'mb-1 flex items-center gap-1 text-xs italic',
+                  isAgent ? 'text-primary' : 'text-muted-foreground'
                 )}
               >
                 <Forward className="size-3" />
-                {tBubble("forwarded")}
+                {tBubble('forwarded')}
               </div>
             ) : null}
-            {message.content_type === "template" && message.media_url ? (
-              <div className="mb-2 overflow-hidden rounded-md bg-muted">
+            {message.content_type === 'template' && message.media_url ? (
+              <div className="bg-muted mb-2 overflow-hidden rounded-md">
                 {/* eslint-disable-next-line @next/next/no-img-element -- Template header media uses dynamic public URLs. */}
                 <img
                   src={message.media_url}
-                  alt={tBubble("sharedImageAlt")}
+                  alt={tBubble('sharedImageAlt')}
                   className="max-h-52 w-full object-contain"
                 />
               </div>
             ) : null}
-            <p className="whitespace-pre-wrap break-words">
+            <p className="break-words whitespace-pre-wrap">
               <WhatsAppText text={text} />
             </p>
           </>
         )}
         {!isDeleted && templatePayload ? (
-          <PreviewTemplateActions payload={templatePayload} onPrimary={isAgent} />
+          <PreviewTemplateActions
+            payload={templatePayload}
+            onPrimary={isAgent}
+          />
         ) : null}
-        <span className="mt-1 block text-right text-[10px] text-muted-foreground">
+        <span className="text-muted-foreground mt-1 block text-right text-[10px]">
           {new Date(message.created_at).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
+            hour: '2-digit',
+            minute: '2-digit',
           })}
         </span>
       </div>
