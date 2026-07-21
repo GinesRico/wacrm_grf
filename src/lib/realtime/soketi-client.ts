@@ -20,6 +20,7 @@ export function setRealtimeClientConfig(config: RealtimeClientConfig) {
     client.disconnect();
     client = null;
   }
+  debugBound = false;
 }
 
 function envConfig(): RealtimeClientConfig | null {
@@ -47,6 +48,13 @@ export function getRealtimeClient(): Pusher {
       "NEXT_PUBLIC_SOKETI_APP_KEY and NEXT_PUBLIC_SOKETI_HOST are required.",
     );
   }
+
+  Pusher.logToConsole = true;
+  console.info("[realtime] creating Pusher client", {
+    host: config.host,
+    port: config.port,
+    forceTLS: config.forceTLS,
+  });
 
   client = new Pusher(config.key, {
     cluster: config.cluster ?? "mt1",
@@ -82,6 +90,7 @@ export function getRealtimeClient(): Pusher {
 
   if (!debugBound) {
     debugBound = true;
+    console.info("[realtime] initial connection state", client.connection.state);
     client.connection.bind("state_change", (states: unknown) => {
       console.info("[realtime] connection state", states);
     });
@@ -95,6 +104,10 @@ export function getRealtimeClient(): Pusher {
 
 export function subscribeRealtimeChannel(channelName: string): Channel {
   const channel = getRealtimeClient().subscribe(channelName);
+  console.info("[realtime] subscribing", {
+    channel: channelName,
+    state: getRealtimeClient().connection.state,
+  });
   channel.bind("pusher:subscription_succeeded", () => {
     console.info("[realtime] subscription succeeded", { channel: channelName });
   });
