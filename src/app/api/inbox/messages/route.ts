@@ -5,6 +5,8 @@ import { db } from "@/db/client";
 import { conversations, messageReactions, messages } from "@/db/schema";
 import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { getInboxConversationById } from "@/lib/inbox/conversations";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 function asStringArray(value: unknown): string[] {
   if (typeof value === "string" && value.length > 0) return [value];
@@ -138,6 +140,18 @@ export async function PATCH(request: Request) {
         .where(inArray(messages.id, validIds))
         .returning();
 
+      await Promise.all(
+        updatedRows.map((message) =>
+          publishRealtimeEvent("message.updated", {
+            accountId: ctx.accountId,
+            conversationId: message.conversationId,
+            payload: { message: toMessageRow(message) },
+          }).catch((error) => {
+            console.warn("[realtime] failed to publish message.updated:", error);
+          }),
+        ),
+      );
+
       return NextResponse.json({ messages: updatedRows.map(toMessageRow) });
     }
 
@@ -191,7 +205,30 @@ export async function PATCH(request: Request) {
               eq(conversations.accountId, ctx.accountId),
             ),
           );
+
+        const conversation = await getInboxConversationById(ctx.accountId, conversationId);
+        if (conversation) {
+          await publishRealtimeEvent("conversation.updated", {
+            accountId: ctx.accountId,
+            conversationId,
+            payload: { conversation },
+          }).catch((error) => {
+            console.warn("[realtime] failed to publish conversation.updated:", error);
+          });
+        }
       }),
+    );
+
+    await Promise.all(
+      updatedRows.map((message) =>
+        publishRealtimeEvent("message.updated", {
+          accountId: ctx.accountId,
+          conversationId: message.conversationId,
+          payload: { message: toMessageRow(message) },
+        }).catch((error) => {
+          console.warn("[realtime] failed to publish message.updated:", error);
+        }),
+      ),
     );
 
     return NextResponse.json({ messages: updatedRows.map(toMessageRow) });

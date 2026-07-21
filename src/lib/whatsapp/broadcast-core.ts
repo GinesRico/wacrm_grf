@@ -33,6 +33,10 @@ import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
 import { serializeMessageTemplate } from "@/lib/whatsapp/template-serializer";
+import {
+  publishBroadcastRecipientUpdated,
+  publishBroadcastUpdated,
+} from "@/lib/realtime/broadcast-events";
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -68,6 +72,7 @@ interface PlannedRecipient {
 
 export interface BroadcastPlan {
   broadcastId: string;
+  accountId: string;
   templateName: string;
   templateLanguage: string;
   phoneNumberId: string;
@@ -237,8 +242,11 @@ export async function createBroadcast(
     return { recipientRowId: row.id as string, phone: r.phone, params: r.params };
   });
 
+  await publishBroadcastUpdated(accountId, broadcast.id);
+
   return {
     broadcastId: broadcast.id,
+    accountId,
     templateName,
     templateLanguage,
     phoneNumberId: config.phone_number_id,
@@ -306,6 +314,7 @@ export async function deliverBroadcast(
           errorMessage: null,
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
+      await publishBroadcastRecipientUpdated(plan.accountId, recipient.recipientRowId);
     } else {
       await appDb
         .update(broadcastRecipients)
@@ -314,6 +323,7 @@ export async function deliverBroadcast(
           errorMessage: lastError || 'Unknown error',
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
+      await publishBroadcastRecipientUpdated(plan.accountId, recipient.recipientRowId);
     }
   }
 
@@ -327,4 +337,5 @@ export async function deliverBroadcast(
       updatedAt: new Date(),
     })
     .where(eq(broadcasts.id, plan.broadcastId));
+  await publishBroadcastUpdated(plan.accountId, plan.broadcastId);
 }

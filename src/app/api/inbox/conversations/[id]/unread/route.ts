@@ -5,6 +5,8 @@ import { db } from "@/db/client";
 import { conversations } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { getInboxConversationById } from "@/lib/inbox/conversations";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 export async function PATCH(
   _request: Request,
@@ -21,6 +23,17 @@ export async function PATCH(
 
     if (updated.length === 0) {
       return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+    }
+
+    const conversation = await getInboxConversationById(ctx.accountId, id);
+    if (conversation) {
+      await publishRealtimeEvent("conversation.updated", {
+        accountId: ctx.accountId,
+        conversationId: id,
+        payload: { conversation },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish conversation.updated:", error);
+      });
     }
 
     return NextResponse.json({ success: true });

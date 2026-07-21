@@ -17,6 +17,11 @@ import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { getBroadcastStatus } from '@/lib/broadcast-status';
 import { useTranslations } from 'next-intl';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from '@/lib/realtime/soketi-client';
 
 function percent(numerator: number, denominator: number): number {
   if (!denominator) return 0;
@@ -54,6 +59,7 @@ export default function BroadcastsPage() {
   const t = useTranslations('Broadcasts.page');
   const tStatus = useTranslations('Broadcasts.status');
   const canCreate = useCan('send-messages');
+  const { accountId } = useAuth();
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +83,33 @@ export default function BroadcastsPage() {
     fetchBroadcasts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const handleBroadcastUpdated = (event: {
+      payload?: { broadcast?: Broadcast };
+    }) => {
+      const broadcast = event.payload?.broadcast;
+      if (!broadcast) return;
+      setBroadcasts((prev) => {
+        const index = prev.findIndex((row) => row.id === broadcast.id);
+        if (index === -1) return [broadcast, ...prev];
+        const next = prev.slice();
+        next[index] = { ...next[index], ...broadcast };
+        return next;
+      });
+    };
+
+    channel.bind('broadcast.updated', handleBroadcastUpdated);
+
+    return () => {
+      channel.unbind('broadcast.updated', handleBroadcastUpdated);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId]);
 
   const anySending = useMemo(
     () => broadcasts.some((b) => b.status === 'sending'),

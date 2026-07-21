@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { contactCustomValues, contacts, customFields } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 export async function PUT(
   request: Request,
@@ -43,6 +44,13 @@ export async function PUT(
         return [{ contactId: id, customFieldId: field.id, value: value.trim() }];
       });
       if (rows.length > 0) await tx.insert(contactCustomValues).values(rows);
+    });
+
+    await publishRealtimeEvent("contact_custom_values.updated", {
+      accountId: ctx.accountId,
+      payload: { contact_id: id },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish contact_custom_values.updated:", error);
     });
 
     return NextResponse.json({ success: true });

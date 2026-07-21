@@ -120,6 +120,13 @@ export function useRealtime({
         old: {},
       });
     };
+    const handleContactDeleted = (event: RealtimeEnvelope<ContactPayload>) => {
+      onContactRef.current?.({
+        eventType: "DELETE",
+        new: event.payload.contact,
+        old: event.payload.contact,
+      });
+    };
 
     client.connection.bind("connected", markConnected);
     client.connection.bind("unavailable", markDisconnected);
@@ -132,6 +139,7 @@ export function useRealtime({
     channel.bind("conversation.updated", handleConversationUpdated);
     channel.bind("contact.created", handleContactCreated);
     channel.bind("contact.updated", handleContactUpdated);
+    channel.bind("contact.deleted", handleContactDeleted);
 
     return () => {
       client.connection.unbind("connected", markConnected);
@@ -145,6 +153,7 @@ export function useRealtime({
       channel.unbind("conversation.updated", handleConversationUpdated);
       channel.unbind("contact.created", handleContactCreated);
       channel.unbind("contact.updated", handleContactUpdated);
+      channel.unbind("contact.deleted", handleContactDeleted);
       unsubscribeRealtimeChannel(socketChannelName);
       channelNameRef.current = null;
       setIsConnected(false);

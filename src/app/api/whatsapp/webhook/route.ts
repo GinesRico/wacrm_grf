@@ -18,6 +18,7 @@ import {
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
+import { publishBroadcastRecipientUpdatedById } from '@/lib/realtime/broadcast-events'
 
 // The `after()` callback in POST runs within this route's max duration.
 // Inbound processing can fan out to per-media Meta verification calls, so
@@ -491,6 +492,46 @@ function isValidStatusTransition(current: string, incoming: string): boolean {
   return ii > ci
 }
 
+function isoString(value: unknown): string {
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'string') return value
+  return new Date().toISOString()
+}
+
+function serializeRealtimeMessage(row: Record<string, unknown>) {
+  return {
+    id: String(row.id),
+    conversation_id: String(row.conversation_id),
+    sender_type: String(row.sender_type),
+    sender_id: typeof row.sender_id === 'string' ? row.sender_id : null,
+    content_type: String(row.content_type),
+    content_text: typeof row.content_text === 'string' ? row.content_text : null,
+    media_url: typeof row.media_url === 'string' ? row.media_url : null,
+    template_name: typeof row.template_name === 'string' ? row.template_name : null,
+    message_id: typeof row.message_id === 'string' ? row.message_id : null,
+    status: String(row.status),
+    reply_to_message_id:
+      typeof row.reply_to_message_id === 'string' ? row.reply_to_message_id : null,
+    interactive_reply_id:
+      typeof row.interactive_reply_id === 'string' ? row.interactive_reply_id : null,
+    interactive_payload:
+      row.interactive_payload && typeof row.interactive_payload === 'object'
+        ? row.interactive_payload
+        : null,
+    is_forwarded: Boolean(row.is_forwarded),
+    forwarded_from_message_id:
+      typeof row.forwarded_from_message_id === 'string'
+        ? row.forwarded_from_message_id
+        : null,
+    deleted_at: row.deleted_at ? isoString(row.deleted_at) : null,
+    deleted_by_user_id:
+      typeof row.deleted_by_user_id === 'string' ? row.deleted_by_user_id : null,
+    is_starred: Boolean(row.is_starred),
+    ai_generated: Boolean(row.ai_generated),
+    created_at: isoString(row.created_at),
+  }
+}
+
 async function handleStatusUpdate(status: {
   id: string
   status: string
@@ -502,10 +543,11 @@ async function handleStatusUpdate(status: {
   //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
   //    repeat across numbers), so this updates 0..N rows and must not
   //    assume a single row.
-  const { error: msgErr } = await dbAdmin()
+  const { data: updatedMessages, error: msgErr } = await dbAdmin()
     .from('messages')
     .update({ status: status.status })
     .eq('message_id', status.id)
+    .select('*')
 
   if (msgErr) {
     console.error('Error updating message status:', msgErr)
@@ -547,6 +589,8 @@ async function handleStatusUpdate(status: {
 
     if (recUpdateErr) {
       console.error('Error updating broadcast recipient status:', recUpdateErr)
+    } else {
+      await publishBroadcastRecipientUpdatedById(recipient.id)
     }
   }
 
@@ -577,6 +621,36 @@ async function handleStatusUpdate(status: {
       )
     }
   }
+
+  await Promise.all(
+    ((updatedMessages ?? []) as Record<string, unknown>[]).map(async (message) => {
+      const { data: owner } = await dbAdmin()
+        .from('messages')
+        .select('conversation_id, conversations(account_id)')
+        .eq('id', message.id)
+        .limit(1)
+        .maybeSingle()
+
+      const conv = owner?.conversations as { account_id: string } | null
+      const accountId = conv?.account_id
+      const conversationId =
+        typeof owner?.conversation_id === 'string'
+          ? owner.conversation_id
+          : typeof message.conversation_id === 'string'
+            ? message.conversation_id
+            : null
+
+      if (!accountId || !conversationId) return
+
+      await publishRealtimeEvent('message.updated', {
+        accountId,
+        conversationId,
+        payload: { message: serializeRealtimeMessage(message) },
+      }).catch((error) => {
+        console.warn('[realtime] failed to publish message.updated:', error)
+      })
+    }),
+  )
 }
 
 /**
@@ -612,6 +686,8 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
 
     if (updErr) {
       console.error('Error marking broadcast recipient replied:', updErr)
+    } else {
+      await publishBroadcastRecipientUpdatedById(row.id)
     }
   } catch (err) {
     console.error('flagBroadcastReplyIfAny failed:', err)

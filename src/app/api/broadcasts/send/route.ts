@@ -11,6 +11,10 @@ import {
 } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import {
+  publishBroadcastRecipientUpdated,
+  publishBroadcastUpdated,
+} from "@/lib/realtime/broadcast-events";
 import { normalizePhone } from "@/lib/whatsapp/phone-utils";
 
 type VariableMapping =
@@ -267,6 +271,8 @@ export async function POST(request: Request) {
       })
       .returning();
 
+    await publishBroadcastUpdated(ctx.accountId, broadcast.id);
+
     for (let i = 0; i < audienceContacts.length; i += INSERT_BATCH_SIZE) {
       const chunk = audienceContacts.slice(i, i + INSERT_BATCH_SIZE);
       await db.insert(broadcastRecipients).values(
@@ -333,7 +339,7 @@ export async function POST(request: Request) {
           const result = byPhone.get(row.contact.phone);
           if (result?.status === "sent") {
             sentCount++;
-            await db
+            const [updatedRecipient] = await db
               .update(broadcastRecipients)
               .set({
                 status: "sent",
@@ -341,26 +347,38 @@ export async function POST(request: Request) {
                 whatsappMessageId: result.whatsapp_message_id ?? null,
                 errorMessage: null,
               })
-              .where(eq(broadcastRecipients.id, row.recipient.id));
+              .where(eq(broadcastRecipients.id, row.recipient.id))
+              .returning({ id: broadcastRecipients.id });
+            if (updatedRecipient) {
+              await publishBroadcastRecipientUpdated(ctx.accountId, updatedRecipient.id);
+            }
           } else {
             failedCount++;
-            await db
+            const [updatedRecipient] = await db
               .update(broadcastRecipients)
               .set({
                 status: "failed",
                 errorMessage: result?.error ?? "Unknown error",
               })
-              .where(eq(broadcastRecipients.id, row.recipient.id));
+              .where(eq(broadcastRecipients.id, row.recipient.id))
+              .returning({ id: broadcastRecipients.id });
+            if (updatedRecipient) {
+              await publishBroadcastRecipientUpdated(ctx.accountId, updatedRecipient.id);
+            }
           }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         failedCount += batch.length;
         for (const row of batch) {
-          await db
+          const [updatedRecipient] = await db
             .update(broadcastRecipients)
             .set({ status: "failed", errorMessage: message })
-            .where(eq(broadcastRecipients.id, row.recipient.id));
+            .where(eq(broadcastRecipients.id, row.recipient.id))
+            .returning({ id: broadcastRecipients.id });
+          if (updatedRecipient) {
+            await publishBroadcastRecipientUpdated(ctx.accountId, updatedRecipient.id);
+          }
         }
       }
 
@@ -378,6 +396,7 @@ export async function POST(request: Request) {
         updatedAt: new Date(),
       })
       .where(eq(broadcasts.id, broadcast.id));
+    await publishBroadcastUpdated(ctx.accountId, broadcast.id);
 
     return NextResponse.json({ broadcast_id: broadcast.id });
   } catch (err) {

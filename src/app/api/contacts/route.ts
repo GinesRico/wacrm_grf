@@ -7,6 +7,7 @@ import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
 import { findExistingContact, isUniqueViolation } from "@/lib/contacts/dedupe";
 import { serializeContact } from "@/lib/contacts/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 import { normalizePhone } from "@/lib/whatsapp/phone-utils";
 
 function normalizeInput(body: Record<string, unknown>) {
@@ -173,7 +174,15 @@ export async function POST(request: Request) {
         return [contact];
       });
 
-      return NextResponse.json({ contact: serializeContact(created) }, { status: 201 });
+      const contact = serializeContact(created);
+      await publishRealtimeEvent("contact.created", {
+        accountId: ctx.accountId,
+        payload: { contact },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish contact.created:", error);
+      });
+
+      return NextResponse.json({ contact }, { status: 201 });
     } catch (error) {
       if (isUniqueViolation(error)) {
         const raced = await findExistingContact(null, ctx.accountId, input.phone);
@@ -231,7 +240,15 @@ export async function PATCH(request: Request) {
       }
     });
 
-    return NextResponse.json({ contact: serializeContact(updated) });
+    const contact = serializeContact(updated);
+    await publishRealtimeEvent("contact.updated", {
+      accountId: ctx.accountId,
+      payload: { contact },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish contact.updated:", error);
+    });
+
+    return NextResponse.json({ contact });
   } catch (err) {
     if (isUniqueViolation(err)) {
       return NextResponse.json({ error: "duplicate_phone" }, { status: 409 });
@@ -267,6 +284,17 @@ export async function DELETE(request: Request) {
     if (deleted.length === 0) {
       return NextResponse.json({ error: "Contact not found." }, { status: 404 });
     }
+
+    await Promise.all(
+      deleted.map((contact) =>
+        publishRealtimeEvent("contact.deleted", {
+          accountId: ctx.accountId,
+          payload: { contact },
+        }).catch((error) => {
+          console.warn("[realtime] failed to publish contact.deleted:", error);
+        }),
+      ),
+    );
 
     return NextResponse.json({ success: true });
   } catch (err) {

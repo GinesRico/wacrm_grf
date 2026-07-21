@@ -5,6 +5,8 @@ import { db } from "@/db/client";
 import { contactTags, contacts, tags } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { serializeContact, serializeTag } from "@/lib/contacts/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 export async function PUT(
   request: Request,
@@ -19,7 +21,7 @@ export async function PUT(
       : [];
 
     const [contact] = await db
-      .select({ id: contacts.id })
+      .select()
       .from(contacts)
       .where(and(eq(contacts.id, id), eq(contacts.accountId, ctx.accountId)))
       .limit(1);
@@ -40,6 +42,32 @@ export async function PUT(
           owned.map((tag) => ({ contactId: id, tagId: tag.id })),
         );
       }
+    });
+
+    const tagRows =
+      tagIds.length > 0
+        ? await db
+            .select({
+              id: tags.id,
+              userId: tags.userId,
+              accountId: tags.accountId,
+              name: tags.name,
+              color: tags.color,
+              createdAt: tags.createdAt,
+            })
+            .from(tags)
+            .where(and(eq(tags.accountId, ctx.accountId), inArray(tags.id, tagIds)))
+        : [];
+    await publishRealtimeEvent("contact.updated", {
+      accountId: ctx.accountId,
+      payload: {
+        contact: {
+          ...serializeContact(contact),
+          tags: tagRows.map(serializeTag),
+        },
+      },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish contact.updated:", error);
     });
 
     return NextResponse.json({ tag_ids: tagIds });

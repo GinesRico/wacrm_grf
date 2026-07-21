@@ -5,6 +5,8 @@ import { db } from "@/db/client";
 import { contactNotes, contacts } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { serializeNote } from "@/lib/contacts/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 export async function POST(request: Request) {
   try {
@@ -40,15 +42,16 @@ export async function POST(request: Request) {
       })
       .returning();
 
+    const serialized = serializeNote(note);
+    await publishRealtimeEvent("contact_note.created", {
+      accountId: ctx.accountId,
+      payload: { note: serialized },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish contact_note.created:", error);
+    });
+
     return NextResponse.json({
-      note: {
-        id: note.id,
-        contact_id: note.contactId,
-        account_id: note.accountId,
-        user_id: note.userId,
-        note_text: note.noteText,
-        created_at: note.createdAt.toISOString(),
-      },
+      note: serialized,
     });
   } catch (err) {
     return toErrorResponse(err);

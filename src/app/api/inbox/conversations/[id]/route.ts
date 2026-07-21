@@ -9,6 +9,7 @@ import {
   mutateInboxConversation,
   type InboxAction,
 } from "@/lib/inbox/tickets";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 const ACTIONS = new Set<InboxAction>([
   "accept",
@@ -71,7 +72,15 @@ export async function PATCH(
           ? body.department_id
           : body?.department_id === null
             ? null
-            : undefined,
+          : undefined,
+    });
+
+    await publishRealtimeEvent("conversation.updated", {
+      accountId: ctx.accountId,
+      conversationId: conversation.id,
+      payload: { conversation },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish conversation.updated:", error);
     });
 
     return NextResponse.json({ conversation });

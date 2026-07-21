@@ -31,6 +31,8 @@ import {
 } from "@/lib/whatsapp/phone-utils";
 import { getWhatsAppConfigForConversation } from "@/lib/whatsapp/config";
 import type { SendTimeParams } from "@/lib/whatsapp/template-send-builder";
+import { getInboxConversationById } from "@/lib/inbox/conversations";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 export const MEDIA_KINDS = ["image", "video", "document", "audio"] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -71,6 +73,31 @@ export interface SendMessageParams {
 export interface SendMessageResult {
   messageId: string;
   whatsappMessageId: string;
+}
+
+function serializeMessage(row: typeof messages.$inferSelect) {
+  return {
+    id: row.id,
+    conversation_id: row.conversationId,
+    sender_type: row.senderType,
+    sender_id: row.senderId,
+    content_type: row.contentType,
+    content_text: row.contentText,
+    media_url: row.mediaUrl,
+    template_name: row.templateName,
+    message_id: row.messageId,
+    status: row.status,
+    reply_to_message_id: row.replyToMessageId,
+    interactive_reply_id: row.interactiveReplyId,
+    interactive_payload: row.interactivePayload,
+    is_forwarded: row.isForwarded,
+    forwarded_from_message_id: row.forwardedFromMessageId,
+    deleted_at: row.deletedAt?.toISOString() ?? null,
+    deleted_by_user_id: row.deletedByUserId,
+    is_starred: row.isStarred,
+    ai_generated: row.aiGenerated,
+    created_at: row.createdAt.toISOString(),
+  };
 }
 
 export function validateSendMessageParams(params: {
@@ -444,7 +471,7 @@ export async function sendMessageToConversation(
       isForwarded: Boolean(params.isForwarded),
       forwardedFromMessageId: params.forwardedFromMessageId || null,
     })
-    .returning({ id: messages.id });
+    .returning();
 
   const lastMessageText =
     messageType === "interactive"
@@ -459,6 +486,26 @@ export async function sendMessageToConversation(
       updatedAt: new Date(),
     })
     .where(eq(conversations.id, conversationId));
+
+  const updatedConversation = await getInboxConversationById(accountId, conversationId);
+  await Promise.all([
+    publishRealtimeEvent("message.created", {
+      accountId,
+      conversationId,
+      payload: { message: serializeMessage(messageRecord) },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish message.created:", error);
+    }),
+    updatedConversation
+      ? publishRealtimeEvent("conversation.updated", {
+          accountId,
+          conversationId,
+          payload: { conversation: updatedConversation },
+        }).catch((error) => {
+          console.warn("[realtime] failed to publish conversation.updated:", error);
+        })
+      : Promise.resolve(),
+  ]);
 
   await db
     .execute(

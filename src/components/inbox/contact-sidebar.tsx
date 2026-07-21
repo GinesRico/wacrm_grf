@@ -25,6 +25,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
 import { useTranslations } from "next-intl";
 import { ContactDetailView } from "@/components/contacts/contact-detail-view";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 
 type ContactSidebarTab = "info" | "starred" | "media";
 
@@ -85,6 +90,7 @@ export function ContactSidebar({
 }: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
+  const { accountId } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ContactSidebarTab>("info");
   const [copied, setCopied] = useState(false);
@@ -130,6 +136,36 @@ export function ContactSidebar({
   useEffect(() => {
     fetchContactData();
   }, [fetchContactData]);
+
+  useEffect(() => {
+    if (!accountId || !displayedContact) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refreshIfCurrentContact = (contactId?: string | null) => {
+      if (contactId === displayedContact.id) void fetchContactData();
+    };
+    const handleNoteCreated = (event: {
+      payload?: { note?: { contact_id?: string | null } };
+    }) => refreshIfCurrentContact(event.payload?.note?.contact_id);
+    const handleNoteDeleted = (event: {
+      payload?: { note?: { contact_id?: string | null } };
+    }) => refreshIfCurrentContact(event.payload?.note?.contact_id);
+    const handleCustomValuesUpdated = (event: {
+      payload?: { contact_id?: string | null };
+    }) => refreshIfCurrentContact(event.payload?.contact_id);
+
+    channel.bind("contact_note.created", handleNoteCreated);
+    channel.bind("contact_note.deleted", handleNoteDeleted);
+    channel.bind("contact_custom_values.updated", handleCustomValuesUpdated);
+
+    return () => {
+      channel.unbind("contact_note.created", handleNoteCreated);
+      channel.unbind("contact_note.deleted", handleNoteDeleted);
+      channel.unbind("contact_custom_values.updated", handleCustomValuesUpdated);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, displayedContact?.id, fetchContactData]);
 
   const handleCopyPhone = useCallback(async () => {
     if (!displayedContact?.phone) return;

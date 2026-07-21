@@ -38,6 +38,11 @@ import {
   getRecipientStatus,
 } from '@/lib/broadcast-status';
 import { useTranslations } from 'next-intl';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from '@/lib/realtime/soketi-client';
 
 interface StatCardProps {
   label: string;
@@ -147,6 +152,7 @@ export default function BroadcastDetailPage() {
   const router = useRouter();
   const t = useTranslations('Broadcasts.detail');
   const tStatus = useTranslations('Broadcasts.status');
+  const { accountId } = useAuth();
   const broadcastId = params.id as string;
 
   const [broadcast, setBroadcast] = useState<Broadcast | null>(null);
@@ -176,6 +182,42 @@ export default function BroadcastDetailPage() {
 
     fetchData();
   }, [broadcastId, t]);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const handleBroadcastUpdated = (event: {
+      payload?: { broadcast?: Broadcast };
+    }) => {
+      const next = event.payload?.broadcast;
+      if (!next || next.id !== broadcastId) return;
+      setBroadcast(next);
+    };
+    const handleRecipientUpdated = (event: {
+      payload?: { recipient?: BroadcastRecipient };
+    }) => {
+      const recipient = event.payload?.recipient;
+      if (!recipient || recipient.broadcast_id !== broadcastId) return;
+      setRecipients((prev) => {
+        const index = prev.findIndex((row) => row.id === recipient.id);
+        if (index === -1) return [recipient, ...prev];
+        const next = prev.slice();
+        next[index] = { ...next[index], ...recipient };
+        return next;
+      });
+    };
+
+    channel.bind('broadcast.updated', handleBroadcastUpdated);
+    channel.bind('broadcast_recipient.updated', handleRecipientUpdated);
+
+    return () => {
+      channel.unbind('broadcast.updated', handleBroadcastUpdated);
+      channel.unbind('broadcast_recipient.updated', handleRecipientUpdated);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, broadcastId]);
 
   const filteredRecipients = useMemo(
     () =>
