@@ -187,12 +187,15 @@ export function useIncomingMessageAlerts(enabled: boolean) {
 
     const channelName = `private-account-${accountId}`;
     const channel = subscribeRealtimeChannel(channelName);
-    channel.bind("message.created", (event: { payload: IncomingMessageAlertPayload }) => {
+    const handleMessageCreated = (event: {
+      payload: IncomingMessageAlertPayload;
+    }) => {
       void showAlert(event.payload);
-    });
+    };
+    channel.bind("message.created", handleMessageCreated);
 
     return () => {
-      channel.unbind("message.created");
+      channel.unbind("message.created", handleMessageCreated);
       unsubscribeRealtimeChannel(channelName);
     };
   }, [accountId, enabled, router]);

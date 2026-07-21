@@ -13,6 +13,7 @@ export interface RealtimeClientConfig {
 let client: Pusher | null = null;
 let runtimeConfig: RealtimeClientConfig | null = null;
 let debugBound = false;
+const channelRefs = new Map<string, number>();
 
 const realtimeDebug =
   process.env.NEXT_PUBLIC_REALTIME_DEBUG === 'true' ||
@@ -33,6 +34,7 @@ export function setRealtimeClientConfig(config: RealtimeClientConfig) {
     client.disconnect();
     client = null;
   }
+  channelRefs.clear();
   debugBound = false;
 }
 
@@ -116,28 +118,47 @@ export function getRealtimeClient(): Pusher {
 }
 
 export function subscribeRealtimeChannel(channelName: string): Channel {
-  const channel = getRealtimeClient().subscribe(channelName);
+  const pusher = getRealtimeClient();
+  const currentRefs = channelRefs.get(channelName) ?? 0;
+  channelRefs.set(channelName, currentRefs + 1);
+
+  const channel = pusher.channel(channelName) ?? pusher.subscribe(channelName);
   debugInfo('[realtime] subscribing', {
     channel: channelName,
-    state: getRealtimeClient().connection.state,
+    refs: currentRefs + 1,
+    state: pusher.connection.state,
   });
-  channel.bind('pusher:subscription_succeeded', () => {
-    debugInfo('[realtime] subscription succeeded', { channel: channelName });
-  });
-  channel.bind('pusher:subscription_error', (error: unknown) => {
-    console.error('[realtime] subscription error', {
-      channel: channelName,
-      error,
+  if (currentRefs === 0) {
+    channel.bind('pusher:subscription_succeeded', () => {
+      debugInfo('[realtime] subscription succeeded', { channel: channelName });
     });
-  });
+    channel.bind('pusher:subscription_error', (error: unknown) => {
+      console.error('[realtime] subscription error', {
+        channel: channelName,
+        error,
+      });
+    });
+  }
   return channel;
 }
 
 export function unsubscribeRealtimeChannel(channelName: string) {
+  const currentRefs = channelRefs.get(channelName) ?? 0;
+  if (currentRefs > 1) {
+    channelRefs.set(channelName, currentRefs - 1);
+    debugInfo('[realtime] keeping channel subscribed', {
+      channel: channelName,
+      refs: currentRefs - 1,
+    });
+    return;
+  }
+
+  channelRefs.delete(channelName);
   getRealtimeClient().unsubscribe(channelName);
 }
 
 export function disconnectRealtimeClient() {
   client?.disconnect();
   client = null;
+  channelRefs.clear();
 }

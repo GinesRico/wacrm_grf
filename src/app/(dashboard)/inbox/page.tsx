@@ -75,6 +75,17 @@ function mergeRealtimeMessage(messages: Message[], message: Message) {
   return [...messages, message];
 }
 
+function mergeConversation(existing: Conversation, incoming: Conversation) {
+  return {
+    ...existing,
+    ...incoming,
+    contact: incoming.contact ?? existing.contact,
+    whatsapp_config: incoming.whatsapp_config ?? existing.whatsapp_config,
+    department: incoming.department ?? existing.department,
+    assigned_agent: incoming.assigned_agent ?? existing.assigned_agent,
+  };
+}
+
 export default function InboxPage() {
   const t = useTranslations("Inbox.page");
   const router = useRouter();
@@ -338,8 +349,7 @@ export default function InboxPage() {
               prev.map((c) =>
                 c.id === conv.id
                   ? {
-                      ...c,
-                      ...conv,
+                      ...mergeConversation(c, conv),
                       unread_count: isActive ? 0 : conv.unread_count,
                     }
                   : c,
@@ -623,31 +633,14 @@ export default function InboxPage() {
     setConversations((prev) => {
       const existing = prev.find((c) => c.id === conversation.id);
       const merged = existing
-        ? {
-            ...existing,
-            ...conversation,
-            contact: conversation.contact ?? existing.contact,
-            whatsapp_config:
-              conversation.whatsapp_config ?? existing.whatsapp_config,
-            department: conversation.department ?? existing.department,
-            assigned_agent:
-              conversation.assigned_agent ?? existing.assigned_agent,
-          }
+        ? mergeConversation(existing, conversation)
         : conversation;
       const withoutExisting = prev.filter((c) => c.id !== conversation.id);
       return sortConversationsByActivity([merged, ...withoutExisting]);
     });
     setActiveConversation((prev) =>
       prev?.id === conversation.id
-        ? {
-            ...prev,
-            ...conversation,
-            contact: conversation.contact ?? prev.contact,
-            whatsapp_config:
-              conversation.whatsapp_config ?? prev.whatsapp_config,
-            department: conversation.department ?? prev.department,
-            assigned_agent: conversation.assigned_agent ?? prev.assigned_agent,
-          }
+        ? mergeConversation(prev, conversation)
         : prev,
     );
     if (conversation.contact) {

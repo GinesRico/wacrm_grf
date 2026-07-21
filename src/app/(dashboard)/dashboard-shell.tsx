@@ -16,6 +16,22 @@ import {
   type RealtimeClientConfig,
 } from "@/lib/realtime/soketi-client";
 
+const CHUNK_RELOAD_KEY = "wacrm:last-chunk-reload";
+const REALTIME_DEBUG =
+  process.env.NEXT_PUBLIC_REALTIME_DEBUG === "true" ||
+  process.env.NODE_ENV !== "production";
+
+function reloadOnceForStaleChunk() {
+  try {
+    const lastReload = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? "0");
+    if (Date.now() - lastReload < 30_000) return;
+    sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+  } catch {
+    // If storage is unavailable, a single reload is still the best recovery.
+  }
+  window.location.reload();
+}
+
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
 // client components can't export Next's metadata object.
@@ -33,6 +49,37 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+
+  useEffect(() => {
+    const handleResourceError = (event: ErrorEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLScriptElement &&
+        target.src.includes("/_next/static/")
+      ) {
+        reloadOnceForStaleChunk();
+      }
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason =
+        event.reason instanceof Error
+          ? event.reason.message
+          : String(event.reason ?? "");
+      if (/ChunkLoadError|Loading chunk|_next\/static/i.test(reason)) {
+        reloadOnceForStaleChunk();
+      }
+    };
+
+    window.addEventListener("error", handleResourceError, true);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", handleResourceError, true);
+      window.removeEventListener(
+        "unhandledrejection",
+        handleUnhandledRejection,
+      );
+    };
+  }, []);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -82,17 +129,19 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           const accountChannelName = `private-account-${accountId}`;
           setRealtimeClientConfig(payload);
           getRealtimeClient().connect();
-          channelName = accountChannelName;
-          const channel = subscribeRealtimeChannel(accountChannelName);
-          channel.bind("realtime.debug", (event: unknown) => {
-            console.info("[realtime] debug event received", event);
-          });
-          console.info("[realtime] initialized", {
-            host: payload.host,
-            port: payload.port,
-            forceTLS: payload.forceTLS,
-            channel: accountChannelName,
-          });
+          if (REALTIME_DEBUG) {
+            channelName = accountChannelName;
+            const channel = subscribeRealtimeChannel(accountChannelName);
+            channel.bind("realtime.debug", (event: unknown) => {
+              console.info("[realtime] debug event received", event);
+            });
+            console.info("[realtime] initialized", {
+              host: payload.host,
+              port: payload.port,
+              forceTLS: payload.forceTLS,
+              channel: accountChannelName,
+            });
+          }
           setRealtimeReady(true);
         }
       } catch (error) {
