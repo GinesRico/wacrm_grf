@@ -8,6 +8,7 @@ import { toErrorResponse } from "@/lib/auth/errors";
 import { decrypt } from "@/lib/whatsapp/encryption";
 import { getDefaultWhatsAppConfig } from "@/lib/whatsapp/config";
 import { normalizeStatus } from "@/lib/whatsapp/template-status-normalize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 import type { TemplateButton, TemplateSampleValues } from "@/types";
 
 const META_API_VERSION = "v21.0";
@@ -274,6 +275,15 @@ export async function POST() {
           message: err instanceof Error ? err.message : "Template sync failed.",
         });
       }
+    }
+
+    if (inserted > 0 || updated > 0) {
+      await publishRealtimeEvent("template.updated", {
+        accountId: ctx.accountId,
+        payload: { synced: true, inserted, updated },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish template.updated:", error);
+      });
     }
 
     return NextResponse.json({

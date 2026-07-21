@@ -43,6 +43,10 @@ import {
 import type { TemplateSlug } from "@/lib/automations/templates"
 import { triggerMeta, formatRelative } from "@/lib/automations/trigger-meta"
 import { cn } from "@/lib/utils"
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client"
 
 const TEMPLATE_ORDER: TemplateSlug[] = [
   "welcome_message",
@@ -61,7 +65,7 @@ const TEMPLATE_ICON: Record<TemplateSlug, typeof Zap> = {
 export default function AutomationsPage() {
   const router = useRouter()
   const canCreate = useCan("edit-settings")
-  const { profileLoading } = useAuth()
+  const { accountId, profileLoading } = useAuth()
   const t = useTranslations("Automations.list")
   const [automations, setAutomations] = useState<Automation[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -82,6 +86,25 @@ export default function AutomationsPage() {
   useEffect(() => {
     load()
   }, [])
+
+  useEffect(() => {
+    if (!accountId) return
+
+    const channelName = `private-account-${accountId}`
+    const channel = subscribeRealtimeChannel(channelName)
+    const refresh = () => void load()
+
+    channel.bind("automation.created", refresh)
+    channel.bind("automation.updated", refresh)
+    channel.bind("automation.deleted", refresh)
+
+    return () => {
+      channel.unbind("automation.created", refresh)
+      channel.unbind("automation.updated", refresh)
+      channel.unbind("automation.deleted", refresh)
+      unsubscribeRealtimeChannel(channelName)
+    }
+  }, [accountId])
 
   async function toggleActive(a: Automation, next: boolean) {
     // Optimistic flip so the switch feels instant.

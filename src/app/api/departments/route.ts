@@ -5,6 +5,7 @@ import { db } from "@/db/client";
 import { departmentMembers, departments } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 import type { Department } from "@/types";
 
 const DEFAULT_COLOR = "#22c55e";
@@ -79,10 +80,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Department name is required." }, { status: 400 });
     }
 
-    await db.insert(departments).values({
+    const [created] = await db.insert(departments).values({
       accountId: ctx.accountId,
       name,
       color: normalizeColor(body?.color),
+    }).returning();
+    await publishRealtimeEvent("department.created", {
+      accountId: ctx.accountId,
+      payload: { department: serializeDepartment(created, []) },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish department.created:", error);
     });
 
     return NextResponse.json({

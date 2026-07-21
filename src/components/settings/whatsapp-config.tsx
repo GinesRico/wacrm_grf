@@ -38,6 +38,10 @@ import {
 } from '@/components/ui/select';
 import type { Department, WhatsAppConfig as WhatsAppConfigType } from '@/types';
 import { useAppConfirm } from '@/hooks/use-app-dialog';
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from '@/lib/realtime/soketi-client';
 
 const MASKED_TOKEN = '••••••••••••••••';
 
@@ -215,6 +219,34 @@ export function WhatsAppConfig() {
     loadedAccountIdRef.current = accountId;
     fetchConfig();
   }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refresh = () => {
+      loadedAccountIdRef.current = null;
+      void fetchConfig();
+    };
+
+    channel.bind('whatsapp_config.created', refresh);
+    channel.bind('whatsapp_config.updated', refresh);
+    channel.bind('whatsapp_config.deleted', refresh);
+    channel.bind('department.created', refresh);
+    channel.bind('department.updated', refresh);
+    channel.bind('department.deleted', refresh);
+
+    return () => {
+      channel.unbind('whatsapp_config.created', refresh);
+      channel.unbind('whatsapp_config.updated', refresh);
+      channel.unbind('whatsapp_config.deleted', refresh);
+      channel.unbind('department.created', refresh);
+      channel.unbind('department.updated', refresh);
+      channel.unbind('department.deleted', refresh);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, fetchConfig]);
 
   async function handleSave() {
     if (!phoneNumberId.trim()) {

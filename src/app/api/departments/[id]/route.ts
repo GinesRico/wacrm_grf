@@ -11,6 +11,8 @@ import {
 } from "@/db/schema";
 import { requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
+import type { Department } from "@/types";
 
 const DEFAULT_COLOR = "#22c55e";
 
@@ -46,6 +48,21 @@ async function validMemberIds(accountId: string, requested: unknown): Promise<st
     .where(and(eq(profiles.accountId, accountId), inArray(profiles.userId, unique)));
   const allowed = new Set(rows.map((row) => row.userId));
   return unique.filter((id) => allowed.has(id));
+}
+
+function serializeDepartment(
+  department: typeof departments.$inferSelect,
+  memberUserIds: string[],
+): Department {
+  return {
+    id: department.id,
+    account_id: department.accountId,
+    name: department.name,
+    color: department.color,
+    created_at: department.createdAt.toISOString(),
+    updated_at: department.updatedAt.toISOString(),
+    member_user_ids: memberUserIds,
+  };
 }
 
 export async function PATCH(
@@ -98,6 +115,34 @@ export async function PATCH(
       }
     }
 
+    const [department] = await db
+      .select()
+      .from(departments)
+      .where(and(eq(departments.accountId, ctx.accountId), eq(departments.id, id)))
+      .limit(1);
+    const members = await db
+      .select({ userId: departmentMembers.userId })
+      .from(departmentMembers)
+      .where(
+        and(
+          eq(departmentMembers.accountId, ctx.accountId),
+          eq(departmentMembers.departmentId, id),
+        ),
+      );
+    if (department) {
+      await publishRealtimeEvent("department.updated", {
+        accountId: ctx.accountId,
+        payload: {
+          department: serializeDepartment(
+            department,
+            members.map((member) => member.userId),
+          ),
+        },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish department.updated:", error);
+      });
+    }
+
     return NextResponse.json({ ok: true });
   } catch (err) {
     return toErrorResponse(err);
@@ -143,6 +188,19 @@ export async function DELETE(
       await tx
         .delete(departments)
         .where(and(eq(departments.accountId, ctx.accountId), eq(departments.id, id)));
+    });
+
+    await publishRealtimeEvent("department.deleted", {
+      accountId: ctx.accountId,
+      payload: { department: { id, fallback_id: fallback?.id ?? null } },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish department.deleted:", error);
+    });
+    await publishRealtimeEvent("whatsapp_config.updated", {
+      accountId: ctx.accountId,
+      payload: { department_id: fallback?.id ?? null },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish whatsapp_config.updated:", error);
     });
 
     return NextResponse.json({ ok: true });

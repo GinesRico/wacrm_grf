@@ -5,6 +5,7 @@ import { db } from '@/db/client'
 import { flowNodes, flows } from '@/db/schema'
 import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/account'
 import { serializeFlow, serializeFlowNode } from '@/lib/flows/serialize'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 interface PutBody {
   name?: string
@@ -121,8 +122,18 @@ export async function PUT(
     .where(eq(flowNodes.flowId, id))
     .orderBy(asc(flowNodes.createdAt))
 
+  const serializedFlow = flow ? serializeFlow(flow) : null
+  if (serializedFlow) {
+    await publishRealtimeEvent('flow.updated', {
+      accountId: ctx.accountId,
+      payload: { flow: serializedFlow },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish flow.updated:', error)
+    })
+  }
+
   return NextResponse.json({
-    flow: flow ? serializeFlow(flow) : null,
+    flow: serializedFlow,
     nodes: nodes.map(serializeFlowNode),
   })
 }
@@ -137,6 +148,12 @@ export async function DELETE(
     await db
       .delete(flows)
       .where(and(eq(flows.id, id), eq(flows.accountId, accountId)))
+    await publishRealtimeEvent('flow.deleted', {
+      accountId,
+      payload: { flow: { id } },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish flow.deleted:', error)
+    })
     return NextResponse.json({ ok: true })
   } catch (err) {
     return toErrorResponse(err)

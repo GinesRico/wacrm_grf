@@ -15,6 +15,7 @@ import {
   hydrateAssignedAgents,
   normalizeConversations,
 } from "@/lib/inbox/conversations";
+import { createRealtimeNotification } from "@/lib/notifications/create-notification";
 
 export type InboxTab = "inbox" | "resolved" | "search";
 export type InboxSubtab = "open" | "pending";
@@ -481,6 +482,26 @@ export async function mutateInboxConversation(
     } catch (messageError) {
       console.error("Failed to create inbox system message:", messageError);
     }
+  }
+
+  if (
+    updated.assigned_agent_id &&
+    updated.assigned_agent_id !== params.userId &&
+    updated.assigned_agent_id !== current.assigned_agent_id
+  ) {
+    await createRealtimeNotification({
+      accountId: params.accountId,
+      userId: updated.assigned_agent_id,
+      conversationId: updated.id,
+      contactId: updated.contact_id,
+      actorUserId: params.userId,
+      title: "Conversacion asignada",
+      body: updated.contact?.name
+        ? `${updated.contact.name} te ha sido asignado`
+        : "Se te ha asignado una conversacion",
+    }).catch((error) => {
+      console.warn("[notifications] failed to create assignment notification:", error);
+    });
   }
 
   return updated;

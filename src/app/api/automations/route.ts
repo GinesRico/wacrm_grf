@@ -12,6 +12,7 @@ import {
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
 import { assertCanCreateAutomation } from '@/lib/platform/entitlements'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 export async function GET() {
   try {
@@ -103,5 +104,13 @@ export async function POST(request: Request) {
     if (err) return NextResponse.json({ error: err }, { status: 500 })
   }
 
-  return NextResponse.json({ automation: serializeAutomation(automation) }, { status: 201 })
+  const serialized = serializeAutomation(automation)
+  await publishRealtimeEvent('automation.created', {
+    accountId: ctx.accountId,
+    payload: { automation: serialized },
+  }).catch((error) => {
+    console.warn('[realtime] failed to publish automation.created:', error)
+  })
+
+  return NextResponse.json({ automation: serialized }, { status: 201 })
 }

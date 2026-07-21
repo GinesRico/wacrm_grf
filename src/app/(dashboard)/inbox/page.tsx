@@ -5,6 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import type { Conversation, Message, Contact } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
@@ -37,6 +42,7 @@ export default function InboxPage() {
   const t = useTranslations("Inbox.page");
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { accountId } = useAuth();
   /**
    * `?c=<id>` deep-link support. Used when landing here from the
    * dashboard's recent-conversations list so the right thread opens
@@ -414,6 +420,31 @@ export default function InboxPage() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const resync = () => setResyncToken((n) => n + 1);
+
+    channel.bind("department.created", resync);
+    channel.bind("department.updated", resync);
+    channel.bind("department.deleted", resync);
+    channel.bind("whatsapp_config.created", resync);
+    channel.bind("whatsapp_config.updated", resync);
+    channel.bind("whatsapp_config.deleted", resync);
+
+    return () => {
+      channel.unbind("department.created", resync);
+      channel.unbind("department.updated", resync);
+      channel.unbind("department.deleted", resync);
+      channel.unbind("whatsapp_config.created", resync);
+      channel.unbind("whatsapp_config.updated", resync);
+      channel.unbind("whatsapp_config.deleted", resync);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId]);
 
   /**
    * Manual refresh trigger for the thread-header refresh button.

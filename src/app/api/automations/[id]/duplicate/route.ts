@@ -6,6 +6,7 @@ import { automations, automationSteps } from '@/db/schema'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { serializeAutomation } from '@/lib/automations/serialize'
 import { assertCanCreateAutomation } from '@/lib/platform/entitlements'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 export async function POST(
   _request: Request,
@@ -65,7 +66,15 @@ export async function POST(
       )
     }
 
-    return NextResponse.json({ automation: serializeAutomation(copy) }, { status: 201 })
+    const automation = serializeAutomation(copy)
+    await publishRealtimeEvent('automation.created', {
+      accountId: ctx.accountId,
+      payload: { automation },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish automation.created:', error)
+    })
+
+    return NextResponse.json({ automation }, { status: 201 })
   } catch (err) {
     return toErrorResponse(err)
   }

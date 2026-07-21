@@ -6,6 +6,7 @@ import { pipelineStages, pipelines } from "@/db/schema";
 import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
 import { serializePipeline, serializeStage } from "@/lib/pipelines/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 const DEFAULT_STAGES = [
   { name: "New Lead", color: "#3b82f6", position: 0 },
@@ -82,11 +83,20 @@ export async function POST(request: Request) {
       ctx.accountId,
       name,
     );
+    const serializedPipeline = serializePipeline(pipeline);
+    const serializedStages = stages.map(serializeStage);
+
+    await publishRealtimeEvent("pipeline.created", {
+      accountId: ctx.accountId,
+      payload: { pipeline: serializedPipeline, stages: serializedStages },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish pipeline.created:", error);
+    });
 
     return NextResponse.json(
       {
-        pipeline: serializePipeline(pipeline),
-        stages: stages.map(serializeStage),
+        pipeline: serializedPipeline,
+        stages: serializedStages,
       },
       { status: 201 },
     );
@@ -116,7 +126,15 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Pipeline not found." }, { status: 404 });
     }
 
-    return NextResponse.json({ pipeline: serializePipeline(updated) });
+    const pipeline = serializePipeline(updated);
+    await publishRealtimeEvent("pipeline.updated", {
+      accountId: ctx.accountId,
+      payload: { pipeline },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish pipeline.updated:", error);
+    });
+
+    return NextResponse.json({ pipeline });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -139,6 +157,13 @@ export async function DELETE(request: Request) {
     if (deleted.length === 0) {
       return NextResponse.json({ error: "Pipeline not found." }, { status: 404 });
     }
+
+    await publishRealtimeEvent("pipeline.deleted", {
+      accountId: ctx.accountId,
+      payload: { pipeline: { id } },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish pipeline.deleted:", error);
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

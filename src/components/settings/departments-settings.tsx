@@ -12,11 +12,17 @@ import { Label } from '@/components/ui/label';
 import { SettingsPanelHead } from './settings-panel-head';
 import type { Department } from '@/types';
 import { useAppConfirm } from '@/hooks/use-app-dialog';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from '@/lib/realtime/soketi-client';
 
 const DEFAULT_COLOR = '#22c55e';
 
 export function DepartmentsSettings() {
   const t = useTranslations('Settings.departments');
+  const { accountId } = useAuth();
   const [departments, setDepartments] = useState<Department[]>([]);
   const [name, setName] = useState('');
   const [color, setColor] = useState(DEFAULT_COLOR);
@@ -42,6 +48,25 @@ export function DepartmentsSettings() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refresh = () => void load();
+
+    channel.bind('department.created', refresh);
+    channel.bind('department.updated', refresh);
+    channel.bind('department.deleted', refresh);
+
+    return () => {
+      channel.unbind('department.created', refresh);
+      channel.unbind('department.updated', refresh);
+      channel.unbind('department.deleted', refresh);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, load]);
 
   async function createDepartment() {
     const trimmed = name.trim();

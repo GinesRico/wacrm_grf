@@ -6,6 +6,7 @@ import { flowNodes, flows } from '@/db/schema'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { serializeFlow } from '@/lib/flows/serialize'
 import { validateFlowForActivation } from '@/lib/flows/validate'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 export async function POST(
   request: Request,
@@ -73,5 +74,15 @@ export async function POST(
     .where(and(eq(flows.id, id), eq(flows.accountId, ctx.accountId)))
     .returning()
 
-  return NextResponse.json({ flow: updated ? serializeFlow(updated) : null })
+  const flow = updated ? serializeFlow(updated) : null
+  if (flow) {
+    await publishRealtimeEvent('flow.updated', {
+      accountId: ctx.accountId,
+      payload: { flow },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish flow.updated:', error)
+    })
+  }
+
+  return NextResponse.json({ flow })
 }

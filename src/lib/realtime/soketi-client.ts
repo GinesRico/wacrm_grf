@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import Pusher, { type Channel } from "pusher-js";
+import Pusher, { type Channel } from 'pusher-js';
 
 export interface RealtimeClientConfig {
   key: string;
@@ -13,6 +13,19 @@ export interface RealtimeClientConfig {
 let client: Pusher | null = null;
 let runtimeConfig: RealtimeClientConfig | null = null;
 let debugBound = false;
+
+const realtimeDebug =
+  process.env.NEXT_PUBLIC_REALTIME_DEBUG === 'true' ||
+  process.env.NODE_ENV !== 'production';
+
+function debugInfo(message: string, meta?: unknown) {
+  if (!realtimeDebug) return;
+  if (meta === undefined) {
+    console.info(message);
+    return;
+  }
+  console.info(message, meta);
+}
 
 export function setRealtimeClientConfig(config: RealtimeClientConfig) {
   runtimeConfig = config;
@@ -34,8 +47,8 @@ function envConfig(): RealtimeClientConfig | null {
     port: process.env.NEXT_PUBLIC_SOKETI_PORT
       ? Number(process.env.NEXT_PUBLIC_SOKETI_PORT)
       : undefined,
-    forceTLS: process.env.NEXT_PUBLIC_SOKETI_TLS !== "false",
-    cluster: process.env.NEXT_PUBLIC_SOKETI_CLUSTER ?? "mt1",
+    forceTLS: process.env.NEXT_PUBLIC_SOKETI_TLS !== 'false',
+    cluster: process.env.NEXT_PUBLIC_SOKETI_CLUSTER ?? 'mt1',
   };
 }
 
@@ -45,31 +58,31 @@ export function getRealtimeClient(): Pusher {
   const config = runtimeConfig ?? envConfig();
   if (!config?.key || !config.host) {
     throw new Error(
-      "NEXT_PUBLIC_SOKETI_APP_KEY and NEXT_PUBLIC_SOKETI_HOST are required.",
+      'NEXT_PUBLIC_SOKETI_APP_KEY and NEXT_PUBLIC_SOKETI_HOST are required.'
     );
   }
 
-  Pusher.logToConsole = true;
-  console.info("[realtime] creating Pusher client", {
+  Pusher.logToConsole = realtimeDebug;
+  debugInfo('[realtime] creating Pusher client', {
     host: config.host,
     port: config.port,
     forceTLS: config.forceTLS,
   });
 
   client = new Pusher(config.key, {
-    cluster: config.cluster ?? "mt1",
+    cluster: config.cluster ?? 'mt1',
     wsHost: config.host,
     wsPort: config.port,
     wssPort: config.port,
     forceTLS: config.forceTLS,
-    enabledTransports: ["ws"],
+    enabledTransports: ['ws'],
     enableStats: false,
     authorizer: (channel) => ({
       authorize: async (socketId, callback) => {
         try {
-          const response = await fetch("/api/realtime/auth", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
+          const response = await fetch('/api/realtime/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               socket_id: socketId,
               channel_name: channel.name,
@@ -77,7 +90,7 @@ export function getRealtimeClient(): Pusher {
           });
           const payload = await response.json();
           if (!response.ok) {
-            callback(new Error(payload?.error ?? "Realtime auth failed"), null);
+            callback(new Error(payload?.error ?? 'Realtime auth failed'), null);
             return;
           }
           callback(null, payload);
@@ -90,12 +103,12 @@ export function getRealtimeClient(): Pusher {
 
   if (!debugBound) {
     debugBound = true;
-    console.info("[realtime] initial connection state", client.connection.state);
-    client.connection.bind("state_change", (states: unknown) => {
-      console.info("[realtime] connection state", states);
+    debugInfo('[realtime] initial connection state', client.connection.state);
+    client.connection.bind('state_change', (states: unknown) => {
+      debugInfo('[realtime] connection state', states);
     });
-    client.connection.bind("error", (error: unknown) => {
-      console.error("[realtime] connection error", error);
+    client.connection.bind('error', (error: unknown) => {
+      console.error('[realtime] connection error', error);
     });
   }
 
@@ -104,15 +117,15 @@ export function getRealtimeClient(): Pusher {
 
 export function subscribeRealtimeChannel(channelName: string): Channel {
   const channel = getRealtimeClient().subscribe(channelName);
-  console.info("[realtime] subscribing", {
+  debugInfo('[realtime] subscribing', {
     channel: channelName,
     state: getRealtimeClient().connection.state,
   });
-  channel.bind("pusher:subscription_succeeded", () => {
-    console.info("[realtime] subscription succeeded", { channel: channelName });
+  channel.bind('pusher:subscription_succeeded', () => {
+    debugInfo('[realtime] subscription succeeded', { channel: channelName });
   });
-  channel.bind("pusher:subscription_error", (error: unknown) => {
-    console.error("[realtime] subscription error", {
+  channel.bind('pusher:subscription_error', (error: unknown) => {
+    console.error('[realtime] subscription error', {
       channel: channelName,
       error,
     });

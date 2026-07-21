@@ -12,6 +12,7 @@ import {
   verifyPhoneNumber,
 } from "@/lib/whatsapp/meta-api";
 import { decrypt, encrypt } from "@/lib/whatsapp/encryption";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 function serializeConfig(row: typeof whatsappConfig.$inferSelect) {
   return {
@@ -153,6 +154,13 @@ export async function PATCH(request: Request) {
         .update(whatsappConfig)
         .set({ isDefault: true, updatedAt: new Date() })
         .where(and(eq(whatsappConfig.accountId, ctx.accountId), eq(whatsappConfig.id, id)));
+    });
+
+    await publishRealtimeEvent("whatsapp_config.updated", {
+      accountId: ctx.accountId,
+      payload: { id },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish whatsapp_config.updated:", error);
     });
 
     return NextResponse.json({ success: true });
@@ -358,6 +366,13 @@ export async function POST(request: Request) {
       }
     });
 
+    await publishRealtimeEvent(existing ? "whatsapp_config.updated" : "whatsapp_config.created", {
+      accountId: ctx.accountId,
+      payload: { id: existing?.id ?? null },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish whatsapp_config change:", error);
+    });
+
     if (registrationError) {
       return NextResponse.json({
         success: false,
@@ -407,6 +422,13 @@ export async function DELETE(request: Request) {
         .set({ isDefault: true, updatedAt: new Date() })
         .where(and(eq(whatsappConfig.id, remaining.id), eq(whatsappConfig.accountId, ctx.accountId)));
     }
+
+    await publishRealtimeEvent("whatsapp_config.deleted", {
+      accountId: ctx.accountId,
+      payload: { id },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish whatsapp_config.deleted:", error);
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

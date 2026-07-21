@@ -28,6 +28,11 @@ import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
 import { GatedButton } from "@/components/ui/gated-button";
 import { useTranslations } from "next-intl";
+import { useAuth } from "@/hooks/use-auth";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 
 // Pipeline creation is admin-class (settings-tier write under
 // the new RLS); deal creation is operational and only requires
@@ -39,6 +44,7 @@ export default function PipelinesPage() {
   const t = useTranslations("Pipelines.page");
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
+  const { accountId } = useAuth();
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
@@ -151,6 +157,45 @@ export default function PipelinesPage() {
     if (!selectedPipelineId) return;
     setDeals(await loadDeals(selectedPipelineId));
   }, [loadDeals, selectedPipelineId]);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refreshPipelineState = () => {
+      void refreshPipelines();
+      void refreshStages();
+      void refreshDeals();
+    };
+    const refreshBoard = () => {
+      void refreshStages();
+      void refreshDeals();
+    };
+
+    channel.bind("pipeline.created", refreshPipelineState);
+    channel.bind("pipeline.updated", refreshPipelineState);
+    channel.bind("pipeline.deleted", refreshPipelineState);
+    channel.bind("pipeline_stage.created", refreshBoard);
+    channel.bind("pipeline_stage.updated", refreshBoard);
+    channel.bind("pipeline_stage.deleted", refreshBoard);
+    channel.bind("deal.created", refreshDeals);
+    channel.bind("deal.updated", refreshDeals);
+    channel.bind("deal.deleted", refreshDeals);
+
+    return () => {
+      channel.unbind("pipeline.created", refreshPipelineState);
+      channel.unbind("pipeline.updated", refreshPipelineState);
+      channel.unbind("pipeline.deleted", refreshPipelineState);
+      channel.unbind("pipeline_stage.created", refreshBoard);
+      channel.unbind("pipeline_stage.updated", refreshBoard);
+      channel.unbind("pipeline_stage.deleted", refreshBoard);
+      channel.unbind("deal.created", refreshDeals);
+      channel.unbind("deal.updated", refreshDeals);
+      channel.unbind("deal.deleted", refreshDeals);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, refreshDeals, refreshPipelines, refreshStages]);
 
   const handleDealMoved = useCallback(
     async (dealId: string, newStageId: string) => {

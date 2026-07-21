@@ -12,6 +12,7 @@ import {
 import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
 import { serializeDeal } from "@/lib/pipelines/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 const DEAL_STATUSES = new Set(["open", "won", "lost"]);
 
@@ -142,7 +143,15 @@ export async function POST(request: Request) {
       })
       .returning();
 
-    return NextResponse.json({ deal: serializeDeal(created) }, { status: 201 });
+    const deal = serializeDeal(created);
+    await publishRealtimeEvent("deal.created", {
+      accountId: ctx.accountId,
+      payload: { deal },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish deal.created:", error);
+    });
+
+    return NextResponse.json({ deal }, { status: 201 });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -177,7 +186,14 @@ export async function PATCH(request: Request) {
         .set({ stageId, updatedAt: new Date() })
         .where(and(eq(deals.accountId, ctx.accountId), eq(deals.id, id)))
         .returning();
-      return NextResponse.json({ deal: serializeDeal(updated) });
+      const deal = serializeDeal(updated);
+      await publishRealtimeEvent("deal.updated", {
+        accountId: ctx.accountId,
+        payload: { deal },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish deal.updated:", error);
+      });
+      return NextResponse.json({ deal });
     }
 
     if (action === "status") {
@@ -193,7 +209,14 @@ export async function PATCH(request: Request) {
       if (!updated) {
         return NextResponse.json({ error: "Deal not found." }, { status: 404 });
       }
-      return NextResponse.json({ deal: serializeDeal(updated) });
+      const deal = serializeDeal(updated);
+      await publishRealtimeEvent("deal.updated", {
+        accountId: ctx.accountId,
+        payload: { deal },
+      }).catch((error) => {
+        console.warn("[realtime] failed to publish deal.updated:", error);
+      });
+      return NextResponse.json({ deal });
     }
 
     const input = normalizeDealInput(body);
@@ -231,7 +254,15 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Deal not found." }, { status: 404 });
     }
 
-    return NextResponse.json({ deal: serializeDeal(updated) });
+    const deal = serializeDeal(updated);
+    await publishRealtimeEvent("deal.updated", {
+      accountId: ctx.accountId,
+      payload: { deal },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish deal.updated:", error);
+    });
+
+    return NextResponse.json({ deal });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -249,11 +280,18 @@ export async function DELETE(request: Request) {
     const deleted = await db
       .delete(deals)
       .where(and(eq(deals.accountId, ctx.accountId), eq(deals.id, id)))
-      .returning({ id: deals.id });
+      .returning({ id: deals.id, contact_id: deals.contactId });
 
     if (deleted.length === 0) {
       return NextResponse.json({ error: "Deal not found." }, { status: 404 });
     }
+
+    await publishRealtimeEvent("deal.deleted", {
+      accountId: ctx.accountId,
+      payload: { deal: deleted[0] },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish deal.deleted:", error);
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

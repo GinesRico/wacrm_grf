@@ -18,6 +18,7 @@ import {
 import { buildMetaTemplatePayload } from "@/lib/whatsapp/template-components";
 import { ensureImageHeaderHandle } from "@/lib/whatsapp/template-header-handle";
 import { serializeMessageTemplate } from "@/lib/whatsapp/template-serializer";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 const EDITABLE_STATUSES = new Set(["APPROVED", "REJECTED", "PAUSED"]);
 
@@ -169,10 +170,17 @@ export async function PATCH(
       })
       .where(eq(messageTemplates.id, id))
       .returning();
+    const template = serializeMessageTemplate(row);
+    await publishRealtimeEvent("template.updated", {
+      accountId: ctx.accountId,
+      payload: { template },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish template.updated:", error);
+    });
 
     return NextResponse.json({
       success: true,
-      template: serializeMessageTemplate(row),
+      template,
       dry_run: isDryRun(),
     });
   } catch (error) {
@@ -245,6 +253,12 @@ export async function DELETE(
     }
 
     await db.delete(messageTemplates).where(eq(messageTemplates.id, id));
+    await publishRealtimeEvent("template.deleted", {
+      accountId: ctx.accountId,
+      payload: { template: { id } },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish template.deleted:", error);
+    });
 
     return NextResponse.json({ success: true, dry_run: isDryRun() });
   } catch (error) {

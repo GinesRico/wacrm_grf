@@ -5,28 +5,13 @@ import { db } from "@/db/client";
 import { notifications } from "@/db/schema";
 import { getCurrentDbAccount } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
+import { serializeNotification } from "@/lib/notifications/create-notification";
 import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 const PatchSchema = z.object({
   ids: z.array(z.string().uuid()).optional(),
   all: z.boolean().optional(),
 });
-
-function serializeNotification(row: typeof notifications.$inferSelect) {
-  return {
-    id: row.id,
-    account_id: row.accountId,
-    user_id: row.userId,
-    type: row.type,
-    conversation_id: row.conversationId,
-    contact_id: row.contactId,
-    actor_user_id: row.actorUserId,
-    title: row.title,
-    body: row.body,
-    read_at: row.readAt?.toISOString(),
-    created_at: row.createdAt.toISOString(),
-  };
-}
 
 export async function GET() {
   try {

@@ -154,15 +154,24 @@ export function ContactSidebar({
     const handleCustomValuesUpdated = (event: {
       payload?: { contact_id?: string | null };
     }) => refreshIfCurrentContact(event.payload?.contact_id);
+    const handleDealEvent = (event: {
+      payload?: { deal?: { contact_id?: string | null } };
+    }) => refreshIfCurrentContact(event.payload?.deal?.contact_id);
 
     channel.bind("contact_note.created", handleNoteCreated);
     channel.bind("contact_note.deleted", handleNoteDeleted);
     channel.bind("contact_custom_values.updated", handleCustomValuesUpdated);
+    channel.bind("deal.created", handleDealEvent);
+    channel.bind("deal.updated", handleDealEvent);
+    channel.bind("deal.deleted", handleDealEvent);
 
     return () => {
       channel.unbind("contact_note.created", handleNoteCreated);
       channel.unbind("contact_note.deleted", handleNoteDeleted);
       channel.unbind("contact_custom_values.updated", handleCustomValuesUpdated);
+      channel.unbind("deal.created", handleDealEvent);
+      channel.unbind("deal.updated", handleDealEvent);
+      channel.unbind("deal.deleted", handleDealEvent);
       unsubscribeRealtimeChannel(channelName);
     };
   }, [accountId, displayedContact?.id, fetchContactData]);

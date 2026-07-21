@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -35,6 +35,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAppConfirm } from "@/hooks/use-app-dialog";
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from "@/lib/realtime/soketi-client";
 
 /**
  * Flows list page.
@@ -87,7 +91,7 @@ const TEMPLATE_ICONS = {
 export default function FlowsPage() {
   const router = useRouter();
   const canCreate = useCan("edit-settings");
-  const { profileLoading } = useAuth();
+  const { accountId, profileLoading } = useAuth();
   const t = useTranslations("Flows.list");
   const { confirm, confirmDialog } = useAppConfirm();
   const [flows, setFlows] = useState<FlowRow[]>([]);
@@ -97,7 +101,7 @@ export default function FlowsPage() {
   const [creating, setCreating] = useState(false);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     let cancelled = false;
     (async () => {
       try {
@@ -130,7 +134,30 @@ export default function FlowsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refresh = () => void load();
+
+    channel.bind("flow.created", refresh);
+    channel.bind("flow.updated", refresh);
+    channel.bind("flow.deleted", refresh);
+
+    return () => {
+      channel.unbind("flow.created", refresh);
+      channel.unbind("flow.updated", refresh);
+      channel.unbind("flow.deleted", refresh);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, load]);
 
   async function handleCreate() {
     if (!newName.trim()) return;

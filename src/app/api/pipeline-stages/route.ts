@@ -6,6 +6,7 @@ import { deals, pipelineStages, pipelines } from "@/db/schema";
 import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
 import { serializeStage } from "@/lib/pipelines/serialize";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 async function assertPipeline(accountId: string, pipelineId: string) {
   const [pipeline] = await db
@@ -69,7 +70,15 @@ export async function POST(request: Request) {
       .values({ pipelineId, name, color, position })
       .returning();
 
-    return NextResponse.json({ stage: serializeStage(stage) }, { status: 201 });
+    const serialized = serializeStage(stage);
+    await publishRealtimeEvent("pipeline_stage.created", {
+      accountId: ctx.accountId,
+      payload: { stage: serialized },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish pipeline_stage.created:", error);
+    });
+
+    return NextResponse.json({ stage: serialized }, { status: 201 });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -144,7 +153,19 @@ export async function PATCH(request: Request) {
       return result;
     });
 
-    return NextResponse.json({ stages: updated.map(serializeStage) });
+    const stages = updated.map(serializeStage);
+    await Promise.all(
+      stages.map((stage) =>
+        publishRealtimeEvent("pipeline_stage.updated", {
+          accountId: ctx.accountId,
+          payload: { stage },
+        }).catch((error) => {
+          console.warn("[realtime] failed to publish pipeline_stage.updated:", error);
+        }),
+      ),
+    );
+
+    return NextResponse.json({ stages });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -182,6 +203,12 @@ export async function DELETE(request: Request) {
     }
 
     await db.delete(pipelineStages).where(eq(pipelineStages.id, id));
+    await publishRealtimeEvent("pipeline_stage.deleted", {
+      accountId: ctx.accountId,
+      payload: { stage },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish pipeline_stage.deleted:", error);
+    });
     return NextResponse.json({ success: true });
   } catch (err) {
     return toErrorResponse(err);

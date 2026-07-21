@@ -1,15 +1,15 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   subscribeRealtimeChannel,
   unsubscribeRealtimeChannel,
-} from "@/lib/realtime/soketi-client";
-import { useAuth } from "@/hooks/use-auth";
-import { usePresence } from "@/hooks/use-presence";
-import { PresenceDot } from "@/components/presence/presence-dot";
-import { presenceLabel } from "@/lib/presence";
-import { cn } from "@/lib/utils";
+} from '@/lib/realtime/soketi-client';
+import { useAuth } from '@/hooks/use-auth';
+import { usePresence } from '@/hooks/use-presence';
+import { PresenceDot } from '@/components/presence/presence-dot';
+import { presenceLabel } from '@/lib/presence';
+import { cn } from '@/lib/utils';
 import type {
   Conversation,
   Message,
@@ -20,7 +20,7 @@ import type {
   Department,
   WhatsAppConfig,
   InteractiveMessagePayload,
-} from "@/types";
+} from '@/types';
 import {
   MessageSquare,
   Check,
@@ -33,43 +33,39 @@ import {
   X,
   Copy,
   CornerUpLeft,
-} from "lucide-react";
-import { format, isToday, isYesterday, differenceInHours } from "date-fns";
-import { es } from "date-fns/locale";
-import { useLocale, useTranslations } from "next-intl";
-import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+} from 'lucide-react';
+import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
+import { es } from 'date-fns/locale';
+import { useLocale, useTranslations } from 'next-intl';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-} from "@/components/ui/select";
+} from '@/components/ui/select';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { MessageBubble } from "./message-bubble";
-import { MessageActions } from "./message-actions";
+} from '@/components/ui/dropdown-menu';
+import { MessageBubble } from './message-bubble';
+import { MessageActions } from './message-actions';
 import {
   MessageComposer,
   CHAT_MEDIA_BUCKET,
   type SendMediaPayload,
-} from "./message-composer";
-import { deleteAccountMedia } from "@/lib/storage/upload-media";
-import { TemplatePicker } from "./template-picker";
-import { AiThreadBanner } from "./ai-thread-banner";
-import { buildReplyPreview } from "./reply-quote";
-import { toast } from "sonner";
-import { useAppConfirm } from "@/hooks/use-app-dialog";
-import { toInteractiveTemplateButton } from "@/lib/inbox/template-buttons";
+} from './message-composer';
+import { deleteAccountMedia } from '@/lib/storage/upload-media';
+import { TemplatePicker } from './template-picker';
+import { AiThreadBanner } from './ai-thread-banner';
+import { buildReplyPreview } from './reply-quote';
+import { toast } from 'sonner';
+import { useAppConfirm } from '@/hooks/use-app-dialog';
+import { toInteractiveTemplateButton } from '@/lib/inbox/template-buttons';
 
 interface ReplyDraft {
   id: string;
@@ -93,7 +89,7 @@ interface MessageThreadProps {
   onUpdateMessage: (id: string, updates: Partial<Message>) => void;
   onAssignChange: (
     conversationId: string,
-    assignedAgentId: string | null,
+    assignedAgentId: string | null
   ) => void;
   onConversationUpdated: (conversation: Conversation) => void;
   onConversationDeleted?: (conversationId: string) => void;
@@ -135,13 +131,13 @@ interface MessageThreadProps {
 
 type TransferLine = Pick<
   WhatsAppConfig,
-  "id" | "label" | "phone_number_id" | "is_default" | "status" | "department_id"
+  'id' | 'label' | 'phone_number_id' | 'is_default' | 'status' | 'department_id'
 >;
 
-const NO_LINE_VALUE = "__none";
-const NO_AGENT_VALUE = "__queue";
-const SIGNATURE_STORAGE_KEY = "inbox-sign-messages";
-const NO_DEPARTMENT_VALUE = "__no_department";
+const NO_LINE_VALUE = '__none';
+const NO_AGENT_VALUE = '__queue';
+const SIGNATURE_STORAGE_KEY = 'inbox-sign-messages';
+const NO_DEPARTMENT_VALUE = '__no_department';
 
 function TransferDialog({
   open,
@@ -174,13 +170,15 @@ function TransferDialog({
   selectedLineId: string;
   onSelectedLineIdChange: (value: string) => void;
   onSubmit: () => void;
-  getPresence: ReturnType<typeof usePresence>["getPresence"];
-  getRow: ReturnType<typeof usePresence>["getRow"];
+  getPresence: ReturnType<typeof usePresence>['getPresence'];
+  getRow: ReturnType<typeof usePresence>['getRow'];
   now: number;
   currentUserId?: string;
   t: ReturnType<typeof useTranslations>;
 }) {
-  const teammates = members.filter((member) => member.user_id !== currentUserId);
+  const teammates = members.filter(
+    (member) => member.user_id !== currentUserId
+  );
   const selectedLineValue =
     selectedLineId && lines.some((line) => line.id === selectedLineId)
       ? selectedLineId
@@ -193,21 +191,21 @@ function TransferDialog({
       : NO_DEPARTMENT_VALUE;
   const selectedDepartmentLabel =
     departments.find((department) => department.id === selectedDepartmentId)
-      ?.name ?? t("transferDepartment");
+      ?.name ?? t('transferDepartment');
   const selectedLine = lines.find((line) => line.id === selectedLineId);
   const selectedLineLabel = selectedLine
     ? selectedLine.label?.trim() || selectedLine.phone_number_id
-    : t("transferLine");
+    : t('transferLine');
   const selectedAgentLabel =
     teammates.find((member) => member.user_id === selectedAgentId)?.full_name ??
-    t("unassign");
+    t('unassign');
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-sm">
-        <div className="border-b border-border px-5 py-4">
+        <div className="border-border border-b px-5 py-4">
           <DialogTitle className="text-base font-semibold">
-            {t("transferChat")}
+            {t('transferChat')}
           </DialogTitle>
         </div>
         <div className="space-y-4 px-5 py-5">
@@ -226,7 +224,7 @@ function TransferDialog({
             <SelectContent>
               {departments.length === 0 ? (
                 <SelectItem value={NO_DEPARTMENT_VALUE} disabled>
-                  {t("noDepartmentsAvailable")}
+                  {t('noDepartmentsAvailable')}
                 </SelectItem>
               ) : (
                 departments.map((department) => (
@@ -247,7 +245,7 @@ function TransferDialog({
           <Select
             value={selectedLineValue}
             onValueChange={(value) => {
-              const nextValue = value ?? "";
+              const nextValue = value ?? '';
               if (nextValue !== NO_LINE_VALUE) {
                 onSelectedLineIdChange(nextValue);
                 const line = lines.find((item) => item.id === nextValue);
@@ -265,13 +263,13 @@ function TransferDialog({
             <SelectContent>
               {lines.length === 0 ? (
                 <SelectItem value={NO_LINE_VALUE} disabled>
-                  {t("noLinesAvailable")}
+                  {t('noLinesAvailable')}
                 </SelectItem>
               ) : (
                 lines.map((line) => (
                   <SelectItem key={line.id} value={line.id}>
                     {(line.label?.trim() || line.phone_number_id) +
-                      (line.is_default ? ` · ${t("defaultLine")}` : "")}
+                      (line.is_default ? ` · ${t('defaultLine')}` : '')}
                   </SelectItem>
                 ))
               )}
@@ -281,9 +279,9 @@ function TransferDialog({
           <Select
             value={selectedAgentValue}
             onValueChange={(value) => {
-              const nextValue = value ?? "";
+              const nextValue = value ?? '';
               onSelectedAgentIdChange(
-                nextValue === NO_AGENT_VALUE ? "" : nextValue,
+                nextValue === NO_AGENT_VALUE ? '' : nextValue
               );
             }}
           >
@@ -293,10 +291,10 @@ function TransferDialog({
               </span>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NO_AGENT_VALUE}>{t("unassign")}</SelectItem>
+              <SelectItem value={NO_AGENT_VALUE}>{t('unassign')}</SelectItem>
               {teammates.length === 0 ? (
                 <SelectItem value="__no_teammates" disabled>
-                  {t("noTeammates")}
+                  {t('noTeammates')}
                 </SelectItem>
               ) : (
                 teammates.map((member) => {
@@ -309,7 +307,7 @@ function TransferDialog({
                           label={presenceLabel(
                             presence,
                             getRow(member.user_id)?.last_seen_at ?? null,
-                            now,
+                            now
                           )}
                         />
                         <span className="truncate">{member.full_name}</span>
@@ -321,20 +319,20 @@ function TransferDialog({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex justify-end gap-3 border-t border-border bg-muted/30 px-5 py-4">
+        <div className="border-border bg-muted/30 flex justify-end gap-3 border-t px-5 py-4">
           <button
             type="button"
             onClick={() => onOpenChange(false)}
-            className="h-10 rounded-md border border-border bg-background px-4 text-sm font-medium text-destructive hover:bg-muted"
+            className="border-border bg-background text-destructive hover:bg-muted h-10 rounded-md border px-4 text-sm font-medium"
           >
-            {t("cancel")}
+            {t('cancel')}
           </button>
           <button
             type="button"
             onClick={onSubmit}
-            className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 h-10 rounded-md px-4 text-sm font-semibold"
           >
-            {t("transfer")}
+            {t('transfer')}
           </button>
         </div>
       </DialogContent>
@@ -345,22 +343,26 @@ function TransferDialog({
 function formatDateSeparator(
   dateStr: string,
   t: ReturnType<typeof useTranslations>,
-  locale: string,
+  locale: string
 ): string {
   const date = new Date(dateStr);
-  if (isToday(date)) return t("today");
-  if (isYesterday(date)) return t("yesterday");
-  return format(date, locale.startsWith("es") ? "d MMMM yyyy" : "MMMM d, yyyy", {
-    locale: locale.startsWith("es") ? es : undefined,
-  });
+  if (isToday(date)) return t('today');
+  if (isYesterday(date)) return t('yesterday');
+  return format(
+    date,
+    locale.startsWith('es') ? 'd MMMM yyyy' : 'MMMM d, yyyy',
+    {
+      locale: locale.startsWith('es') ? es : undefined,
+    }
+  );
 }
 
 function groupMessagesByDate(messages: Message[]) {
   const groups: { date: string; messages: Message[] }[] = [];
-  let currentDate = "";
+  let currentDate = '';
 
   for (const msg of messages) {
-    const day = format(new Date(msg.created_at), "yyyy-MM-dd");
+    const day = format(new Date(msg.created_at), 'yyyy-MM-dd');
     if (day !== currentDate) {
       currentDate = day;
       groups.push({ date: msg.created_at, messages: [msg] });
@@ -402,12 +404,12 @@ export function MessageThread({
   jumpToMessageId,
   onJumpHandled,
 }: MessageThreadProps) {
-  const t = useTranslations("Inbox.messageThread");
-  const tActions = useTranslations("Inbox.actions");
-  const tTimer = useTranslations("Inbox.sessionTimer");
-  const tQuote = useTranslations("Inbox.replyQuote");
+  const t = useTranslations('Inbox.messageThread');
+  const tActions = useTranslations('Inbox.actions');
+  const tTimer = useTranslations('Inbox.sessionTimer');
+  const tQuote = useTranslations('Inbox.replyQuote');
   const locale = useLocale();
-  const dateLocale = locale.startsWith("es") ? es : undefined;
+  const dateLocale = locale.startsWith('es') ? es : undefined;
   const { confirm, confirmDialog } = useAppConfirm();
 
   const { user, profile } = useAuth();
@@ -421,14 +423,16 @@ export function MessageThread({
   const [departments, setDepartments] = useState<Department[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(
-    () => new Set(),
+    () => new Set()
   );
   const [forwardDialogOpen, setForwardDialogOpen] = useState(false);
-  const [forwardContactId, setForwardContactId] = useState("");
-  const [forwardLineId, setForwardLineId] = useState("");
+  const [forwardContactId, setForwardContactId] = useState('');
+  const [forwardLineId, setForwardLineId] = useState('');
   const [forwardContacts, setForwardContacts] = useState<Contact[]>([]);
   const [aiDraftSeed, setAiDraftSeed] = useState<string | null>(null);
-  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
+    null
+  );
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   const [lines, setLines] = useState<TransferLine[]>([]);
   const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
@@ -438,7 +442,9 @@ export function MessageThread({
 
   useEffect(() => {
     try {
-      setSignatureEnabled(localStorage.getItem(SIGNATURE_STORAGE_KEY) === "true");
+      setSignatureEnabled(
+        localStorage.getItem(SIGNATURE_STORAGE_KEY) === 'true'
+      );
     } catch {
       // localStorage can be unavailable in constrained contexts.
     }
@@ -454,28 +460,28 @@ export function MessageThread({
   }, []);
 
   const agentSignatureName =
-    profile?.full_name?.trim() || profile?.email?.trim() || user?.email || "";
+    profile?.full_name?.trim() || profile?.email?.trim() || user?.email || '';
 
   const signMessageText = useCallback(
     (value: string) => {
       if (!signatureEnabled || !agentSignatureName) return value;
       return `*${agentSignatureName}:*\n${value}`;
     },
-    [agentSignatureName, signatureEnabled],
+    [agentSignatureName, signatureEnabled]
   );
 
   const jumpToMessage = useCallback((messageId: string) => {
     const target = scrollRef.current?.querySelector<HTMLElement>(
-      `[data-message-id="${messageId}"]`,
+      `[data-message-id="${messageId}"]`
     );
     if (!target) return false;
 
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlightMessageId(messageId);
 
     window.setTimeout(() => {
       setHighlightMessageId((current) =>
-        current === messageId ? null : current,
+        current === messageId ? null : current
       );
     }, 1800);
 
@@ -483,9 +489,9 @@ export function MessageThread({
   }, []);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
-  const [transferAgentId, setTransferAgentId] = useState<string>("");
-  const [transferDepartmentId, setTransferDepartmentId] = useState<string>("");
-  const [transferLineId, setTransferLineId] = useState<string>("");
+  const [transferAgentId, setTransferAgentId] = useState<string>('');
+  const [transferDepartmentId, setTransferDepartmentId] = useState<string>('');
+  const [transferLineId, setTransferLineId] = useState<string>('');
   // Purely visual spin state for the manual-refresh button. The actual
   // refetch is fire-and-forget through `onRefresh` (which bumps the
   // parent's resyncToken); the 700ms spin is just feedback so the click
@@ -505,12 +511,10 @@ export function MessageThread({
       new Set(
         messages
           .filter(
-            (message) =>
-              !message.interactive_payload &&
-              message.template_name,
+            (message) => !message.interactive_payload && message.template_name
           )
-          .map((message) => message.template_name as string),
-      ),
+          .map((message) => message.template_name as string)
+      )
     );
 
     if (templateNames.length === 0) {
@@ -521,15 +525,15 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      const res = await fetch("/api/inbox/template-previews", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/inbox/template-previews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ names: templateNames }),
       });
       const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) {
-        console.error("Failed to fetch template buttons:", payload);
+        console.error('Failed to fetch template buttons:', payload);
         return;
       }
 
@@ -542,14 +546,16 @@ export function MessageThread({
         const buttons = Array.isArray(row.buttons) ? row.buttons : [];
         const previewButtons = buttons
           .map(toInteractiveTemplateButton)
-          .filter((button): button is NonNullable<typeof button> => Boolean(button));
+          .filter((button): button is NonNullable<typeof button> =>
+            Boolean(button)
+          );
 
-        if (typeof row.name === "string" && previewButtons.length > 0) {
+        if (typeof row.name === 'string' && previewButtons.length > 0) {
           payloads[row.name] = {
-            kind: "buttons",
-            body: "",
+            kind: 'buttons',
+            body: '',
             footer:
-              typeof row.footer_text === "string" && row.footer_text.length > 0
+              typeof row.footer_text === 'string' && row.footer_text.length > 0
                 ? row.footer_text
                 : undefined,
             buttons: previewButtons,
@@ -581,13 +587,13 @@ export function MessageThread({
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const res = await fetch("/api/inbox/transfer-options", {
-        cache: "no-store",
+      const res = await fetch('/api/inbox/transfer-options', {
+        cache: 'no-store',
       });
       const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) {
-        console.error("Failed to fetch transfer options:", payload);
+        console.error('Failed to fetch transfer options:', payload);
         return;
       }
       setMembers((payload.members as AccountMember[] | undefined) ?? []);
@@ -604,21 +610,21 @@ export function MessageThread({
     if (!messages.length) {
       return {
         expired: true,
-        remaining: t("noCustomerMessages"),
-        availableUntil: "",
+        remaining: t('noCustomerMessages'),
+        availableUntil: '',
       };
     }
 
     // Find last customer message
     const lastCustomerMsg = [...messages]
       .reverse()
-      .find((m) => m.sender_type === "customer");
+      .find((m) => m.sender_type === 'customer');
 
     if (!lastCustomerMsg) {
       return {
         expired: true,
-        remaining: t("noCustomerMessages"),
-        availableUntil: "",
+        remaining: t('noCustomerMessages'),
+        availableUntil: '',
       };
     }
 
@@ -627,19 +633,19 @@ export function MessageThread({
     const expired = hoursSince >= 24;
     const availableUntil = format(
       new Date(lastCustomerDate.getTime() + 24 * 60 * 60 * 1000),
-      "dd/MM HH:mm",
-      { locale: dateLocale },
+      'dd/MM HH:mm',
+      { locale: dateLocale }
     );
 
     if (expired) {
-      return { expired: true, remaining: tTimer("expired"), availableUntil };
+      return { expired: true, remaining: tTimer('expired'), availableUntil };
     }
 
     const hoursLeft = 24 - hoursSince;
     const remaining =
       hoursLeft >= 1
-        ? tTimer("xhRemaining", { hours: Math.floor(hoursLeft) })
-        : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
+        ? tTimer('xhRemaining', { hours: Math.floor(hoursLeft) })
+        : tTimer('xmRemaining', { minutes: Math.floor(hoursLeft * 60) });
 
     return { expired, remaining, availableUntil };
   }, [dateLocale, messages, t, tTimer]);
@@ -681,18 +687,23 @@ export function MessageThread({
         setSessionCheckedConversationId(null);
       }
 
-      const res = await fetch(`/api/inbox/messages?conversation_id=${conversationId}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/inbox/messages?conversation_id=${conversationId}`,
+        {
+          cache: 'no-store',
+        }
+      );
       const payload = await res.json().catch(() => ({}));
 
       if (cancelled) return;
 
       if (!res.ok) {
-        console.error("Failed to fetch messages:", payload);
+        console.error('Failed to fetch messages:', payload);
       } else {
         onMessagesLoadedRef.current(payload.messages ?? []);
-        setReactions((payload.reactions as MessageReaction[] | undefined) ?? []);
+        setReactions(
+          (payload.reactions as MessageReaction[] | undefined) ?? []
+        );
         setSessionCheckedConversationId(conversationId);
       }
 
@@ -717,6 +728,30 @@ export function MessageThread({
 
     const channelName = `private-conversation-${conversationId}`;
     const channel = subscribeRealtimeChannel(channelName);
+    const handleMessageCreated = (event: {
+      payload?: { message?: Message };
+    }) => {
+      const message = event.payload?.message;
+      if (!message || message.conversation_id !== conversationId) return;
+      onNewMessage(message);
+    };
+    const handleMessageUpdated = (event: {
+      payload?: {
+        message?: Partial<Message> & { id?: string; conversation_id?: string };
+      };
+    }) => {
+      const message = event.payload?.message;
+      if (!message?.id || message.conversation_id !== conversationId) return;
+      onUpdateMessage(message.id, message);
+    };
+    const handleConversationUpdated = (event: {
+      payload?: { conversation?: Conversation };
+    }) => {
+      const updatedConversation = event.payload?.conversation;
+      if (!updatedConversation || updatedConversation.id !== conversationId)
+        return;
+      onConversationUpdated(updatedConversation);
+    };
     const upsertReaction = (event: {
       payload: { reaction: MessageReaction };
     }) => {
@@ -731,10 +766,10 @@ export function MessageThread({
 
         const tempIdx = prev.findIndex(
           (r) =>
-            r.id.startsWith("temp-") &&
+            r.id.startsWith('temp-') &&
             r.message_id === row.message_id &&
             r.actor_type === row.actor_type &&
-            r.actor_id === row.actor_id,
+            r.actor_id === row.actor_id
         );
         if (tempIdx >= 0) {
           const copy = prev.slice();
@@ -753,17 +788,23 @@ export function MessageThread({
       setReactions((prev) => prev.filter((r) => r.id !== old.id));
     };
 
-    channel.bind("reaction.created", upsertReaction);
-    channel.bind("reaction.updated", upsertReaction);
-    channel.bind("reaction.deleted", deleteReaction);
+    channel.bind('message.created', handleMessageCreated);
+    channel.bind('message.updated', handleMessageUpdated);
+    channel.bind('conversation.updated', handleConversationUpdated);
+    channel.bind('reaction.created', upsertReaction);
+    channel.bind('reaction.updated', upsertReaction);
+    channel.bind('reaction.deleted', deleteReaction);
 
     return () => {
-      channel.unbind("reaction.created", upsertReaction);
-      channel.unbind("reaction.updated", upsertReaction);
-      channel.unbind("reaction.deleted", deleteReaction);
+      channel.unbind('message.created', handleMessageCreated);
+      channel.unbind('message.updated', handleMessageUpdated);
+      channel.unbind('conversation.updated', handleConversationUpdated);
+      channel.unbind('reaction.created', upsertReaction);
+      channel.unbind('reaction.updated', upsertReaction);
+      channel.unbind('reaction.deleted', deleteReaction);
       unsubscribeRealtimeChannel(channelName);
     };
-  }, [conversationId]);
+  }, [conversationId, onConversationUpdated, onNewMessage, onUpdateMessage]);
 
   // Clear any in-progress reply draft when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.
@@ -783,12 +824,12 @@ export function MessageThread({
   useEffect(() => {
     if (!conversationId || !hasUnread) return;
     void fetch(`/api/inbox/conversations/${conversationId}/unread`, {
-      method: "PATCH",
+      method: 'PATCH',
     }).then(async (res) => {
       if (!res.ok) {
         console.error(
-          "Failed to reset unread_count:",
-          await res.json().catch(() => ({})),
+          'Failed to reset unread_count:',
+          await res.json().catch(() => ({}))
         );
       }
     });
@@ -809,16 +850,17 @@ export function MessageThread({
     onJumpHandled?.();
   }, [jumpToMessageId, onJumpHandled, messages, jumpToMessage]);
 
-  const contactDisplayName = contact?.name || contact?.phone || "Customer";
+  const contactDisplayName = contact?.name || contact?.phone || 'Customer';
 
   const resolveReplyToId = useCallback(
     (candidate?: string | null) => {
-      if (!candidate || candidate.startsWith("temp-")) return undefined;
+      if (!candidate || candidate.startsWith('temp-')) return undefined;
       const quoted = messages.find((message) => message.id === candidate);
-      if (!quoted || quoted.conversation_id !== conversationId) return undefined;
+      if (!quoted || quoted.conversation_id !== conversationId)
+        return undefined;
       return quoted.id;
     },
-    [conversationId, messages],
+    [conversationId, messages]
   );
 
   useEffect(() => {
@@ -840,10 +882,10 @@ export function MessageThread({
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
-        sender_type: "agent",
-        content_type: "text",
+        sender_type: 'agent',
+        content_type: 'text',
         content_text: signedText,
-        status: "sending",
+        status: 'sending',
         created_at: new Date().toISOString(),
         reply_to_message_id: safeReplyToId,
       };
@@ -851,12 +893,12 @@ export function MessageThread({
       setReplyTo(null);
 
       try {
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversation.id,
-            message_type: "text",
+            message_type: 'text',
             content_text: signedText,
             reply_to_message_id: safeReplyToId,
           }),
@@ -866,25 +908,31 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send message:", reason);
+          console.error('Failed to send message:', reason);
           toast.error(`Failed to send: ${reason}`);
           // Mark the optimistic bubble as failed so the user sees what happened
-          onUpdateMessage(tempId, { status: "failed" });
+          onUpdateMessage(tempId, { status: 'failed' });
           return;
         }
 
         // Success — the realtime INSERT event will replace the temp bubble
         // with the real DB row. If realtime hasn't arrived yet, at least
         // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, { status: 'sent' });
       } catch (err) {
-        console.error("Failed to send message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        console.error('Failed to send message:', err);
+        const reason = err instanceof Error ? err.message : 'network error';
         toast.error(`Failed to send: ${reason}`);
-        onUpdateMessage(tempId, { status: "failed" });
+        onUpdateMessage(tempId, { status: 'failed' });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText]
+    [
+      conversation,
+      onNewMessage,
+      onUpdateMessage,
+      resolveReplyToId,
+      signMessageText,
+    ]
   );
 
   const handleSendMedia = useCallback(
@@ -899,19 +947,19 @@ export function MessageThread({
         ? signMessageText(payload.caption)
         : payload.caption;
       const contentText =
-        payload.kind === "document"
-          ? signedCaption || payload.filename || "Document"
+        payload.kind === 'document'
+          ? signedCaption || payload.filename || 'Document'
           : signedCaption;
 
       const tempId = `temp-${Date.now()}`;
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
-        sender_type: "agent",
+        sender_type: 'agent',
         content_type: payload.kind,
         content_text: contentText,
         media_url: payload.mediaUrl,
-        status: "sending",
+        status: 'sending',
         created_at: new Date().toISOString(),
         reply_to_message_id: safeReplyToId,
       };
@@ -919,9 +967,9 @@ export function MessageThread({
       setReplyTo(null);
 
       try {
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversation.id,
             message_type: payload.kind,
@@ -936,25 +984,35 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = data?.error || `HTTP ${res.status}`;
-          console.error("Failed to send media:", reason);
+          console.error('Failed to send media:', reason);
           toast.error(`Failed to send: ${reason}`);
-          onUpdateMessage(tempId, { status: "failed" });
+          onUpdateMessage(tempId, { status: 'failed' });
           // The upload never reached the recipient — GC the orphaned
           // object rather than leaving it in the public bucket forever.
-          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(
+            () => {}
+          );
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, { status: 'sent' });
       } catch (err) {
-        console.error("Failed to send media:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        console.error('Failed to send media:', err);
+        const reason = err instanceof Error ? err.message : 'network error';
         toast.error(`Failed to send: ${reason}`);
-        onUpdateMessage(tempId, { status: "failed" });
-        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+        onUpdateMessage(tempId, { status: 'failed' });
+        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(
+          () => {}
+        );
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText],
+    [
+      conversation,
+      onNewMessage,
+      onUpdateMessage,
+      resolveReplyToId,
+      signMessageText,
+    ]
   );
 
   const handleSendInteractive = useCallback(
@@ -969,23 +1027,23 @@ export function MessageThread({
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
-        sender_type: "agent",
-        content_type: "interactive",
+        sender_type: 'agent',
+        content_type: 'interactive',
         content_text: signedPayload.body,
         interactive_payload: signedPayload,
-        status: "sending",
+        status: 'sending',
         created_at: new Date().toISOString(),
         reply_to_message_id: safeReplyToId,
       };
       onNewMessage(optimisticMsg);
 
       try {
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversation.id,
-            message_type: "interactive",
+            message_type: 'interactive',
             interactive_payload: signedPayload,
             reply_to_message_id: safeReplyToId,
           }),
@@ -995,30 +1053,36 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = data?.error || `HTTP ${res.status}`;
-          console.error("Failed to send interactive message:", reason);
+          console.error('Failed to send interactive message:', reason);
           toast.error(`Failed to send: ${reason}`);
-          onUpdateMessage(tempId, { status: "failed" });
+          onUpdateMessage(tempId, { status: 'failed' });
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, { status: 'sent' });
       } catch (err) {
-        console.error("Failed to send interactive message:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        console.error('Failed to send interactive message:', err);
+        const reason = err instanceof Error ? err.message : 'network error';
         toast.error(`Failed to send: ${reason}`);
-        onUpdateMessage(tempId, { status: "failed" });
+        onUpdateMessage(tempId, { status: 'failed' });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage, resolveReplyToId, signMessageText],
+    [
+      conversation,
+      onNewMessage,
+      onUpdateMessage,
+      resolveReplyToId,
+      signMessageText,
+    ]
   );
 
   const patchConversation = useCallback(
     async (body: Record<string, unknown>) => {
       if (!conversation) return;
 
-      const res = await fetch("/api/inbox/conversations", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/inbox/conversations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...body,
           conversation_id: conversation.id,
@@ -1029,46 +1093,46 @@ export function MessageThread({
         throw new Error(payload?.error || `HTTP ${res.status}`);
       }
       onConversationUpdated(payload.conversation);
-      if ("assigned_agent_id" in payload.conversation) {
+      if ('assigned_agent_id' in payload.conversation) {
         onAssignChange(
           conversation.id,
-          payload.conversation.assigned_agent_id ?? null,
+          payload.conversation.assigned_agent_id ?? null
         );
       }
     },
-    [conversation, onAssignChange, onConversationUpdated],
+    [conversation, onAssignChange, onConversationUpdated]
   );
 
   const handleTicketAction = useCallback(
-    async (action: "accept" | "resolve" | "return_to_pending" | "reopen") => {
+    async (action: 'accept' | 'resolve' | 'return_to_pending' | 'reopen') => {
       if (!conversation || ticketAction) return;
       setTicketAction(action);
       try {
         await patchConversation({ action });
-        if (action === "resolve" || action === "return_to_pending") {
+        if (action === 'resolve' || action === 'return_to_pending') {
           onBack?.();
         }
       } catch (err) {
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(t("ticketActionFailed", { reason }));
+        const reason = err instanceof Error ? err.message : 'network error';
+        toast.error(t('ticketActionFailed', { reason }));
       } finally {
         setTicketAction(null);
       }
     },
-    [conversation, onBack, patchConversation, ticketAction, t],
+    [conversation, onBack, patchConversation, ticketAction, t]
   );
 
-  const conversationLocked = conversation?.status !== "open";
+  const conversationLocked = conversation?.status !== 'open';
   const lockedReason =
-    conversation?.status === "pending"
-      ? t("acceptBeforeReply")
-      : conversation?.status === "closed"
-        ? t("reopenBeforeReply")
+    conversation?.status === 'pending'
+      ? t('acceptBeforeReply')
+      : conversation?.status === 'closed'
+        ? t('reopenBeforeReply')
         : undefined;
   const sessionPending = sessionCheckedConversationId !== conversationId;
   const composerLocked = conversationLocked || loading || sessionPending;
   const composerLockedReason =
-    loading || sessionPending ? t("loadingMessages") : lockedReason;
+    loading || sessionPending ? t('loadingMessages') : lockedReason;
 
   const handleOpenTemplates = useCallback(() => {
     if (conversationLocked) return;
@@ -1084,7 +1148,7 @@ export function MessageThread({
         headerMediaUrl?: string;
         headerMediaPath?: string;
         buttonParams?: Record<number, string>;
-      },
+      }
     ) => {
       if (!conversation) return;
 
@@ -1094,23 +1158,24 @@ export function MessageThread({
       const optimisticMsg: Message = {
         id: tempId,
         conversation_id: conversation.id,
-        sender_type: "agent",
-        content_type: "template",
+        sender_type: 'agent',
+        content_type: 'template',
         content_text: renderedBody,
-        media_url: values.headerMediaUrl || template.header_media_url || undefined,
+        media_url:
+          values.headerMediaUrl || template.header_media_url || undefined,
         template_name: template.name,
-        status: "sending",
+        status: 'sending',
         created_at: new Date().toISOString(),
       };
       onNewMessage(optimisticMsg);
 
       try {
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversation.id,
-            message_type: "template",
+            message_type: 'template',
             template_name: template.name,
             template_language: template.language,
             // Structured params drive the new send-builder path
@@ -1132,31 +1197,33 @@ export function MessageThread({
 
         if (!res.ok) {
           const reason = payload?.error || `HTTP ${res.status}`;
-          console.error("Failed to send template:", reason);
+          console.error('Failed to send template:', reason);
           toast.error(`Failed to send template: ${reason}`);
           if (values.headerMediaPath) {
-            void deleteAccountMedia(CHAT_MEDIA_BUCKET, values.headerMediaPath).catch(
-              () => {},
-            );
+            void deleteAccountMedia(
+              CHAT_MEDIA_BUCKET,
+              values.headerMediaPath
+            ).catch(() => {});
           }
-          onUpdateMessage(tempId, { status: "failed" });
+          onUpdateMessage(tempId, { status: 'failed' });
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        onUpdateMessage(tempId, { status: 'sent' });
       } catch (err) {
-        console.error("Failed to send template:", err);
-        const reason = err instanceof Error ? err.message : "network error";
+        console.error('Failed to send template:', err);
+        const reason = err instanceof Error ? err.message : 'network error';
         toast.error(`Failed to send template: ${reason}`);
         if (values.headerMediaPath) {
-          void deleteAccountMedia(CHAT_MEDIA_BUCKET, values.headerMediaPath).catch(
-            () => {},
-          );
+          void deleteAccountMedia(
+            CHAT_MEDIA_BUCKET,
+            values.headerMediaPath
+          ).catch(() => {});
         }
-        onUpdateMessage(tempId, { status: "failed" });
+        onUpdateMessage(tempId, { status: 'failed' });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage]
   );
 
   // Build a quick id → Message map so reply quotes can be rendered without
@@ -1182,18 +1249,17 @@ export function MessageThread({
   // contact name when the customer sent it.
   const authorLabelFor = useCallback(
     (m: Message): string => {
-      const isAgentMsg =
-        m.sender_type === "agent" || m.sender_type === "bot";
-      return isAgentMsg ? "You" : contactDisplayName;
+      const isAgentMsg = m.sender_type === 'agent' || m.sender_type === 'bot';
+      return isAgentMsg ? 'You' : contactDisplayName;
     },
-    [contactDisplayName],
+    [contactDisplayName]
   );
 
   const handleStartReply = useCallback(
     (msg: Message) => {
       const safeReplyToId = resolveReplyToId(msg.id);
       if (!safeReplyToId) {
-        toast.error(t("waitForMessage"));
+        toast.error(t('waitForMessage'));
         return;
       }
       setReplyTo({
@@ -1202,7 +1268,7 @@ export function MessageThread({
         preview: buildReplyPreview(msg, tQuote),
       });
     },
-    [authorLabelFor, resolveReplyToId, t, tQuote],
+    [authorLabelFor, resolveReplyToId, t, tQuote]
   );
 
   const handleAiReplyToMessage = useCallback(
@@ -1210,14 +1276,14 @@ export function MessageThread({
       handleStartReply(msg);
       setAiDraftSeed(`${msg.id}:${Date.now()}`);
     },
-    [handleStartReply],
+    [handleStartReply]
   );
 
   const handleDeleteMessage = useCallback(
     async (messageId: string) => {
       if (!conversation) return;
-      if (messageId.startsWith("temp-")) {
-        toast.error(t("waitForMessage"));
+      if (messageId.startsWith('temp-')) {
+        toast.error(t('waitForMessage'));
         return;
       }
 
@@ -1230,28 +1296,28 @@ export function MessageThread({
               deleted_at: deletedAt,
               deleted_by_user_id: user?.id ?? null,
             }
-          : message,
+          : message
       );
       onMessagesLoaded(nextMessages);
       if (replyTo?.id === messageId) {
         setReplyTo(null);
       }
 
-      const res = await fetch("/api/inbox/messages", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/inbox/messages', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: "delete",
+          action: 'delete',
           message_id: messageId,
         }),
       });
 
       if (!res.ok) {
         onMessagesLoaded(snapshot);
-        toast.error(t("messageDeleteFailed"));
+        toast.error(t('messageDeleteFailed'));
       }
     },
-    [conversation, messages, onMessagesLoaded, replyTo?.id, t, user?.id],
+    [conversation, messages, onMessagesLoaded, replyTo?.id, t, user?.id]
   );
 
   const handleToggleMessageStar = useCallback(
@@ -1259,11 +1325,11 @@ export function MessageThread({
       const nextStarred = !message.is_starred;
       onUpdateMessage(message.id, { is_starred: nextStarred });
 
-      const res = await fetch("/api/inbox/messages", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/inbox/messages', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: "star",
+          action: 'star',
           message_id: message.id,
           is_starred: nextStarred,
         }),
@@ -1271,10 +1337,10 @@ export function MessageThread({
 
       if (!res.ok) {
         onUpdateMessage(message.id, { is_starred: message.is_starred });
-        toast.error(t("messageStarFailed"));
+        toast.error(t('messageStarFailed'));
       }
     },
-    [onUpdateMessage, t],
+    [onUpdateMessage, t]
   );
 
   const beginMessageSelection = useCallback((messageId: string) => {
@@ -1301,7 +1367,7 @@ export function MessageThread({
     setSelectionMode(false);
     setSelectedMessageIds(new Set());
     setForwardDialogOpen(false);
-    setForwardContactId("");
+    setForwardContactId('');
   }, []);
 
   const selectedMessages = useMemo(() => {
@@ -1312,10 +1378,12 @@ export function MessageThread({
   const handleDeleteSelectedMessages = useCallback(async () => {
     if (!conversation || selectedMessageIds.size === 0) return;
     const ok = await confirm({
-      title: t("delete"),
-      description: t("deleteSelectedConfirm", { count: selectedMessageIds.size }),
-      confirmLabel: t("delete"),
-      cancelLabel: t("cancel"),
+      title: t('delete'),
+      description: t('deleteSelectedConfirm', {
+        count: selectedMessageIds.size,
+      }),
+      confirmLabel: t('delete'),
+      cancelLabel: t('cancel'),
       destructive: true,
     });
     if (!ok) return;
@@ -1331,23 +1399,23 @@ export function MessageThread({
               deleted_at: deletedAt,
               deleted_by_user_id: user?.id ?? null,
             }
-          : message,
-      ),
+          : message
+      )
     );
     clearMessageSelection();
 
-    const res = await fetch("/api/inbox/messages", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch('/api/inbox/messages', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action: "delete",
+        action: 'delete',
         message_ids: ids,
       }),
     });
 
     if (!res.ok) {
       onMessagesLoaded(snapshot);
-      toast.error(t("messageDeleteFailed"));
+      toast.error(t('messageDeleteFailed'));
     }
   }, [
     clearMessageSelection,
@@ -1366,25 +1434,28 @@ export function MessageThread({
     const text = selectedMessages
       .map((message) => buildReplyPreview(message, tQuote).trim())
       .filter(Boolean)
-      .join("\n");
+      .join('\n');
 
     if (!text) {
-      toast.error(tActions("nothingToCopy"));
+      toast.error(tActions('nothingToCopy'));
       return;
     }
 
     try {
       await navigator.clipboard.writeText(text);
-      toast.success(tActions("copied"));
+      toast.success(tActions('copied'));
     } catch {
-      toast.error(tActions("copyFailed"));
+      toast.error(tActions('copyFailed'));
     }
   }, [selectedMessages, tActions, tQuote]);
 
   const openForwardDialog = useCallback(() => {
     if (selectedMessageIds.size === 0) return;
-    setForwardContactId("");
-    setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+    setForwardContactId('');
+    setForwardLineId(
+      (current) =>
+        current || conversation?.whatsapp_config_id || lines[0]?.id || ''
+    );
     setForwardDialogOpen(true);
   }, [conversation?.whatsapp_config_id, lines, selectedMessageIds.size]);
 
@@ -1392,11 +1463,14 @@ export function MessageThread({
     (messageId: string) => {
       setSelectionMode(true);
       setSelectedMessageIds(new Set([messageId]));
-      setForwardContactId("");
-      setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+      setForwardContactId('');
+      setForwardLineId(
+        (current) =>
+          current || conversation?.whatsapp_config_id || lines[0]?.id || ''
+      );
       setForwardDialogOpen(true);
     },
-    [conversation?.whatsapp_config_id, lines],
+    [conversation?.whatsapp_config_id, lines]
   );
 
   useEffect(() => {
@@ -1405,15 +1479,18 @@ export function MessageThread({
     let cancelled = false;
 
     (async () => {
-      const res = await fetch("/api/inbox/forward-contacts", {
-        cache: "no-store",
+      const res = await fetch('/api/inbox/forward-contacts', {
+        cache: 'no-store',
       });
       const payload = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (res.ok) {
         setForwardContacts((payload.contacts as Contact[] | undefined) ?? []);
       }
-      setForwardLineId((current) => current || conversation?.whatsapp_config_id || lines[0]?.id || "");
+      setForwardLineId(
+        (current) =>
+          current || conversation?.whatsapp_config_id || lines[0]?.id || ''
+      );
     })();
 
     return () => {
@@ -1422,21 +1499,24 @@ export function MessageThread({
   }, [conversation?.whatsapp_config_id, forwardDialogOpen, lines]);
 
   const handleForwardSelectedMessages = useCallback(async () => {
-    if (!forwardContactId || !forwardLineId || selectedMessages.length === 0) return;
-    const forwardableMessages = selectedMessages.filter((message) => !message.deleted_at);
+    if (!forwardContactId || !forwardLineId || selectedMessages.length === 0)
+      return;
+    const forwardableMessages = selectedMessages.filter(
+      (message) => !message.deleted_at
+    );
     if (forwardableMessages.length === 0) return;
 
     try {
-      const openRes = await fetch("/api/inbox/start-conversation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const openRes = await fetch('/api/inbox/start-conversation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contact_id: forwardContactId,
           whatsapp_config_id: forwardLineId,
         }),
       });
       const openPayload = await openRes.json().catch(() => ({}));
-      if (!openRes.ok || typeof openPayload?.conversation_id !== "string") {
+      if (!openRes.ok || typeof openPayload?.conversation_id !== 'string') {
         throw new Error(openPayload?.error || `HTTP ${openRes.status}`);
       }
       const targetConversationId = openPayload.conversation_id as string;
@@ -1444,15 +1524,16 @@ export function MessageThread({
       for (const message of forwardableMessages) {
         const body = {
           conversation_id: targetConversationId,
-          message_type: message.content_type === "text" ? "text" : message.content_type,
-          content_text: message.content_text ?? "",
+          message_type:
+            message.content_type === 'text' ? 'text' : message.content_type,
+          content_text: message.content_text ?? '',
           media_url: message.media_url,
           is_forwarded: true,
           forwarded_from_message_id: message.id,
         };
-        const res = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
         if (!res.ok) {
@@ -1460,13 +1541,19 @@ export function MessageThread({
           throw new Error(payload?.error || `HTTP ${res.status}`);
         }
       }
-      toast.success(t("forwarded"));
+      toast.success(t('forwarded'));
       clearMessageSelection();
     } catch (error) {
-      const reason = error instanceof Error ? error.message : "network error";
-      toast.error(t("forwardFailed", { reason }));
+      const reason = error instanceof Error ? error.message : 'network error';
+      toast.error(t('forwardFailed', { reason }));
     }
-  }, [clearMessageSelection, forwardContactId, forwardLineId, selectedMessages, t]);
+  }, [
+    clearMessageSelection,
+    forwardContactId,
+    forwardLineId,
+    selectedMessages,
+    t,
+  ]);
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
   // The "toggle" semantic (pill click) is computed at the call site where the
@@ -1475,11 +1562,11 @@ export function MessageThread({
   const postReaction = useCallback(
     async (messageId: string, emoji: string) => {
       if (!user?.id || !conversation) {
-        console.warn("[reactions] missing user or conversation");
+        console.warn('[reactions] missing user or conversation');
         return;
       }
-      if (messageId.startsWith("temp-")) {
-        toast.error(t("waitForMessage"));
+      if (messageId.startsWith('temp-')) {
+        toast.error(t('waitForMessage'));
         return;
       }
 
@@ -1494,10 +1581,10 @@ export function MessageThread({
         const own = prev.find(
           (r) =>
             r.message_id === messageId &&
-            r.actor_type === "agent" &&
-            r.actor_id === userId,
+            r.actor_type === 'agent' &&
+            r.actor_id === userId
         );
-        if (emoji === "") return own ? prev.filter((r) => r !== own) : prev;
+        if (emoji === '') return own ? prev.filter((r) => r !== own) : prev;
         if (own) return prev.map((r) => (r === own ? { ...own, emoji } : r));
         return [
           ...prev,
@@ -1505,7 +1592,7 @@ export function MessageThread({
             id: `temp-${Date.now()}`,
             message_id: messageId,
             conversation_id: convId,
-            actor_type: "agent",
+            actor_type: 'agent',
             actor_id: userId,
             emoji,
             created_at: new Date().toISOString(),
@@ -1514,9 +1601,9 @@ export function MessageThread({
       });
 
       try {
-        const res = await fetch("/api/whatsapp/react", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/whatsapp/react', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message_id: messageId, emoji }),
         });
         if (!res.ok) {
@@ -1524,21 +1611,21 @@ export function MessageThread({
           throw new Error(payload?.error || `HTTP ${res.status}`);
         }
       } catch (err) {
-        const reason = err instanceof Error ? err.message : "network error";
-        toast.error(t("reactionFailed", { reason }));
+        const reason = err instanceof Error ? err.message : 'network error';
+        toast.error(t('reactionFailed', { reason }));
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id, t],
+    [conversation, user?.id, t]
   );
 
   const handleDeleteConversation = useCallback(async () => {
     if (!conversation) return;
     const ok = await confirm({
-      title: t("deleteTicket"),
-      description: t("deleteConfirm"),
-      confirmLabel: t("delete"),
-      cancelLabel: t("cancel"),
+      title: t('deleteTicket'),
+      description: t('deleteConfirm'),
+      confirmLabel: t('delete'),
+      cancelLabel: t('cancel'),
       destructive: true,
     });
     if (!ok) return;
@@ -1547,17 +1634,17 @@ export function MessageThread({
       const res = await fetch(
         `/api/inbox/conversations?conversation_id=${encodeURIComponent(conversation.id)}`,
         {
-        method: "DELETE",
-        },
+          method: 'DELETE',
+        }
       );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(payload?.error ?? "delete failed");
+        throw new Error(payload?.error ?? 'delete failed');
       }
       onConversationDeleted?.(conversation.id);
     } catch (err) {
-      console.error("Failed to delete conversation:", err);
-      toast.error(t("deleteFailed"));
+      console.error('Failed to delete conversation:', err);
+      toast.error(t('deleteFailed'));
     }
   }, [confirm, conversation, onConversationDeleted, t]);
 
@@ -1565,7 +1652,7 @@ export function MessageThread({
     if (!conversation) return;
     try {
       await patchConversation({
-        action: "assign",
+        action: 'assign',
         assigned_agent_id: transferAgentId || null,
         department_id: transferDepartmentId || null,
         whatsapp_config_id: transferLineId || null,
@@ -1575,8 +1662,8 @@ export function MessageThread({
         onBack?.();
       }
     } catch (err) {
-      console.error("Failed to transfer conversation:", err);
-      toast.error(t("assignmentFailed"));
+      console.error('Failed to transfer conversation:', err);
+      toast.error(t('assignmentFailed'));
     }
   }, [
     conversation,
@@ -1593,15 +1680,20 @@ export function MessageThread({
   // pattern under the user's eye.
   if (!conversation || !contact) {
     return (
-      <div className={cn("flex flex-1 flex-col items-center justify-center", DOODLE_BG_CLASSES)}>
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-          <MessageSquare className="h-8 w-8 text-muted-foreground" />
+      <div
+        className={cn(
+          'flex flex-1 flex-col items-center justify-center',
+          DOODLE_BG_CLASSES
+        )}
+      >
+        <div className="bg-muted flex h-16 w-16 items-center justify-center rounded-full">
+          <MessageSquare className="text-muted-foreground h-8 w-8" />
         </div>
-        <h3 className="mt-4 text-sm font-medium text-muted-foreground">
-          {t("selectConversation")}
+        <h3 className="text-muted-foreground mt-4 text-sm font-medium">
+          {t('selectConversation')}
         </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {t("selectConversationHint")}
+        <p className="text-muted-foreground mt-1 text-xs">
+          {t('selectConversationHint')}
         </p>
       </div>
     );
@@ -1614,23 +1706,23 @@ export function MessageThread({
     null;
   const messageGroups = groupMessagesByDate(messages);
   const statusLabel =
-    conversation.status === "open"
-      ? t("statusOpen")
-      : conversation.status === "pending"
-        ? t("statusPending")
-        : t("statusClosed");
+    conversation.status === 'open'
+      ? t('statusOpen')
+      : conversation.status === 'pending'
+        ? t('statusPending')
+        : t('statusClosed');
   const statusColor =
-    conversation.status === "open"
-      ? "text-primary"
-      : conversation.status === "pending"
-        ? "text-amber-400"
-        : "text-muted-foreground";
+    conversation.status === 'open'
+      ? 'text-primary'
+      : conversation.status === 'pending'
+        ? 'text-amber-400'
+        : 'text-muted-foreground';
   const assignedAgentId = conversation.assigned_agent_id ?? null;
   const currentAssignee = members.find((p) => p.user_id === assignedAgentId);
   const assignLabel = assignedAgentId
-    ? (currentAssignee?.full_name ?? t("assigned"))
-    : t("assign");
-  const assigneeName = currentAssignee?.full_name ?? t("assigned");
+    ? (currentAssignee?.full_name ?? t('assigned'))
+    : t('assign');
+  const assigneeName = currentAssignee?.full_name ?? t('assigned');
   const departmentHeaderColor = conversation.department?.color?.trim() || null;
 
   return (
@@ -1642,10 +1734,10 @@ export function MessageThread({
     // clipped and the hover toolbar overlaps the Tags panel. Letting the
     // root shrink lets the bubbles' break-words / max-w caps apply.
     // Issue #257.
-    <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
+    <div className={cn('flex min-w-0 flex-1 flex-col', DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="relative flex items-center justify-between gap-2 border-b border-border bg-card px-2 py-2.5 sm:px-4">
+      <div className="border-border bg-card relative flex items-center justify-between gap-2 border-b px-2 py-2.5 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -1653,8 +1745,8 @@ export function MessageThread({
             <button
               type="button"
               onClick={onBack}
-              aria-label={t("backToConversations")}
-              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label={t('backToConversations')}
+              className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md"
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
@@ -1664,9 +1756,9 @@ export function MessageThread({
             onClick={() => {
               onToggleContactPanel?.();
             }}
-            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground transition-shadow hover:ring-2 hover:ring-primary/30"
-            title={t("showContact")}
-            aria-label={t("showContact")}
+            className="bg-muted text-foreground hover:ring-primary/30 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium transition-shadow hover:ring-2"
+            title={t('showContact')}
+            aria-label={t('showContact')}
             aria-pressed={contactPanelOpen}
           >
             {displayName.charAt(0).toUpperCase()}
@@ -1677,29 +1769,29 @@ export function MessageThread({
               onToggleContactPanel?.();
             }}
             className="min-w-0 text-left leading-tight"
-            title={t("showContact")}
+            title={t('showContact')}
             aria-pressed={contactPanelOpen}
           >
-            <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <h2 className="text-foreground truncate text-sm font-semibold">
+              {displayName}
+            </h2>
+            <div className="text-muted-foreground mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
               {assignedAgentId && (
                 <span className="hidden min-w-0 truncate sm:inline">
-                  {t("assignedTo")}: {assigneeName}
+                  {t('assignedTo')}: {assigneeName}
                 </span>
               )}
               {assignedAgentId && (lineName || sessionInfo.availableUntil) && (
                 <span className="hidden sm:inline">•</span>
               )}
               {lineName && (
-                <span
-                  className="hidden max-w-32 truncate sm:inline"
-                >
+                <span className="hidden max-w-32 truncate sm:inline">
                   {lineName}
                 </span>
               )}
               {sessionInfo.availableUntil && (
                 <span className="hidden truncate md:inline">
-                  {t("availableUntil", { value: sessionInfo.availableUntil })}
+                  {t('availableUntil', { value: sessionInfo.availableUntil })}
                 </span>
               )}
             </div>
@@ -1715,7 +1807,6 @@ export function MessageThread({
               smaller laptops; this lets agents reclaim it when they just
               want to read and reply. Hidden on mobile, where the sidebar
               never renders as a permanent panel anyway. Issue #258. */}
-          
 
           {/* Manual refresh — forces a refetch of the messages + the
               conversation list (the parent bumps its resyncToken). Useful
@@ -1727,14 +1818,14 @@ export function MessageThread({
               type="button"
               onClick={handleRefreshClick}
               disabled={isRefreshing}
-              aria-label={t("refreshConversation")}
-              title={t("refresh")}
+              aria-label={t('refreshConversation')}
+              title={t('refresh')}
               className={cn(
-                "inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60",
+                'text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:opacity-60'
               )}
             >
               <RefreshCw
-                className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
+                className={cn('h-3.5 w-3.5', isRefreshing && 'animate-spin')}
               />
             </button>
           )}
@@ -1743,66 +1834,66 @@ export function MessageThread({
             variant="outline"
             title={statusLabel}
             className={cn(
-              "hidden h-7 gap-1 border-border text-[10px] sm:inline-flex",
-              sessionInfo.expired ? "text-red-400" : statusColor,
+              'border-border hidden h-7 gap-1 text-[10px] sm:inline-flex',
+              sessionInfo.expired ? 'text-red-400' : statusColor
             )}
           >
             <Clock className="h-3 w-3" />
             {sessionInfo.remaining || statusLabel}
           </Badge>
 
-          {conversation.status === "pending" && (
+          {conversation.status === 'pending' && (
             <button
               type="button"
               disabled={ticketAction !== null}
-              onClick={() => void handleTicketAction("accept")}
-              title={t("accept")}
-              aria-label={t("accept")}
-              className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:h-7 sm:w-auto sm:px-2"
+              onClick={() => void handleTicketAction('accept')}
+              title={t('accept')}
+              aria-label={t('accept')}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md px-0 text-xs font-medium disabled:opacity-60 sm:h-7 sm:w-auto sm:px-2"
             >
               <Check className="h-3 w-3" />
-              <span className="hidden sm:inline">{t("accept")}</span>
+              <span className="hidden sm:inline">{t('accept')}</span>
             </button>
           )}
 
-          {conversation.status === "open" && (
+          {conversation.status === 'open' && (
             <>
               <button
                 type="button"
                 disabled={ticketAction !== null}
-                onClick={() => void handleTicketAction("return_to_pending")}
-                title={t("returnToPending")}
-                aria-label={t("returnToPending")}
-                className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-border bg-background px-0 text-xs font-medium text-primary hover:bg-muted disabled:opacity-60 sm:w-auto sm:px-3"
+                onClick={() => void handleTicketAction('return_to_pending')}
+                title={t('returnToPending')}
+                aria-label={t('returnToPending')}
+                className="border-border bg-background text-primary hover:bg-muted inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border px-0 text-xs font-medium disabled:opacity-60 sm:w-auto sm:px-3"
               >
                 <CornerUpLeft className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{t("returnToPending")}</span>
+                <span className="hidden sm:inline">{t('returnToPending')}</span>
               </button>
               <button
                 type="button"
                 disabled={ticketAction !== null}
-                onClick={() => void handleTicketAction("resolve")}
-                title={t("resolve")}
-                aria-label={t("resolve")}
-                className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:w-auto sm:px-3"
+                onClick={() => void handleTicketAction('resolve')}
+                title={t('resolve')}
+                aria-label={t('resolve')}
+                className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md px-0 text-xs font-medium disabled:opacity-60 sm:w-auto sm:px-3"
               >
                 <Check className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">{t("resolve")}</span>
+                <span className="hidden sm:inline">{t('resolve')}</span>
               </button>
             </>
           )}
 
-          {conversation.status === "closed" && (
+          {conversation.status === 'closed' && (
             <button
               type="button"
               disabled={ticketAction !== null}
-              onClick={() => void handleTicketAction("reopen")}
-              title={t("reopen")}
-              aria-label={t("reopen")}
-              className="inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md bg-primary px-0 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60 sm:w-auto sm:px-3"
+              onClick={() => void handleTicketAction('reopen')}
+              title={t('reopen')}
+              aria-label={t('reopen')}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md px-0 text-xs font-medium disabled:opacity-60 sm:w-auto sm:px-3"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{t("reopen")}</span>
+              <span className="hidden sm:inline">{t('reopen')}</span>
             </button>
           )}
 
@@ -1810,8 +1901,8 @@ export function MessageThread({
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
-                "inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted",
-                assignedAgentId ? "text-primary" : "text-muted-foreground"
+                'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md',
+                assignedAgentId ? 'text-primary' : 'text-muted-foreground'
               )}
               title={assignLabel}
               aria-label={assignLabel}
@@ -1824,21 +1915,21 @@ export function MessageThread({
             >
               <DropdownMenuItem
                 onClick={() => {
-                  setTransferAgentId("");
-                  setTransferDepartmentId(conversation.department_id ?? "");
-                  setTransferLineId(conversation.whatsapp_config_id ?? "");
+                  setTransferAgentId('');
+                  setTransferDepartmentId(conversation.department_id ?? '');
+                  setTransferLineId(conversation.whatsapp_config_id ?? '');
                   setTransferOpen(true);
                 }}
                 className="text-sm"
               >
-                {t("transferOrAssign")}
+                {t('transferOrAssign')}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
                 onClick={() => void handleDeleteConversation()}
-                className="text-sm text-destructive"
+                className="text-destructive text-sm"
               >
-                {t("deleteTicket")}
+                {t('deleteTicket')}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1876,43 +1967,43 @@ export function MessageThread({
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         {selectionMode && (
-          <div className="sticky top-0 z-20 mb-3 flex items-center justify-between gap-2 rounded-lg border border-border bg-card/95 px-3 py-2 shadow-sm backdrop-blur">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <div className="border-border bg-card/95 sticky top-0 z-20 mb-3 flex items-center justify-between gap-2 rounded-lg border px-3 py-2 shadow-sm backdrop-blur">
+            <div className="text-foreground flex items-center gap-2 text-sm font-medium">
               <button
                 type="button"
                 onClick={clearMessageSelection}
-                className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label={t("cancelSelection")}
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-7 items-center justify-center rounded-md"
+                aria-label={t('cancelSelection')}
               >
                 <X className="size-4" />
               </button>
-              {t("selectedMessages", { count: selectedMessageIds.size })}
+              {t('selectedMessages', { count: selectedMessageIds.size })}
             </div>
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => void handleCopySelectedMessages()}
-                className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                title={tActions("copy")}
-                aria-label={tActions("copy")}
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-8 items-center justify-center rounded-md"
+                title={tActions('copy')}
+                aria-label={tActions('copy')}
               >
                 <Copy className="size-4" />
               </button>
               <button
                 type="button"
                 onClick={openForwardDialog}
-                className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                title={t("forward")}
-                aria-label={t("forward")}
+                className="text-muted-foreground hover:bg-muted hover:text-foreground flex size-8 items-center justify-center rounded-md"
+                title={t('forward')}
+                aria-label={t('forward')}
               >
                 <Forward className="size-4" />
               </button>
               <button
                 type="button"
                 onClick={() => void handleDeleteSelectedMessages()}
-                className="flex size-8 items-center justify-center rounded-md text-destructive hover:bg-destructive/10"
-                title={t("delete")}
-                aria-label={t("delete")}
+                className="text-destructive hover:bg-destructive/10 flex size-8 items-center justify-center rounded-md"
+                title={t('delete')}
+                aria-label={t('delete')}
               >
                 <Trash2 className="size-4" />
               </button>
@@ -1921,13 +2012,15 @@ export function MessageThread({
         )}
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">{t("noMessagesYet")}</p>
-            <p className="text-xs text-muted-foreground">
-              {t("sendTemplateHint")}
+            <p className="text-muted-foreground text-sm">
+              {t('noMessagesYet')}
+            </p>
+            <p className="text-muted-foreground text-xs">
+              {t('sendTemplateHint')}
             </p>
           </div>
         ) : (
@@ -1936,7 +2029,7 @@ export function MessageThread({
               <div key={group.date}>
                 {/* Date separator */}
                 <div className="mb-4 flex items-center justify-center">
-                  <span className="rounded-full bg-muted px-3 py-1 text-[10px] font-medium text-muted-foreground">
+                  <span className="bg-muted text-muted-foreground rounded-full px-3 py-1 text-[10px] font-medium">
                     {formatDateSeparator(group.date, t, locale)}
                   </span>
                 </div>
@@ -1949,9 +2042,10 @@ export function MessageThread({
                     const reply = parent
                       ? {
                           authorLabel:
-                            parent.sender_type === "agent" || parent.sender_type === "bot"
-                              ? t("me") 
-                              : contact?.name || contact?.phone || "Unknown",
+                            parent.sender_type === 'agent' ||
+                            parent.sender_type === 'bot'
+                              ? t('me')
+                              : contact?.name || contact?.phone || 'Unknown',
                           preview: buildReplyPreview(parent, tQuote),
                           messageId: parent.id,
                         }
@@ -1962,13 +2056,12 @@ export function MessageThread({
                     const handlePillToggle = (emoji: string) => {
                       const own = msgReactions?.find(
                         (r) =>
-                          r.actor_type === "agent" &&
-                          r.actor_id === user?.id,
+                          r.actor_type === 'agent' && r.actor_id === user?.id
                       );
-                      const next = own?.emoji === emoji ? "" : emoji;
+                      const next = own?.emoji === emoji ? '' : emoji;
                       void postReaction(msg.id, next);
                     };
-                    if (msg.content_type === "system") {
+                    if (msg.content_type === 'system') {
                       return (
                         <div key={msg.id} data-message-id={msg.id}>
                           <MessageBubble message={msg} />
@@ -1980,9 +2073,9 @@ export function MessageThread({
                         key={msg.id}
                         data-message-id={msg.id}
                         className={cn(
-                          "rounded-2xl transition-all duration-300",
+                          'rounded-2xl transition-all duration-300',
                           highlightMessageId === msg.id &&
-                            "animate-pulse bg-primary/10 ring-2 ring-primary/40 ring-offset-2 ring-offset-background",
+                            'bg-primary/10 ring-primary/40 ring-offset-background animate-pulse ring-2 ring-offset-2'
                         )}
                       >
                         <MessageActions
@@ -2029,37 +2122,39 @@ export function MessageThread({
           auto-reply configured. */}
       <Dialog open={forwardDialogOpen} onOpenChange={setForwardDialogOpen}>
         <DialogContent className="max-w-sm">
-          <DialogTitle>{t("forward")}</DialogTitle>
+          <DialogTitle>{t('forward')}</DialogTitle>
           <div className="space-y-3">
             <Select
               value={forwardContactId}
-              onValueChange={(value) => setForwardContactId(value ?? "")}
+              onValueChange={(value) => setForwardContactId(value ?? '')}
             >
               <SelectTrigger className="w-full">
                 <span className="truncate">
-                  {forwardContacts.find((contact) => contact.id === forwardContactId)
-                    ?.name ??
-                    forwardContacts.find((contact) => contact.id === forwardContactId)
-                      ?.phone ??
-                    t("chooseForwardTarget")}
+                  {forwardContacts.find(
+                    (contact) => contact.id === forwardContactId
+                  )?.name ??
+                    forwardContacts.find(
+                      (contact) => contact.id === forwardContactId
+                    )?.phone ??
+                    t('chooseForwardTarget')}
                 </span>
               </SelectTrigger>
               <SelectContent>
                 {forwardContacts.map((contact) => (
-                    <SelectItem key={contact.id} value={contact.id}>
-                      {contact.name || contact.phone || t("unknown")}
-                    </SelectItem>
-                  ))}
+                  <SelectItem key={contact.id} value={contact.id}>
+                    {contact.name || contact.phone || t('unknown')}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <Select
               value={forwardLineId}
-              onValueChange={(value) => setForwardLineId(value ?? "")}
+              onValueChange={(value) => setForwardLineId(value ?? '')}
             >
               <SelectTrigger className="w-full">
                 <span className="truncate">
                   {lines.find((line) => line.id === forwardLineId)?.label ??
-                    t("transferLine")}
+                    t('transferLine')}
                 </span>
               </SelectTrigger>
               <SelectContent>
@@ -2074,17 +2169,17 @@ export function MessageThread({
               <button
                 type="button"
                 onClick={() => setForwardDialogOpen(false)}
-                className="h-9 rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
+                className="border-border hover:bg-muted h-9 rounded-md border px-3 text-sm font-medium"
               >
-                {t("cancel")}
+                {t('cancel')}
               </button>
               <button
                 type="button"
                 disabled={!forwardContactId || !forwardLineId}
                 onClick={() => void handleForwardSelectedMessages()}
-                className="h-9 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 h-9 rounded-md px-3 text-sm font-medium disabled:opacity-50"
               >
-                {t("forward")}
+                {t('forward')}
               </button>
             </div>
           </div>
@@ -2098,7 +2193,7 @@ export function MessageThread({
         assignedAgentId={assignedAgentId}
         currentUserId={user?.id}
         onChange={(patch) => {
-          if ("assigned_agent_id" in patch) {
+          if ('assigned_agent_id' in patch) {
             onAssignChange(conversation.id, patch.assigned_agent_id ?? null);
           }
         }}

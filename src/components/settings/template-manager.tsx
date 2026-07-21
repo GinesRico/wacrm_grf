@@ -50,6 +50,11 @@ import {
   extractVariableIndices,
   TEMPLATE_LIMITS,
 } from '@/lib/whatsapp/template-validators';
+import { useAuth } from '@/hooks/use-auth';
+import {
+  subscribeRealtimeChannel,
+  unsubscribeRealtimeChannel,
+} from '@/lib/realtime/soketi-client';
 
 const CATEGORIES = ['Marketing', 'Utility', 'Authentication'] as const;
 type HeaderFormat = 'none' | 'text' | 'image' | 'video' | 'document';
@@ -137,6 +142,7 @@ async function readApiResponse(res: Response): Promise<Record<string, unknown>> 
 
 export function TemplateManager() {
   const t = useTranslations('Settings.templates');
+  const { accountId } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
@@ -190,6 +196,26 @@ export function TemplateManager() {
     void fetchTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refresh = () => void fetchTemplates();
+
+    channel.bind('template.created', refresh);
+    channel.bind('template.updated', refresh);
+    channel.bind('template.deleted', refresh);
+
+    return () => {
+      channel.unbind('template.created', refresh);
+      channel.unbind('template.updated', refresh);
+      channel.unbind('template.deleted', refresh);
+      unsubscribeRealtimeChannel(channelName);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
 
   async function fetchTemplates() {
     try {

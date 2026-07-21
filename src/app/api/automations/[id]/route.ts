@@ -14,6 +14,7 @@ import {
   validateStepsForActivation,
   validateTriggerForActivation,
 } from '@/lib/automations/validate'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 export async function GET(
   _request: Request,
@@ -102,6 +103,20 @@ export async function PATCH(
     if (err) return NextResponse.json({ error: err }, { status: 500 })
   }
 
+  const [updated] = await db
+    .select()
+    .from(automations)
+    .where(and(eq(automations.id, id), eq(automations.accountId, ctx.accountId)))
+    .limit(1)
+  if (updated) {
+    await publishRealtimeEvent('automation.updated', {
+      accountId: ctx.accountId,
+      payload: { automation: serializeAutomation(updated) },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish automation.updated:', error)
+    })
+  }
+
   return NextResponse.json({ ok: true })
 }
 
@@ -115,6 +130,12 @@ export async function DELETE(
     await db
       .delete(automations)
       .where(and(eq(automations.id, id), eq(automations.accountId, accountId)))
+    await publishRealtimeEvent('automation.deleted', {
+      accountId,
+      payload: { automation: { id } },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish automation.deleted:', error)
+    })
     return NextResponse.json({ ok: true })
   } catch (err) {
     return toErrorResponse(err)

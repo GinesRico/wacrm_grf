@@ -7,6 +7,7 @@ import { getCurrentAccount, requireRole, toErrorResponse } from '@/lib/auth/acco
 import { getFlowTemplate } from '@/lib/flows/templates'
 import { serializeFlow } from '@/lib/flows/serialize'
 import { assertCanCreateFlow } from '@/lib/platform/entitlements'
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server'
 
 export async function GET() {
   try {
@@ -87,7 +88,15 @@ export async function POST(request: Request) {
       )
     }
 
-    return NextResponse.json({ flow: serializeFlow(flow) }, { status: 201 })
+    const serialized = serializeFlow(flow)
+    await publishRealtimeEvent('flow.created', {
+      accountId: ctx.accountId,
+      payload: { flow: serialized },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish flow.created:', error)
+    })
+
+    return NextResponse.json({ flow: serialized }, { status: 201 })
   }
 
   if (!body.name?.trim()) {
@@ -108,5 +117,12 @@ export async function POST(request: Request) {
     .returning()
 
   if (!flow) return NextResponse.json({ error: 'insert failed' }, { status: 500 })
-  return NextResponse.json({ flow: serializeFlow(flow) }, { status: 201 })
+  const serialized = serializeFlow(flow)
+  await publishRealtimeEvent('flow.created', {
+    accountId: ctx.accountId,
+    payload: { flow: serialized },
+  }).catch((error) => {
+    console.warn('[realtime] failed to publish flow.created:', error)
+  })
+  return NextResponse.json({ flow: serialized }, { status: 201 })
 }

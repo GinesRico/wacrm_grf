@@ -16,6 +16,7 @@ import { buildMetaTemplatePayload } from "@/lib/whatsapp/template-components";
 import { ensureImageHeaderHandle } from "@/lib/whatsapp/template-header-handle";
 import { normalizeStatus } from "@/lib/whatsapp/template-status-normalize";
 import { serializeMessageTemplate } from "@/lib/whatsapp/template-serializer";
+import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
 
 function buildUpsertRow(
   accountId: string,
@@ -189,10 +190,17 @@ export async function POST(request: Request) {
         submissionError: null,
       }),
     );
+    const template = serializeMessageTemplate(row);
+    await publishRealtimeEvent("template.created", {
+      accountId: ctx.accountId,
+      payload: { template },
+    }).catch((error) => {
+      console.warn("[realtime] failed to publish template.created:", error);
+    });
 
     return NextResponse.json({
       success: true,
-      template: serializeMessageTemplate(row),
+      template,
       dry_run: dryRun,
     });
   } catch (error) {
