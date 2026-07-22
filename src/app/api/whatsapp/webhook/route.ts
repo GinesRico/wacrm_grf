@@ -1,5 +1,5 @@
 import { NextResponse, after } from 'next/server';
-import { legacyDb } from '@/db/legacy-query';
+import { webhookDb } from './db-adapter';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp/meta-api';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
@@ -29,7 +29,7 @@ import { buildIncomingMediaPath } from '@/lib/storage/upload-media';
 export const maxDuration = 60;
 
 function dbAdmin() {
-  return legacyDb();
+  return webhookDb();
 }
 
 interface AppointmentSlotSelection {

@@ -1157,6 +1157,24 @@ export const appointmentRecords = pgTable(
   ],
 );
 
+export const appointmentWebhookEvents = pgTable(
+  "appointment_webhook_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    externalId: text("external_id").notNull(),
+    eventTimestamp: integer("event_timestamp").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_appointment_webhook_events_account").on(table.accountId),
+  ],
+);
+
 export const appointmentAvailabilityMessages = pgTable(
   "appointment_availability_messages",
   {

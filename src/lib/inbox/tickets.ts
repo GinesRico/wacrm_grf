@@ -113,7 +113,7 @@ export function getConversationMutationPatch(
       if (current.status !== "open" && current.status !== "pending") {
         throw new InboxWorkflowError("Only open or pending conversations can be resolved.", 409);
       }
-      return { status: "closed", assigned_agent_id: userId };
+      return { status: "closed", assigned_agent_id: null };
     case "return_to_pending":
       if (current.status !== "open") {
         throw new InboxWorkflowError("Only open conversations can be returned to pending.", 409);

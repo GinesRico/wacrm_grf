@@ -1135,6 +1135,7 @@ function ConversationItem({
     assignedAgent?.full_name || assignedAgent?.email || null;
   const assignedInitial = assignedAgentName?.charAt(0).toUpperCase() ?? null;
   const opensDirectly = conversation.status !== 'pending';
+  const isResolved = conversation.status === 'closed';
 
   const handleClick = useCallback(() => {
     if (opensDirectly) onSelect(conversation);
@@ -1226,8 +1227,8 @@ function ConversationItem({
               <span
                 role="button"
                 tabIndex={0}
-                title={t('preview')}
-                aria-label={t('preview')}
+                title={isResolved ? t('statusClosed') : t('preview')}
+                aria-label={isResolved ? t('statusClosed') : t('preview')}
                 onClick={(event) => {
                   event.stopPropagation();
                   onPreview(conversation);
@@ -1239,9 +1240,18 @@ function ConversationItem({
                     onPreview(conversation);
                   }
                 }}
-                className="text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-4 w-4 items-center justify-center rounded-full"
+                className={cn(
+                  'hover:bg-muted inline-flex h-4 w-4 items-center justify-center rounded-full',
+                  isResolved
+                    ? 'text-primary hover:text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
               >
-                <Eye className="h-3.5 w-3.5" />
+                {isResolved ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="h-3.5 w-3.5" />
+                )}
               </span>
               {conversation.unread_count > 0 && (
                 <span className="bg-primary text-primary-foreground flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold">

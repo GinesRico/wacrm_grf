@@ -20,7 +20,27 @@ import type {
   AppointmentAvailabilityStepConfig,
   CreateAppointmentStepConfig,
 } from '@/types'
-import { dbAdmin } from './admin-client'
+import { and, asc, count, eq, gte, isNull, sql } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import {
+  automationLogs,
+  automationPendingExecutions,
+  automationSteps,
+  automations,
+  contactCustomValues,
+  contactTags,
+  contacts,
+  crmAccounts,
+  customFields,
+  deals,
+  appointmentAvailabilityMessages,
+  appointmentRecords,
+  paymentLinks,
+  profiles,
+  conversations,
+} from '@/db/schema'
+import { serializeAutomation } from './serialize'
 import { engineSendText, engineSendTemplate, engineSendInteractive } from './meta-send'
 import { validateInteractivePayload } from '@/lib/whatsapp/interactive'
 import { isDeliverableUrl } from '@/lib/webhooks/ssrf'
@@ -41,6 +61,19 @@ import {
   renderAppointmentsMessage,
   requireActiveArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments'
+
+function serializeAutomationStep(row: typeof automationSteps.$inferSelect): AutomationStep {
+  return {
+    id: row.id,
+    automation_id: row.automationId,
+    parent_step_id: row.parentStepId,
+    branch: row.branch as AutomationStep['branch'],
+    step_type: row.stepType as AutomationStep['step_type'],
+    step_config: row.stepConfig as AutomationStep['step_config'],
+    position: row.position,
+    created_at: row.createdAt.toISOString(),
+  }
+}
 
 // ------------------------------------------------------------
 // Public API
@@ -101,8 +134,6 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<Di
     errors: [],
   }
   try {
-    const db = dbAdmin()
-
     // Tenant isolation. `contactId` can be caller-supplied (the manual
     // POST /api/automations/engine entrypoint reads it straight from the
     // request body), and every step below runs through the service-role
@@ -111,18 +142,11 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<Di
     // forged id is refused silently — callers are fire-and-forget, and a
     // distinct error would leak whether a given contact UUID exists.
     if (input.contactId) {
-      const { data: owned, error: ownErr } = await db
-        .from('contacts')
-        .select('id')
-        .eq('id', input.contactId)
-        .eq('account_id', input.accountId)
-        .maybeSingle()
-      if (ownErr) {
-        console.error('[automations] contact ownership check failed:', ownErr)
-        result.failed += 1
-        result.errors.push(`contact ownership check failed: ${ownErr.message ?? ownErr}`)
-        return result
-      }
+      const [owned] = await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, input.accountId)))
+        .limit(1)
       if (!owned) {
         console.warn('[automations] contact not in account, refusing dispatch', input.contactId)
         result.refused = 'contact_not_in_account'
@@ -130,23 +154,21 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<Di
       }
     }
 
-    const { data: automations, error } = await db
-      .from('automations')
-      .select('*')
-      .eq('account_id', input.accountId)
-      .eq('trigger_type', input.triggerType)
-      .eq('is_active', true)
+    const automationRows = await db
+      .select()
+      .from(automations)
+      .where(
+        and(
+          eq(automations.accountId, input.accountId),
+          eq(automations.triggerType, input.triggerType),
+          eq(automations.isActive, true),
+        ),
+      )
+    const activeAutomations = automationRows.map(serializeAutomation)
+    result.fetched = activeAutomations.length
+    if (activeAutomations.length === 0) return result
 
-    if (error) {
-      console.error('[automations] fetch failed:', error)
-      result.failed += 1
-      result.errors.push(`automation fetch failed: ${error.message ?? error}`)
-      return result
-    }
-    result.fetched = automations?.length ?? 0
-    if (!automations || automations.length === 0) return result
-
-    for (const automation of automations as Automation[]) {
+    for (const automation of activeAutomations) {
       if (!triggerMatches(automation, input.context)) continue
       result.matched += 1
       try {
@@ -188,22 +210,22 @@ export async function resumePendingExecution(pending: {
   next_step_position: number
   context: AutomationContext
 }): Promise<void> {
-  const db = dbAdmin()
-  const { data: automation, error } = await db
-    .from('automations')
-    .select('*')
-    .eq('id', pending.automation_id)
-    .single()
+  const [automationRow] = await db
+    .select()
+    .from(automations)
+    .where(eq(automations.id, pending.automation_id))
+    .limit(1)
 
-  if (error || !automation) {
-    console.error('[automations] resume: missing automation', pending.automation_id, error)
+  if (!automationRow) {
+    console.error('[automations] resume: missing automation', pending.automation_id)
     await markPending(pending.id, 'failed')
     return
   }
+  const automation = serializeAutomation(automationRow)
 
   try {
     await executeStepsFrom({
-      automation: automation as Automation,
+      automation,
       contactId: pending.contact_id,
       context: pending.context ?? {},
       parentStepId: pending.parent_step_id,
@@ -224,28 +246,25 @@ export async function resumePendingExecution(pending: {
 // ------------------------------------------------------------
 
 async function executeAutomation(automation: Automation, input: DispatchInput) {
-  const db = dbAdmin()
-
-  const { data: log, error: logErr } = await db
-    .from('automation_logs')
-    .insert({
-      automation_id: automation.id,
+  const [log] = await db
+    .insert(automationLogs)
+    .values({
+      automationId: automation.id,
       // Tenancy: matches automation.account_id (NOT NULL post-017).
-      account_id: automation.account_id,
+      accountId: automation.account_id,
       // Audit: keeps the historical "author of this automation"
       // pointer so logs still attribute to the right user even
       // after teammates join the account.
-      user_id: automation.user_id,
-      contact_id: input.contactId ?? null,
-      trigger_event: input.triggerType,
-      steps_executed: [],
+      userId: automation.user_id,
+      contactId: input.contactId ?? null,
+      triggerEvent: input.triggerType,
+      stepsExecuted: [],
       status: 'success',
     })
-    .select()
-    .single()
+    .returning({ id: automationLogs.id })
 
-  if (logErr || !log) {
-    console.error('[automations] cannot create log:', logErr)
+  if (!log) {
+    console.error('[automations] cannot create log')
     return
   }
 
@@ -264,11 +283,10 @@ async function executeAutomation(automation: Automation, input: DispatchInput) {
   // Doing this with a client-side read-modify-write raced when the
   // same automation fired for two contacts simultaneously — both
   // would read N and both write N+1, losing one count permanently.
-  const { error: rpcErr } = await db.rpc('increment_automation_execution_count', {
-    p_automation_id: automation.id,
-  })
-  if (rpcErr) {
-    console.error('[automations] increment counter failed:', rpcErr)
+  try {
+    await db.execute(sql`select public.increment_automation_execution_count(${automation.id})`)
+  } catch (error) {
+    console.error('[automations] increment counter failed:', error)
   }
 }
 
@@ -284,27 +302,25 @@ interface ExecuteArgs {
 }
 
 async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
-  const db = dbAdmin()
+  const stepRows = await db
+    .select()
+    .from(automationSteps)
+    .where(
+      and(
+        eq(automationSteps.automationId, args.automation.id),
+        gte(automationSteps.position, args.startPosition),
+        args.parentStepId === null
+          ? isNull(automationSteps.parentStepId)
+          : and(
+              eq(automationSteps.parentStepId, args.parentStepId),
+              eq(automationSteps.branch, args.branch ?? 'yes'),
+            ),
+      ),
+    )
+    .orderBy(asc(automationSteps.position))
+  const steps = stepRows.map(serializeAutomationStep)
 
-  const baseQuery = db
-    .from('automation_steps')
-    .select('*')
-    .eq('automation_id', args.automation.id)
-    .gte('position', args.startPosition)
-    .order('position', { ascending: true })
-
-  const scoped =
-    args.parentStepId === null
-      ? baseQuery.is('parent_step_id', null)
-      : baseQuery.eq('parent_step_id', args.parentStepId).eq('branch', args.branch ?? 'yes')
-
-  const { data: steps, error: stepsErr } = await scoped
-
-  if (stepsErr) {
-    await finalizeLog(args.logId, 'failed', stepsErr.message)
-    return
-  }
-  if (!steps || steps.length === 0) {
+  if (steps.length === 0) {
     if (args.parentStepId === null && args.logId) {
       await finalizeLog(args.logId, 'failed', 'No automation steps configured')
     }
@@ -315,24 +331,24 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
   let status: 'success' | 'partial' | 'failed' = 'success'
   let errorMessage: string | null = null
 
-  for (const step of steps as AutomationStep[]) {
+  for (const step of steps) {
     // `wait` is the suspension point: enqueue and stop processing this
     // scope. The cron endpoint will pick it up later.
     if (step.step_type === 'wait') {
       const cfg = step.step_config as WaitStepConfig
       const ms = waitMs(cfg)
-      await db.from('automation_pending_executions').insert({
-        automation_id: args.automation.id,
+      await db.insert(automationPendingExecutions).values({
+        automationId: args.automation.id,
         // Tenancy: account_id required NOT NULL post-017.
-        account_id: args.automation.account_id,
-        user_id: args.automation.user_id,
-        contact_id: args.contactId,
-        log_id: args.logId,
-        parent_step_id: args.parentStepId,
+        accountId: args.automation.account_id,
+        userId: args.automation.user_id,
+        contactId: args.contactId,
+        logId: args.logId,
+        parentStepId: args.parentStepId,
         branch: args.branch,
-        next_step_position: step.position + 1,
+        nextStepPosition: step.position + 1,
         context: args.context,
-        run_at: new Date(Date.now() + ms).toISOString(),
+        runAt: new Date(Date.now() + ms),
         status: 'pending',
       })
       results.push({
@@ -398,8 +414,6 @@ async function executeStepsFrom(args: ExecuteArgs): Promise<void> {
 }
 
 async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string> {
-  const db = dbAdmin()
-
   switch (step.step_type) {
     case 'send_message': {
       const cfg = step.step_config as SendMessageStepConfig
@@ -479,11 +493,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('add_tag needs contact + tag_id')
       await db
-        .from('contact_tags')
-        .upsert(
-          { contact_id: args.contactId, tag_id: cfg.tag_id },
-          { onConflict: 'contact_id,tag_id', ignoreDuplicates: true },
-        )
+        .insert(contactTags)
+        .values({ contactId: args.contactId, tagId: cfg.tag_id })
+        .onConflictDoNothing({ target: [contactTags.contactId, contactTags.tagId] })
       return `tag ${cfg.tag_id} added`
     }
 
@@ -493,10 +505,8 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('remove_tag needs contact + tag_id')
       await db
-        .from('contact_tags')
-        .delete()
-        .eq('contact_id', args.contactId)
-        .eq('tag_id', cfg.tag_id)
+        .delete(contactTags)
+        .where(and(eq(contactTags.contactId, args.contactId), eq(contactTags.tagId, cfg.tag_id)))
       return `tag ${cfg.tag_id} removed`
     }
 
@@ -508,19 +518,23 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         // Pick any member of the account. The existing implementation
         // only ever returned the automation's author; preserving that
         // shape until a real round-robin algorithm replaces it.
-        const { data: profiles } = await db
-          .from('profiles')
-          .select('user_id')
-          .eq('account_id', args.automation.account_id)
+        const rows = await db
+          .select({ userId: profiles.userId })
+          .from(profiles)
+          .where(eq(profiles.accountId, args.automation.account_id))
           .limit(1)
-        agentId = profiles?.[0]?.user_id
+        agentId = rows[0]?.userId
       }
       if (!agentId) return 'no agent resolved'
       await db
-        .from('conversations')
-        .update({ assigned_agent_id: agentId })
-        .eq('account_id', args.automation.account_id)
-        .eq('contact_id', args.contactId)
+        .update(conversations)
+        .set({ assignedAgentId: agentId })
+        .where(
+          and(
+            eq(conversations.accountId, args.automation.account_id),
+            eq(conversations.contactId, args.contactId),
+          ),
+        )
       return `assigned to ${agentId}`
     }
 
@@ -540,12 +554,16 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         }
         // Defense in depth: the service-role client bypasses RLS, so confirm
         // the field definition belongs to this account before writing.
-        const { data: field } = await db
-          .from('custom_fields')
-          .select('id')
-          .eq('id', customFieldId)
-          .eq('account_id', args.automation.account_id)
-          .maybeSingle()
+        const [field] = await db
+          .select({ id: customFields.id })
+          .from(customFields)
+          .where(
+            and(
+              eq(customFields.id, customFieldId),
+              eq(customFields.accountId, args.automation.account_id),
+            ),
+          )
+          .limit(1)
         if (!field) {
           return `field ${cfg.field} not writable from automations`
         }
@@ -553,11 +571,12 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         // runs overwrite rather than duplicate. Tenancy is enforced above and,
         // for the contact side, by the entry-point ownership guard.
         await db
-          .from('contact_custom_values')
-          .upsert(
-            { contact_id: args.contactId, custom_field_id: customFieldId, value },
-            { onConflict: 'contact_id,custom_field_id' },
-          )
+          .insert(contactCustomValues)
+          .values({ contactId: args.contactId, customFieldId, value })
+          .onConflictDoUpdate({
+            target: [contactCustomValues.contactId, contactCustomValues.customFieldId],
+            set: { value },
+          })
         return `custom field updated`
       }
 
@@ -569,10 +588,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // a future caller that skips the entry-point ownership guard still
       // cannot write across tenants.
       await db
-        .from('contacts')
-        .update({ [cfg.field]: value, updated_at: new Date().toISOString() })
-        .eq('id', args.contactId)
-        .eq('account_id', args.automation.account_id)
+        .update(contacts)
+        .set({ [cfg.field]: value, updatedAt: new Date() })
+        .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.automation.account_id)))
       return `${cfg.field} updated`
     }
 
@@ -584,21 +602,21 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // created deals consistent with the one-currency-per-account
       // rule (issue #218). Fall back to USD if the row is somehow
       // missing the value (pre-021 forks).
-      const { data: acct } = await db
-        .from('accounts')
-        .select('default_currency')
-        .eq('id', args.automation.account_id)
-        .maybeSingle()
-      await db.from('deals').insert({
+      const [acct] = await db
+        .select({ defaultCurrency: crmAccounts.defaultCurrency })
+        .from(crmAccounts)
+        .where(eq(crmAccounts.id, args.automation.account_id))
+        .limit(1)
+      await db.insert(deals).values({
         // Tenancy + audit, same split as automation_logs above.
-        account_id: args.automation.account_id,
-        user_id: args.automation.user_id,
-        pipeline_id: cfg.pipeline_id,
-        stage_id: cfg.stage_id,
-        contact_id: args.contactId,
+        accountId: args.automation.account_id,
+        userId: args.automation.user_id,
+        pipelineId: cfg.pipeline_id,
+        stageId: cfg.stage_id,
+        contactId: args.contactId,
         title: interpolate(cfg.title, args),
-        value: cfg.value ?? 0,
-        currency: acct?.default_currency ?? 'USD',
+        value: String(cfg.value ?? 0),
+        currency: acct?.defaultCurrency ?? 'USD',
         status: 'open',
       })
       return 'deal created'
@@ -637,12 +655,11 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!amountCents) throw new Error(`${step.step_type} needs a valid amount`)
       if (!cfg.concept) throw new Error(`${step.step_type} needs concept`)
 
-      const { data: contact } = await db
-        .from('contacts')
-        .select('id, email, phone')
-        .eq('id', args.contactId)
-        .eq('account_id', args.automation.account_id)
-        .maybeSingle()
+      const [contact] = await db
+        .select({ id: contacts.id, email: contacts.email, phone: contacts.phone })
+        .from(contacts)
+        .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.automation.account_id)))
+        .limit(1)
       if (!contact) throw new Error('contact not found for payment link')
 
       const { config, apiKey } = await requireActiveArveraConnection(
@@ -659,36 +676,35 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       })
       const normalized = responseToPaymentRecord(payload)
 
-      const { data: link, error } = await db
-        .from('payment_links')
-        .insert({
-          account_id: args.automation.account_id,
-          contact_id: args.contactId,
-          conversation_id: args.context.conversation_id ?? null,
+      const [link] = await db
+        .insert(paymentLinks)
+        .values({
+          accountId: args.automation.account_id,
+          contactId: args.contactId,
+          conversationId: args.context.conversation_id ?? null,
           provider: 'arvera-payments',
-          amount_cents: amountCents,
+          amountCents,
           currency: 'EUR',
           concept,
           email,
           phone,
-          order_id: normalized.orderId,
-          payment_url: normalized.paymentUrl,
+          orderId: normalized.orderId,
+          paymentUrl: normalized.paymentUrl,
           status: normalized.status,
-          raw_response: payload,
-          created_by: args.automation.user_id,
+          rawResponse: payload,
+          createdBy: args.automation.user_id,
         })
-        .select('*')
-        .single()
-      if (error || !link) {
-        throw new Error(`payment link save failed: ${error?.message ?? 'unknown error'}`)
+        .returning()
+      if (!link) {
+        throw new Error('payment link save failed: unknown error')
       }
 
       args.context.vars = {
         ...(args.context.vars ?? {}),
         payment_link_id: link.id,
-        payment_url: link.payment_url,
-        order_id: link.order_id,
-        amount_cents: link.amount_cents,
+        payment_url: link.paymentUrl,
+        order_id: link.orderId,
+        amount_cents: link.amountCents,
         concept: link.concept,
       }
 
@@ -696,9 +712,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         const conversationId = await resolveConversationId(args)
         if (config.delivery_mode === 'template' && config.template_name) {
           const templateParams = buildPaymentTemplateParams(config, {
-            payment_url: link.payment_url,
-            order_id: link.order_id,
-            amount_cents: link.amount_cents,
+            payment_url: link.paymentUrl,
+            order_id: link.orderId,
+            amount_cents: link.amountCents,
             concept: link.concept,
             email: link.email,
             phone: link.phone,
@@ -716,15 +732,15 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
               buttonParams: templateParams.buttonParams,
             },
           })
-          return `payment link template sent (${link.order_id}, ${whatsapp_message_id})`
+          return `payment link template sent (${link.orderId}, ${whatsapp_message_id})`
         }
         const text = renderPaymentMessage(
           cfg.message || config.default_message || ARVERA_DEFAULT_MESSAGE,
           {
-            payment_url: link.payment_url,
+            payment_url: link.paymentUrl,
             amount_eur: formatEuroAmount(amountCents),
             concept: link.concept,
-            order_id: link.order_id,
+            order_id: link.orderId,
           },
         )
         const { whatsapp_message_id } = await engineSendText({
@@ -734,10 +750,10 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           contactId: args.contactId,
           text,
         })
-        return `payment link sent (${link.order_id}, ${whatsapp_message_id})`
+        return `payment link sent (${link.orderId}, ${whatsapp_message_id})`
       }
 
-      return `payment link created (${link.order_id})`
+      return `payment link created (${link.orderId})`
     }
 
     case 'send_appointment_availability': {
@@ -766,25 +782,24 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         timezone: cfg.timezone ?? config.timezone,
       }).catch(() => ({ disponibles: [] }))
 
-      const { data: audit, error } = await db
-        .from('appointment_availability_messages')
-        .insert({
-          account_id: args.automation.account_id,
-          contact_id: args.contactId,
-          conversation_id: conversationId,
+      const [audit] = await db
+        .insert(appointmentAvailabilityMessages)
+        .values({
+          accountId: args.automation.account_id,
+          contactId: args.contactId,
+          conversationId,
           date,
-          send_mode: 'booking_link',
+          sendMode: 'booking_link',
           service,
           slots: availability.disponibles,
-          short_url: messagePayload.short_url ?? null,
-          message_text: text,
-          raw_response: messagePayload,
-          created_by: args.automation.user_id,
+          shortUrl: messagePayload.short_url ?? null,
+          messageText: text,
+          rawResponse: messagePayload,
+          createdBy: args.automation.user_id,
         })
-        .select('*')
-        .single()
-      if (error || !audit) {
-        throw new Error(`availability message save failed: ${error?.message ?? 'unknown error'}`)
+        .returning({ id: appointmentAvailabilityMessages.id })
+      if (!audit) {
+        throw new Error('availability message save failed: unknown error')
       }
 
       const { whatsapp_message_id } = await engineSendText({
@@ -809,12 +824,11 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       if (!args.contactId) throw new Error('create_appointment needs a contact')
       if (!cfg.startTime || !cfg.endTime) throw new Error('create_appointment needs start/end')
 
-      const { data: contact } = await db
-        .from('contacts')
-        .select('id, name, email, phone')
-        .eq('id', args.contactId)
-        .eq('account_id', args.automation.account_id)
-        .maybeSingle()
+      const [contact] = await db
+        .select({ id: contacts.id, name: contacts.name, email: contacts.email, phone: contacts.phone })
+        .from(contacts)
+        .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.automation.account_id)))
+        .limit(1)
       if (!contact) throw new Error('contact not found for appointment')
 
       const { config, apiToken } = await requireActiveArveraAppointmentsConnection(
@@ -840,30 +854,46 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           Notas: cfg.notes ? interpolate(cfg.notes, args) : null,
         },
       })
+      if (!appointment.Id) throw new Error('appointment provider response is missing Id')
 
-      const { data: record, error } = await db
-        .from('appointment_records')
-        .upsert(
-          {
-            account_id: args.automation.account_id,
-            contact_id: args.contactId,
-            external_id: appointment.Id,
+      const [record] = await db
+        .insert(appointmentRecords)
+        .values({
+            accountId: args.automation.account_id,
+            contactId: args.contactId,
+            provider: 'arvera-appointments',
+            externalId: appointment.Id,
             status: appointment.Estado ?? null,
             service: appointment.Servicio ?? null,
-            customer_name: appointment.Nombre ?? null,
+            customerName: appointment.Nombre ?? null,
             phone: appointment.Telefono ?? null,
             email: appointment.Email ?? null,
-            start_time: appointment.startTime ?? null,
-            end_time: appointment.endTime ?? null,
-            cancel_url: appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? null,
-            raw_payload: appointment,
+            startTime: appointment.startTime ? new Date(appointment.startTime) : null,
+            endTime: appointment.endTime ? new Date(appointment.endTime) : null,
+            cancelUrl: appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? null,
+            rawPayload: appointment,
+          })
+        .onConflictDoUpdate({
+          target: [
+            appointmentRecords.accountId,
+            appointmentRecords.provider,
+            appointmentRecords.externalId,
+          ],
+          set: {
+            status: appointment.Estado ?? null,
+            service: appointment.Servicio ?? null,
+            customerName: appointment.Nombre ?? null,
+            phone: appointment.Telefono ?? null,
+            email: appointment.Email ?? null,
+            startTime: appointment.startTime ? new Date(appointment.startTime) : null,
+            endTime: appointment.endTime ? new Date(appointment.endTime) : null,
+            cancelUrl: appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? null,
+            rawPayload: appointment,
           },
-          { onConflict: 'account_id,provider,external_id' },
-        )
-        .select('*')
-        .single()
-      if (error || !record) {
-        throw new Error(`appointment record save failed: ${error?.message ?? 'unknown error'}`)
+        })
+        .returning({ id: appointmentRecords.id })
+      if (!record) {
+        throw new Error('appointment record save failed: unknown error')
       }
       args.context.vars = {
         ...(args.context.vars ?? {}),
@@ -882,10 +912,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
     case 'close_conversation': {
       if (!args.contactId) throw new Error('close_conversation needs a contact')
       await db
-        .from('conversations')
-        .update({ status: 'closed', updated_at: new Date().toISOString() })
-        .eq('account_id', args.automation.account_id)
-        .eq('contact_id', args.contactId)
+        .update(conversations)
+        .set({ status: 'closed', updatedAt: new Date() })
+        .where(
+          and(
+            eq(conversations.accountId, args.automation.account_id),
+            eq(conversations.contactId, args.contactId),
+          ),
+        )
       return 'conversation closed'
     }
 
@@ -909,15 +943,18 @@ async function resolveConversationId(args: ExecuteArgs): Promise<string> {
   const fromCtx = args.context.conversation_id
   if (fromCtx) return fromCtx
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
-  const { data, error } = await dbAdmin()
-    .from('conversations')
-    .select('id')
-    .eq('account_id', args.automation.account_id)
-    .eq('contact_id', args.contactId)
-    .maybeSingle()
-  if (error) throw new Error(`conversation lookup failed: ${error.message}`)
-  if (!data?.id) throw new Error('no conversation for contact')
-  return data.id as string
+  const [row] = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.accountId, args.automation.account_id),
+        eq(conversations.contactId, args.contactId),
+      ),
+    )
+    .limit(1)
+  if (!row?.id) throw new Error('no conversation for contact')
+  return row.id
 }
 
 export function triggerMatches(automation: Automation, ctx: AutomationContext | undefined): boolean {
@@ -949,31 +986,26 @@ export function triggerMatches(automation: Automation, ctx: AutomationContext | 
 }
 
 async function evaluateCondition(cfg: ConditionStepConfig, args: ExecuteArgs): Promise<boolean> {
-  const db = dbAdmin()
   switch (cfg.subject) {
     case 'tag_presence': {
       if (!args.contactId || !cfg.operand) return false
       // contact_tags has no account_id column (its RLS keys off the parent
       // contact), so tenant scoping here relies on the contact-ownership
       // guard in runAutomationsForTrigger.
-      const { count } = await db
-        .from('contact_tags')
-        .select('id', { count: 'exact', head: true })
-        .eq('contact_id', args.contactId)
-        .eq('tag_id', cfg.operand)
-      return (count ?? 0) > 0
+      const [row] = await db
+        .select({ value: count() })
+        .from(contactTags)
+        .where(and(eq(contactTags.contactId, args.contactId), eq(contactTags.tagId, cfg.operand)))
+      return (row?.value ?? 0) > 0
     }
     case 'contact_field': {
       if (!args.contactId || !cfg.operand) return false
       // Scope to the account so the condition can't be turned into a
       // cross-tenant read oracle via the service-role client.
-      const { data } = await db
-        .from('contacts')
-        .select(cfg.operand)
-        .eq('id', args.contactId)
-        .eq('account_id', args.automation.account_id)
-        .maybeSingle()
-      const v = (data as Record<string, unknown> | null)?.[cfg.operand]
+      const result = await db.execute(
+        sql`select ${sql.identifier(cfg.operand)} as value from contacts where id = ${args.contactId} and account_id = ${args.automation.account_id} limit 1`,
+      )
+      const v = (result.rows[0] as { value?: unknown } | undefined)?.value
       return v != null && String(v) === String(cfg.value ?? '')
     }
     case 'message_content': {
@@ -1036,23 +1068,25 @@ async function appendResults(
   errorMessage: string | null,
 ) {
   if (!logId) return
-  const db = dbAdmin()
-  const { data: existing } = await db
-    .from('automation_logs')
-    .select('steps_executed, status')
-    .eq('id', logId)
-    .single()
+  const [existing] = await db
+    .select({
+      stepsExecuted: automationLogs.stepsExecuted,
+      status: automationLogs.status,
+    })
+    .from(automationLogs)
+    .where(eq(automationLogs.id, logId))
+    .limit(1)
   const merged = [
-    ...((existing?.steps_executed as AutomationLogStepResult[] | undefined) ?? []),
+    ...((existing?.stepsExecuted as AutomationLogStepResult[] | undefined) ?? []),
     ...newItems,
   ]
-  const update: Record<string, unknown> = { steps_executed: merged }
+  const update: Partial<typeof automationLogs.$inferInsert> = { stepsExecuted: merged }
   // Only overwrite status on the outermost scope — nested branches pass null.
   if (status !== null) {
     update.status = status
   }
-  if (errorMessage) update.error_message = errorMessage
-  await db.from('automation_logs').update(update).eq('id', logId)
+  if (errorMessage) update.errorMessage = errorMessage
+  await db.update(automationLogs).set(update).where(eq(automationLogs.id, logId))
 }
 
 async function finalizeLog(
@@ -1061,15 +1095,15 @@ async function finalizeLog(
   errorMessage: string | null,
 ) {
   if (!logId) return
-  await dbAdmin()
-    .from('automation_logs')
-    .update({ status, error_message: errorMessage })
-    .eq('id', logId)
+  await db
+    .update(automationLogs)
+    .set({ status, errorMessage })
+    .where(eq(automationLogs.id, logId))
 }
 
 async function markPending(id: string, status: 'done' | 'failed') {
-  await dbAdmin()
-    .from('automation_pending_executions')
-    .update({ status })
-    .eq('id', id)
+  await db
+    .update(automationPendingExecutions)
+    .set({ status })
+    .where(eq(automationPendingExecutions.id, id))
 }

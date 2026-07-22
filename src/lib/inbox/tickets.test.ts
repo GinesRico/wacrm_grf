@@ -36,14 +36,14 @@ describe("getConversationMutationPatch", () => {
     ).toEqual({ status: "pending", assigned_agent_id: null });
   });
 
-  it("resolves pending conversations for the current agent", () => {
+  it("resolves pending conversations and clears assignment", () => {
     expect(
       getConversationMutationPatch(
         "resolve",
         { status: "pending", assigned_agent_id: null },
         "u1",
       ),
-    ).toEqual({ status: "closed", assigned_agent_id: "u1" });
+    ).toEqual({ status: "closed", assigned_agent_id: null });
   });
 
   it("reopens closed conversations for the current agent", () => {

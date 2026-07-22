@@ -1,6 +1,5 @@
-import { legacyDb } from '@/db/legacy-query'
+import { db } from '@/db/client'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function dbAdmin(): any {
-  return legacyDb()
+export function dbAdmin() {
+  return db
 }

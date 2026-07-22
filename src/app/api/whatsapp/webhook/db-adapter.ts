@@ -44,19 +44,17 @@ function columnsFromSelect(columns: string): string {
     .join(", ");
 }
 
-export function legacyDb() {
+export function webhookDb() {
   return {
     from(table: string) {
-      return new LegacyQuery(table);
-    },
-    rpc(name: string, args: Record<string, unknown> = {}) {
-      return legacyRpc(name, args);
+      return new WebhookQuery(table);
     },
   };
 }
 
+// Keeps this migration scoped to the webhook route while the shared engines use Drizzle directly.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-class LegacyQuery implements PromiseLike<any> {
+class WebhookQuery implements PromiseLike<any> {
   private operation: Operation = "select";
   private selected = "*";
   private values: Record<string, unknown> | Record<string, unknown>[] | null = null;
@@ -96,10 +94,7 @@ class LegacyQuery implements PromiseLike<any> {
     return this;
   }
 
-  upsert(
-    values: Record<string, unknown>,
-    options?: { onConflict?: string; ignoreDuplicates?: boolean },
-  ) {
+  upsert(values: Record<string, unknown>, options?: { onConflict?: string }) {
     this.operation = "upsert";
     this.values = values;
     this.conflictColumns = options?.onConflict?.split(",").map((v) => v.trim()).filter(Boolean) ?? [];
@@ -111,11 +106,6 @@ class LegacyQuery implements PromiseLike<any> {
     return this;
   }
 
-  neq(column: string, value: unknown) {
-    this.filters.push({ column, operator: "<>", value });
-    return this;
-  }
-
   is(column: string, value: unknown) {
     this.filters.push({ column, operator: "is", value });
     return this;
@@ -124,29 +114,6 @@ class LegacyQuery implements PromiseLike<any> {
   in(column: string, value: unknown[]) {
     this.filters.push({ column, operator: "in", value });
     return this;
-  }
-
-  gte(column: string, value: unknown) {
-    this.filters.push({ column, operator: ">=", value });
-    return this;
-  }
-
-  lte(column: string, value: unknown) {
-    this.filters.push({ column, operator: "<=", value });
-    return this;
-  }
-
-  filter(column: string, operator: string, value: unknown) {
-    if (operator === "eq") return this.eq(column, value);
-    if (operator === "neq") return this.neq(column, value);
-    if (operator === "is") return this.is(column, value);
-    if (operator === "not.is") {
-      this.filters.push({ column, operator: "not.is", value });
-      return this;
-    }
-    if (operator === "gte") return this.gte(column, value);
-    if (operator === "lte") return this.lte(column, value);
-    throw new Error(`Unsupported legacy filter operator: ${operator}`);
   }
 
   order(column: string, options?: { ascending?: boolean }) {
@@ -213,8 +180,7 @@ class LegacyQuery implements PromiseLike<any> {
   }
 
   private async execute() {
-    const query = this.buildSql();
-    const result = await db.execute(sql.raw(query));
+    const result = await db.execute(sql.raw(this.buildSql()));
     const rows = result.rows as Record<string, unknown>[];
     const count = this.countMode ? Number((rows[0] as { count?: unknown } | undefined)?.count ?? 0) : null;
 
@@ -248,9 +214,7 @@ class LegacyQuery implements PromiseLike<any> {
   private insertSql(): string {
     const rows = Array.isArray(this.values) ? this.values : [this.values as Record<string, unknown>];
     const keys = Object.keys(rows[0] ?? {});
-    const values = rows
-      .map((row) => `(${keys.map((key) => literal(row[key])).join(", ")})`)
-      .join(", ");
+    const values = rows.map((row) => `(${keys.map((key) => literal(row[key])).join(", ")})`).join(", ");
     const returning = this.returning || this.mode !== "many" ? " returning *" : "";
     return `insert into ${quoteIdent(this.table)} (${keys.map(quoteIdent).join(", ")}) values ${values}${returning}`;
   }
@@ -278,41 +242,4 @@ class LegacyQuery implements PromiseLike<any> {
     }
     return `insert into ${quoteIdent(this.table)} (${keys.map(quoteIdent).join(", ")}) values (${keys.map((key) => literal(values[key])).join(", ")}) on conflict (${conflict.map(quoteIdent).join(", ")}) do update set ${updates} returning *`;
   }
-}
-
-async function legacyRpc(name: string, args: Record<string, unknown>) {
-  if (name === "increment_automation_execution") {
-    const result = await db.execute(
-      sql.raw(`select public.increment_automation_execution(${literal(args.automation_id)}) as data`),
-    );
-    return { data: (result.rows[0] as { data?: unknown } | undefined)?.data ?? null, error: null };
-  }
-
-  if (name === "increment_automation_execution_count") {
-    const automationId = args.p_automation_id ?? args.automation_id;
-    await db.execute(
-      sql.raw(
-        `update automations set execution_count = execution_count + 1, last_executed_at = now(), updated_at = now() where id = ${literal(automationId)}`,
-      ),
-    );
-    return { data: null, error: null };
-  }
-
-  if (name === "increment_flow_execution") {
-    const result = await db.execute(
-      sql.raw(`select public.increment_flow_execution(${literal(args.flow_id)}) as data`),
-    );
-    return { data: (result.rows[0] as { data?: unknown } | undefined)?.data ?? null, error: null };
-  }
-
-  if (name === "claim_ai_reply_slot") {
-    const result = await db.execute(
-      sql.raw(
-        `select public.claim_ai_reply_slot(${literal(args.conversation_id)}, ${literal(args.max_replies)}) as data`,
-      ),
-    );
-    return { data: (result.rows[0] as { data?: unknown } | undefined)?.data ?? null, error: null };
-  }
-
-  throw new Error(`Unsupported legacy rpc: ${name}`);
 }

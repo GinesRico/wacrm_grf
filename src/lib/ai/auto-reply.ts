@@ -1,4 +1,7 @@
-import { dbAdmin } from './admin-client'
+import { and, eq, inArray, sql } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { automations, conversations } from '@/db/schema'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
@@ -45,8 +48,6 @@ export async function dispatchInboundToAiReply(
   const { accountId, conversationId, contactId, configOwnerUserId } = args
 
   try {
-    const db = dbAdmin()
-
     const config = await loadAiConfig(db, accountId)
     if (!config || !config.autoReplyEnabled) return
 
@@ -58,26 +59,34 @@ export async function dispatchInboundToAiReply(
     // avoid double-texting the customer. (Relationship triggers like
     // `first_inbound_message` don't count — they're not per-message
     // auto-responders.)
-    const { data: autoResponders } = await db
-      .from('automations')
-      .select('id')
-      .eq('account_id', accountId)
-      .eq('is_active', true)
-      .in('trigger_type', ['new_message_received', 'keyword_match'])
+    const autoResponders = await db
+      .select({ id: automations.id })
+      .from(automations)
+      .where(
+        and(
+          eq(automations.accountId, accountId),
+          eq(automations.isActive, true),
+          inArray(automations.triggerType, ['new_message_received', 'keyword_match']),
+        ),
+      )
       .limit(1)
-    if (autoResponders && autoResponders.length > 0) return
+    if (autoResponders.length > 0) return
 
-    const { data: conv, error: convErr } = await db
-      .from('conversations')
-      .select('assigned_agent_id, ai_autoreply_disabled, ai_reply_count')
-      .eq('id', conversationId)
-      .maybeSingle()
-    if (convErr || !conv) return
-    if (conv.assigned_agent_id) return // a human owns this thread
-    if (conv.ai_autoreply_disabled) return // handed off / turned off here
+    const [conv] = await db
+      .select({
+        assignedAgentId: conversations.assignedAgentId,
+        aiAutoreplyDisabled: conversations.aiAutoreplyDisabled,
+        aiReplyCount: conversations.aiReplyCount,
+      })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1)
+    if (!conv) return
+    if (conv.assignedAgentId) return // a human owns this thread
+    if (conv.aiAutoreplyDisabled) return // handed off / turned off here
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
-    if (conv.ai_reply_count >= config.autoReplyMaxPerConversation) return
+    if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) return
 
     const messages = await buildConversationContext(db, conversationId)
     if (messages.length === 0) return
@@ -142,18 +151,18 @@ export async function dispatchInboundToAiReply(
       // which notifies the agent.
       const summary = buildHandoffSummary({
         messages,
-        replyCount: conv.ai_reply_count ?? 0,
+        replyCount: conv.aiReplyCount ?? 0,
       })
-      const update: Record<string, unknown> = {
-        ai_autoreply_disabled: true,
-        ai_handoff_summary: summary,
+      const update: Partial<typeof conversations.$inferInsert> = {
+        aiAutoreplyDisabled: true,
+        aiHandoffSummary: summary,
       }
       // Only set the assignee when a target is configured AND the thread
       // isn't already owned — never stomp an existing human assignment.
-      if (config.handoffAgentId && !conv.assigned_agent_id) {
-        update.assigned_agent_id = config.handoffAgentId
+      if (config.handoffAgentId && !conv.assignedAgentId) {
+        update.assignedAgentId = config.handoffAgentId
       }
-      await db.from('conversations').update(update).eq('id', conversationId)
+      await db.update(conversations).set(update).where(eq(conversations.id, conversationId))
       return
     }
 
@@ -162,14 +171,13 @@ export async function dispatchInboundToAiReply(
     // another inbound just took the last slot, `claimed` is false and we
     // skip the send. (We consume a slot slightly before the send lands —
     // fail-safe: under-reply rather than over-reply.)
-    const { data: claimed, error: claimErr } = await db.rpc(
-      'claim_ai_reply_slot',
-      {
-        conversation_id: conversationId,
-        max_replies: config.autoReplyMaxPerConversation,
-      },
-    )
-    if (claimErr) {
+    let claimed = false
+    try {
+      const result = await db.execute(
+        sql`select public.claim_ai_reply_slot(${conversationId}, ${config.autoReplyMaxPerConversation}) as data`,
+      )
+      claimed = (result.rows[0] as { data?: unknown } | undefined)?.data === true
+    } catch (claimErr) {
       // A real error here (vs. losing the cap race) is almost always a
       // deploy issue — e.g. `claim_ai_reply_slot` not EXECUTE-able by the
       // service role, or the migration not applied. Log it loudly: a

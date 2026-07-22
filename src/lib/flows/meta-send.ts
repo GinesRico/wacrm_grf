@@ -7,6 +7,10 @@ import {
   type InteractiveListSection,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api'
+import { and, eq } from 'drizzle-orm'
+
+import { db } from '@/db/client'
+import { contacts, conversations, messages } from '@/db/schema'
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { getWhatsAppConfigForConversation } from '@/lib/whatsapp/config'
@@ -16,7 +20,6 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
-import { dbAdmin } from './admin-client'
 
 // ------------------------------------------------------------
 // Flows-side Meta sender (interactive variants).
@@ -66,15 +69,12 @@ interface SendTextEngineArgs {
 export async function engineSendText(
   args: SendTextEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = dbAdmin()
-
-  const { data: contact, error: contactErr } = await db
-    .from('contacts')
-    .select('id, phone')
-    .eq('id', args.contactId)
-    .eq('account_id', args.accountId)
-    .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  const [contact] = await db
+    .select({ id: contacts.id, phone: contacts.phone })
+    .from(contacts)
+    .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.accountId)))
+    .limit(1)
+  if (!contact?.phone) {
     throw new Error('contact not found for this account')
   }
 
@@ -123,30 +123,33 @@ export async function engineSendText(
   if (lastError) throw lastError
 
   if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    await db.update(contacts).set({ phone: workingPhone }).where(eq(contacts.id, contact.id))
   }
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: 'text',
-    content_text: args.text,
-    message_id: waMessageId,
+  try {
+    await db.insert(messages).values({
+    conversationId: args.conversationId,
+    senderType: 'bot',
+    contentType: 'text',
+    contentText: args.text,
+    messageId: waMessageId,
     status: 'sent',
-    ai_generated: args.aiGenerated ?? false,
+    aiGenerated: args.aiGenerated ?? false,
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  } catch (msgErr) {
+    throw new Error(
+      `sent to Meta but DB insert failed: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`,
+    )
   }
 
   await db
-    .from('conversations')
-    .update({
-      last_message_text: args.text,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    .update(conversations)
+    .set({
+      lastMessageText: args.text,
+      lastMessageAt: new Date(),
+      updatedAt: new Date(),
     })
-    .eq('id', args.conversationId)
+    .where(eq(conversations.id, args.conversationId))
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -176,15 +179,12 @@ interface SendMediaEngineArgs {
 export async function engineSendMedia(
   args: SendMediaEngineArgs,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = dbAdmin()
-
-  const { data: contact, error: contactErr } = await db
-    .from('contacts')
-    .select('id, phone')
-    .eq('id', args.contactId)
-    .eq('account_id', args.accountId)
-    .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  const [contact] = await db
+    .select({ id: contacts.id, phone: contacts.phone })
+    .from(contacts)
+    .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.accountId)))
+    .limit(1)
+  if (!contact?.phone) {
     throw new Error('contact not found for this account')
   }
 
@@ -236,7 +236,7 @@ export async function engineSendMedia(
   if (lastError) throw lastError
 
   if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    await db.update(contacts).set({ phone: workingPhone }).where(eq(contacts.id, contact.id))
   }
 
   // content_type='image'|'video'|'document' — these are already in the
@@ -244,26 +244,29 @@ export async function engineSendMedia(
   // content_text carries the caption (or empty) so the conversation
   // list preview shows something meaningful when the user glances at it.
   const preview = args.caption?.trim() || `[${args.kind}]`
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: args.conversationId,
-    sender_type: 'bot',
-    content_type: args.kind,
-    content_text: args.caption ?? null,
-    message_id: waMessageId,
+  try {
+    await db.insert(messages).values({
+    conversationId: args.conversationId,
+    senderType: 'bot',
+    contentType: args.kind,
+    contentText: args.caption ?? null,
+    messageId: waMessageId,
     status: 'sent',
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  } catch (msgErr) {
+    throw new Error(
+      `sent to Meta but DB insert failed: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`,
+    )
   }
 
   await db
-    .from('conversations')
-    .update({
-      last_message_text: preview,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    .update(conversations)
+    .set({
+      lastMessageText: preview,
+      lastMessageAt: new Date(),
+      updatedAt: new Date(),
     })
-    .eq('id', args.conversationId)
+    .where(eq(conversations.id, args.conversationId))
 
   return { whatsapp_message_id: waMessageId }
 }
@@ -325,18 +328,15 @@ type SendInput =
 async function sendInteractiveViaMeta(
   input: SendInput,
 ): Promise<{ whatsapp_message_id: string }> {
-  const db = dbAdmin()
-
   // Scope the contact + whatsapp_config lookups by account_id —
   // same defense-in-depth rationale as automations/meta-send.ts.
   // Migration 017 moved both tables to account-scoped tenancy.
-  const { data: contact, error: contactErr } = await db
-    .from('contacts')
-    .select('id, phone')
-    .eq('id', input.contactId)
-    .eq('account_id', input.accountId)
-    .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  const [contact] = await db
+    .select({ id: contacts.id, phone: contacts.phone })
+    .from(contacts)
+    .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, input.accountId)))
+    .limit(1)
+  if (!contact?.phone) {
     throw new Error('contact not found for this account')
   }
 
@@ -404,7 +404,7 @@ async function sendInteractiveViaMeta(
   if (lastError) throw lastError
 
   if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    await db.update(contacts).set({ phone: workingPhone }).where(eq(contacts.id, contact.id))
   }
 
   // Persist the bot's prompt to the messages table so it appears in
@@ -436,27 +436,30 @@ async function sendInteractiveViaMeta(
           sections: input.sections,
         }
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type: 'interactive',
-    content_text: input.bodyText,
-    interactive_payload: interactivePayload,
-    message_id: waMessageId,
+  try {
+    await db.insert(messages).values({
+    conversationId: input.conversationId,
+    senderType: 'bot',
+    contentType: 'interactive',
+    contentText: input.bodyText,
+    interactivePayload,
+    messageId: waMessageId,
     status: 'sent',
   })
-  if (msgErr) {
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+  } catch (msgErr) {
+    throw new Error(
+      `sent to Meta but DB insert failed: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`,
+    )
   }
 
   await db
-    .from('conversations')
-    .update({
-      last_message_text: input.bodyText,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    .update(conversations)
+    .set({
+      lastMessageText: input.bodyText,
+      lastMessageAt: new Date(),
+      updatedAt: new Date(),
     })
-    .eq('id', input.conversationId)
+    .where(eq(conversations.id, input.conversationId))
 
   return { whatsapp_message_id: waMessageId }
 }
