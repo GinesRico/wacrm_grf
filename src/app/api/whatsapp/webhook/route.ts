@@ -1,5 +1,16 @@
 import { NextResponse, after } from 'next/server';
-import { webhookDb } from './db-adapter';
+import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { db } from '@/db/client';
+import {
+  appointmentAvailabilityMessages,
+  broadcastRecipients,
+  broadcasts,
+  contacts,
+  conversations,
+  messageReactions,
+  messages,
+  whatsappConfig,
+} from '@/db/schema';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { downloadMedia, getMediaUrl } from '@/lib/whatsapp/meta-api';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
@@ -27,10 +38,6 @@ import { buildIncomingMediaPath } from '@/lib/storage/upload-media';
 // give it headroom beyond the platform default (Vercel clamps this to the
 // plan's ceiling). Tune as needed.
 export const maxDuration = 60;
-
-function dbAdmin() {
-  return webhookDb();
-}
 
 interface AppointmentSlotSelection {
   reply_id: string;
