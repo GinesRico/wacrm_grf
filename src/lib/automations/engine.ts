@@ -73,6 +73,16 @@ export interface DispatchInput {
   context?: AutomationContext
 }
 
+export interface DispatchResult {
+  trigger_type: AutomationTriggerType
+  fetched: number
+  matched: number
+  executed: number
+  failed: number
+  refused?: 'contact_not_in_account'
+  errors: string[]
+}
+
 /**
  * Fire all active automations matching the given trigger for an
  * account.
@@ -81,7 +91,15 @@ export interface DispatchInput {
  * All errors are caught and logged; per-automation failures are
  * recorded into automation_logs with status='failed'.
  */
-export async function runAutomationsForTrigger(input: DispatchInput): Promise<void> {
+export async function runAutomationsForTrigger(input: DispatchInput): Promise<DispatchResult> {
+  const result: DispatchResult = {
+    trigger_type: input.triggerType,
+    fetched: 0,
+    matched: 0,
+    executed: 0,
+    failed: 0,
+    errors: [],
+  }
   try {
     const db = dbAdmin()
 
@@ -101,11 +119,14 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
         .maybeSingle()
       if (ownErr) {
         console.error('[automations] contact ownership check failed:', ownErr)
-        return
+        result.failed += 1
+        result.errors.push(`contact ownership check failed: ${ownErr.message ?? ownErr}`)
+        return result
       }
       if (!owned) {
         console.warn('[automations] contact not in account, refusing dispatch', input.contactId)
-        return
+        result.refused = 'contact_not_in_account'
+        return result
       }
     }
 
@@ -118,21 +139,33 @@ export async function runAutomationsForTrigger(input: DispatchInput): Promise<vo
 
     if (error) {
       console.error('[automations] fetch failed:', error)
-      return
+      result.failed += 1
+      result.errors.push(`automation fetch failed: ${error.message ?? error}`)
+      return result
     }
-    if (!automations || automations.length === 0) return
+    result.fetched = automations?.length ?? 0
+    if (!automations || automations.length === 0) return result
 
     for (const automation of automations as Automation[]) {
       if (!triggerMatches(automation, input.context)) continue
+      result.matched += 1
       try {
         await executeAutomation(automation, input)
+        result.executed += 1
       } catch (err) {
         console.error('[automations] execute failed:', automation.id, err)
+        result.failed += 1
+        result.errors.push(
+          `automation ${automation.id} failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
       }
     }
   } catch (err) {
     console.error('[automations] dispatch failed:', err)
+    result.failed += 1
+    result.errors.push(`dispatch failed: ${err instanceof Error ? err.message : String(err)}`)
   }
+  return result
 }
 
 /**

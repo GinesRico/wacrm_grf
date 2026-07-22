@@ -30,7 +30,7 @@ export async function POST(request: Request) {
         ? (body.context as Record<string, unknown>)
         : {};
 
-    await runAutomationsForTrigger({
+    const dispatch = await runAutomationsForTrigger({
       accountId: ctx.accountId,
       triggerType: triggerType as AutomationTriggerType,
       contactId,
@@ -41,6 +41,7 @@ export async function POST(request: Request) {
       dispatched: true,
       trigger_type: triggerType,
       contact_id: contactId,
+      result: dispatch,
     });
   } catch (err) {
     return toApiErrorResponse(err);
