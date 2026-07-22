@@ -1,5 +1,20 @@
-import { describe, it, expect, vi } from 'vitest'
-type DbClient = any;
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const h = vi.hoisted(() => ({
+  row: null as Record<string, unknown> | null,
+}))
+
+vi.mock('@/db/client', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => (h.row ? [h.row] : []),
+        }),
+      }),
+    }),
+  },
+}))
 
 // decrypt is identity in tests so we don't depend on real ciphertext.
 vi.mock('@/lib/whatsapp/encryption', () => ({
@@ -8,34 +23,29 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
 
 import { loadAiConfig } from './config'
 
-function dbReturning(row: Record<string, unknown> | null): DbClient {
-  const chain = {
-    from: () => chain,
-    select: () => chain,
-    eq: () => chain,
-    maybeSingle: () => Promise.resolve({ data: row, error: null }),
-  }
-  return chain as unknown as DbClient
-}
-
 const ROW = {
   provider: 'openai',
   model: 'gpt-x',
-  api_key: 'enc-key',
-  system_prompt: null,
-  is_active: false,
-  auto_reply_enabled: false,
-  auto_reply_max_per_conversation: 3,
-  embeddings_api_key: null,
+  apiKey: 'enc-key',
+  systemPrompt: null,
+  isActive: false,
+  autoReplyEnabled: false,
+  autoReplyMaxPerConversation: 3,
+  handoffAgentId: null,
+  embeddingsApiKey: null,
 }
+
+beforeEach(() => {
+  h.row = ROW
+})
 
 describe('loadAiConfig requireActive', () => {
   it('returns null for an inactive config by default', async () => {
-    expect(await loadAiConfig(dbReturning(ROW), 'acct')).toBeNull()
+    expect(await loadAiConfig(null, 'acct')).toBeNull()
   })
 
   it('returns the config when requireActive is false (Playground path)', async () => {
-    const config = await loadAiConfig(dbReturning(ROW), 'acct', {
+    const config = await loadAiConfig(null, 'acct', {
       requireActive: false,
     })
     expect(config).not.toBeNull()
@@ -44,8 +54,7 @@ describe('loadAiConfig requireActive', () => {
   })
 
   it('returns null when there is no row', async () => {
-    expect(
-      await loadAiConfig(dbReturning(null), 'acct', { requireActive: false }),
-    ).toBeNull()
+    h.row = null
+    expect(await loadAiConfig(null, 'acct', { requireActive: false })).toBeNull()
   })
 })

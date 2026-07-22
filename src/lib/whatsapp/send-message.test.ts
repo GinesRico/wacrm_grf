@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 type DbClient = any;
 
 import {
   sendMessageToConversation,
   SendMessageError,
+  validateSendMessageParams,
   type SendMessageParams,
 } from './send-message';
 
@@ -130,22 +131,14 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
     );
   });
 
-  it('allows a long "caption" on audio (audio carries none) — so it reaches the DB', async () => {
-    // Audio is exempt from the caption cap, so validation passes and we
-    // proceed to the conversation lookup — proven by the stub throwing.
-    const spy = vi.fn(() => {
-      throw new Error('reached DB');
-    });
-    const db = { from: spy } as unknown as DbClient;
-    await expect(
-      sendMessageToConversation(db, 'acct-1', {
-        ...base,
+  it('allows a long caption on audio because audio carries no caption', () => {
+    expect(() =>
+      validateSendMessageParams({
         messageType: 'audio',
         mediaUrl: 'https://x/y.ogg',
         contentText: 'a'.repeat(2000),
-      })
-    ).rejects.toThrow('reached DB');
-    expect(spy).toHaveBeenCalledWith('conversations');
+      }),
+    ).not.toThrow();
   });
 });
 

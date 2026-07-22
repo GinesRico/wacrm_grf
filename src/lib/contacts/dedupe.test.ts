@@ -1,5 +1,31 @@
-import { describe, expect, it } from "vitest";
-type DbClient = any;
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const h = vi.hoisted(() => ({
+  rows: [] as Array<{
+    id: string;
+    userId: string;
+    accountId: string;
+    phone: string;
+    phoneNormalized: string | null;
+    name: string | null;
+    email: string | null;
+    company: string | null;
+    avatarUrl: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }>,
+}));
+
+vi.mock("@/db/client", () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: async () => h.rows,
+      }),
+    }),
+  },
+}));
+
 import {
   dedupeByPhone,
   findExistingContact,
@@ -7,6 +33,26 @@ import {
   isUniqueViolation,
   normalizeKey,
 } from "./dedupe";
+
+function contact(id: string, phone: string) {
+  return {
+    id,
+    userId: "u1",
+    accountId: "acct",
+    phone,
+    phoneNormalized: null,
+    name: null,
+    email: null,
+    company: null,
+    avatarUrl: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+  };
+}
+
+beforeEach(() => {
+  h.rows = [];
+});
 
 describe("normalizeKey", () => {
   it("strips every non-digit", () => {
@@ -67,31 +113,20 @@ describe("dedupeByPhone", () => {
 });
 
 describe("findExistingContact", () => {
-  // Minimal DbClient stub: resolves the .from().select().eq().like()
-  // chain to a fixed candidate set.
-  function stubDb(rows: Array<{ id: string; phone: string }>): DbClient {
-    const builder = {
-      select: () => builder,
-      eq: () => builder,
-      like: () => Promise.resolve({ data: rows, error: null }),
-    };
-    return { from: () => builder } as unknown as DbClient;
-  }
-
   it("returns a trunk-variant match via phonesMatch", async () => {
-    const db = stubDb([{ id: "c1", phone: "37063949836" }]);
-    const hit = await findExistingContact(db, "acct", "+370 063 949 836");
+    h.rows = [contact("c1", "37063949836")];
+    const hit = await findExistingContact(null, "acct", "+370 063 949 836");
     expect(hit?.id).toBe("c1");
   });
 
   it("returns null when no candidate matches", async () => {
-    const db = stubDb([{ id: "c1", phone: "15559999999" }]);
-    const hit = await findExistingContact(db, "acct", "+1 555-123-4567");
+    h.rows = [contact("c1", "15559999999")];
+    const hit = await findExistingContact(null, "acct", "+1 555-123-4567");
     expect(hit).toBeNull();
   });
 
   it("returns null for an empty phone without querying", async () => {
-    const db = stubDb([{ id: "c1", phone: "15551234567" }]);
-    expect(await findExistingContact(db, "acct", "   ")).toBeNull();
+    h.rows = [contact("c1", "15551234567")];
+    expect(await findExistingContact(null, "acct", "   ")).toBeNull();
   });
 });

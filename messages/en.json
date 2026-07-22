@@ -314,6 +314,7 @@
       "line": "Line",
       "agent": "Agent",
       "preview": "Preview",
+      "statusClosed": "Resolved",
       "loadingPreview": "Loading preview...",
       "searchInboxPlaceholder": "Search inbox",
       "departmentFilter": "Filter by departments",

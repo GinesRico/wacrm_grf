@@ -65,7 +65,26 @@ export const serializeContact = (row: Record<string, unknown>): ApiContact => ({
   email: (row.email as string | null) ?? null,
   company: (row.company as string | null) ?? null,
   avatar_url: (row.avatar_url as string | null) ?? null,
-  tags: [],
+  tags: Array.isArray(row.contact_tags)
+    ? row.contact_tags
+        .map((join) =>
+          join && typeof join === 'object'
+            ? (join as { tags?: unknown }).tags
+            : null,
+        )
+        .filter(
+          (tag): tag is { id: string; name: string; color: string } =>
+            Boolean(tag) &&
+            typeof tag === 'object' &&
+            typeof (tag as { id?: unknown }).id === 'string' &&
+            typeof (tag as { name?: unknown }).name === 'string',
+        )
+        .map((tag) => ({
+          id: tag.id,
+          name: tag.name,
+          color: tag.color ?? DEFAULT_TAG_COLOR,
+        }))
+    : [],
   created_at: row.created_at as string,
   updated_at: row.updated_at as string,
 });

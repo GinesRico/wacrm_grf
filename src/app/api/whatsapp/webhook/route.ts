@@ -110,6 +110,108 @@ function slotRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function serializeWhatsappConfig(row: typeof whatsappConfig.$inferSelect) {
+  return {
+    id: row.id,
+    user_id: row.userId,
+    account_id: row.accountId,
+    department_id: row.departmentId,
+    label: row.label,
+    phone_number_id: row.phoneNumberId,
+    waba_id: row.wabaId,
+    access_token: row.accessToken,
+    verify_token: row.verifyToken,
+    status: row.status,
+    connected_at: isoOrNull(row.connectedAt),
+    registered_at: isoOrNull(row.registeredAt),
+    subscribed_apps_at: isoOrNull(row.subscribedAppsAt),
+    last_registration_error: row.lastRegistrationError,
+    is_default: row.isDefault,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeMessageRow(row: typeof messages.$inferSelect) {
+  return {
+    id: row.id,
+    conversation_id: row.conversationId,
+    sender_type: row.senderType,
+    sender_id: row.senderId,
+    content_type: row.contentType,
+    content_text: row.contentText,
+    media_url: row.mediaUrl,
+    template_name: row.templateName,
+    message_id: row.messageId,
+    status: row.status,
+    reply_to_message_id: row.replyToMessageId,
+    interactive_reply_id: row.interactiveReplyId,
+    interactive_payload: row.interactivePayload,
+    is_forwarded: row.isForwarded,
+    forwarded_from_message_id: row.forwardedFromMessageId,
+    deleted_at: isoOrNull(row.deletedAt),
+    deleted_by_user_id: row.deletedByUserId,
+    is_starred: row.isStarred,
+    ai_generated: row.aiGenerated,
+    created_at: row.createdAt.toISOString(),
+  };
+}
+
+function serializeConversationRow(row: typeof conversations.$inferSelect) {
+  return {
+    id: row.id,
+    user_id: row.userId,
+    account_id: row.accountId,
+    contact_id: row.contactId,
+    whatsapp_config_id: row.whatsappConfigId,
+    department_id: row.departmentId,
+    status: row.status,
+    assigned_agent_id: row.assignedAgentId,
+    last_message_text: row.lastMessageText,
+    last_message_at: isoOrNull(row.lastMessageAt),
+    unread_count: row.unreadCount,
+    ai_autoreply_disabled: row.aiAutoreplyDisabled,
+    ai_reply_count: row.aiReplyCount,
+    ai_handoff_summary: row.aiHandoffSummary,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeContactRow(row: typeof contacts.$inferSelect) {
+  return {
+    id: row.id,
+    user_id: row.userId,
+    account_id: row.accountId,
+    phone: row.phone,
+    phone_normalized: row.phoneNormalized,
+    name: row.name,
+    email: row.email,
+    company: row.company,
+    avatar_url: row.avatarUrl,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+function serializeReactionRow(row: typeof messageReactions.$inferSelect) {
+  return {
+    id: row.id,
+    message_id: row.messageId,
+    conversation_id: row.conversationId,
+    actor_type: row.actorType,
+    actor_id: row.actorId,
+    emoji: row.emoji,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
 function extractSlotTime(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   return value.match(/(\d{2}:\d{2})/)?.[1] ?? null;
@@ -125,24 +227,35 @@ async function resolveSlotTimes(args: {
   endTime: string;
   service: string | null;
 } | null> {
-  const { data, error } = await dbAdmin()
-    .from('appointment_availability_messages')
-    .select('slots, service')
-    .eq('account_id', args.accountId)
-    .eq('conversation_id', args.conversationId)
-    .eq('date', args.date)
-    .order('created_at', { ascending: false })
-    .limit(5);
-
-  if (error) {
+  let rows: Array<{
+    slots: unknown;
+    service: string | null;
+  }>;
+  try {
+    rows = await db
+      .select({
+        slots: appointmentAvailabilityMessages.slots,
+        service: appointmentAvailabilityMessages.service,
+      })
+      .from(appointmentAvailabilityMessages)
+      .where(
+        and(
+          eq(appointmentAvailabilityMessages.accountId, args.accountId),
+          eq(appointmentAvailabilityMessages.conversationId, args.conversationId),
+          eq(appointmentAvailabilityMessages.date, args.date)
+        )
+      )
+      .orderBy(desc(appointmentAvailabilityMessages.createdAt))
+      .limit(5);
+  } catch (error) {
     console.warn(
       '[webhook] could not load availability slots for reply:',
-      error.message
+      error instanceof Error ? error.message : error
     );
     return null;
   }
 
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const slots = Array.isArray(row.slots) ? row.slots : [];
     for (const rawSlot of slots) {
       const slot = slotRecord(rawSlot);
@@ -175,7 +288,7 @@ async function buildAppointmentSlotSelection(
   let timeZone = 'Europe/Madrid';
   try {
     const connection = await getArveraAppointmentsConnection(
-      dbAdmin() as never,
+      db,
       accountId
     );
     const config = normalizeAppointmentsConfig(connection?.config);
@@ -299,12 +412,21 @@ export async function GET(request: Request) {
     }
 
     // Fetch all whatsapp configs to check verify tokens
-    const { data: configs, error: configError } = await dbAdmin()
-      .from('whatsapp_config')
-      .select('id, verify_token');
-
-    if (configError || !configs) {
-      console.error('Error fetching configs for verification:', configError);
+    let configs: Array<{ id: string; verify_token: string | null }>;
+    try {
+      configs = (
+        await db
+          .select({
+            id: whatsappConfig.id,
+            verifyToken: whatsappConfig.verifyToken,
+          })
+          .from(whatsappConfig)
+      ).map((config) => ({
+        id: config.id,
+        verify_token: config.verifyToken,
+      }));
+    } catch (error) {
+      console.error('Error fetching configs for verification:', error);
       return NextResponse.json(
         { error: 'Verification failed' },
         { status: 403 }
@@ -332,17 +454,15 @@ export async function GET(request: Request) {
       // Fire-and-forget GCM upgrade. Safe to run on every subscribe
       // since it's a no-op once the column is already GCM.
       if (isLegacyFormat(matchedConfig.verify_token)) {
-        void dbAdmin()
-          .from('whatsapp_config')
-          .update({ verify_token: encrypt(verifyToken) })
-          .eq('id', matchedConfig.id)
-          .then(({ error }: { error: unknown }) => {
-            if (error) {
-              console.warn(
-                '[webhook] verify_token GCM upgrade failed:',
-                (error as { message?: string })?.message ?? error
-              );
-            }
+        void db
+          .update(whatsappConfig)
+          .set({ verifyToken: encrypt(verifyToken) })
+          .where(eq(whatsappConfig.id, matchedConfig.id))
+          .catch((error: unknown) => {
+            console.warn(
+              '[webhook] verify_token GCM upgrade failed:',
+              (error as { message?: string })?.message ?? error
+            );
           });
       }
       // Return challenge as plain text
@@ -425,7 +545,7 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       if (isTemplateWebhookField(change.field)) {
         await handleTemplateWebhookChange(
           { field: change.field, value: change.value as unknown },
-          dbAdmin()
+          db
         );
         continue;
       }
@@ -449,16 +569,19 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // operators see the real cause in logs. ≥2 rows shouldn't happen
       // post-migration 013 (UNIQUE constraint), but a row created
       // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await dbAdmin()
-        .from('whatsapp_config')
-        .select('*')
-        .eq('phone_number_id', phoneNumberId);
-
-      if (configError) {
+      let configRows: ReturnType<typeof serializeWhatsappConfig>[];
+      try {
+        configRows = (
+          await db
+            .select()
+            .from(whatsappConfig)
+            .where(eq(whatsappConfig.phoneNumberId, phoneNumberId))
+        ).map(serializeWhatsappConfig);
+      } catch (error) {
         console.error(
           'Error fetching whatsapp_config for phone_number_id:',
           phoneNumberId,
-          configError
+          error
         );
         continue;
       }
@@ -629,23 +752,22 @@ async function handleStatusUpdate(status: {
   timestamp: string;
   recipient_id: string;
 }) {
-  // 1) Mirror onto messages (legacy behavior) — Meta's status values
+  // 1) Mirror onto messages (legacy behavior) - Meta's status values
   //    already match the CHECK constraint on messages.status. No
-  //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
-  //    repeat across numbers), so this updates 0..N rows and must not
-  //    assume a single row.
-  const { data: existingMessages, error: msgFetchErr } = await dbAdmin()
-    .from('messages')
-    .select('*')
-    .eq('message_id', status.id);
-
-  if (msgFetchErr) {
-    console.error('Error fetching message status:', msgFetchErr);
+  //    single-row assumption: message_id is not unique across numbers.
+  let existingMessages: ReturnType<typeof serializeMessageRow>[] = [];
+  try {
+    existingMessages = (
+      await db
+        .select()
+        .from(messages)
+        .where(eq(messages.messageId, status.id))
+    ).map(serializeMessageRow);
+  } catch (error) {
+    console.error('Error fetching message status:', error);
   }
 
-  const messageIdsToUpdate = (
-    (existingMessages ?? []) as Record<string, unknown>[]
-  )
+  const messageIdsToUpdate = existingMessages
     .filter((message) =>
       isValidMessageStatusTransition(
         String(message.status ?? ''),
@@ -656,79 +778,92 @@ async function handleStatusUpdate(status: {
 
   let updatedMessages: Record<string, unknown>[] = [];
   if (messageIdsToUpdate.length > 0) {
-    const { data, error: msgErr } = await dbAdmin()
-      .from('messages')
-      .update({ status: status.status })
-      .in('id', messageIdsToUpdate)
-      .select('*');
-
-    if (msgErr) {
-      console.error('Error updating message status:', msgErr);
-    } else {
-      updatedMessages = (data ?? []) as Record<string, unknown>[];
+    try {
+      updatedMessages = (
+        await db
+          .update(messages)
+          .set({ status: status.status })
+          .where(inArray(messages.id, messageIdsToUpdate))
+          .returning()
+      ).map(serializeMessageRow);
+    } catch (error) {
+      console.error('Error updating message status:', error);
     }
   }
 
-  // Webhook fan-out for this status change happens at the END of this
-  // handler (after the broadcast mirror below), so a slow subscriber
-  // endpoint can't delay the broadcast_recipients update.
+  // Webhook fan-out for this status change happens at the end of this
+  // handler, so a slow subscriber cannot delay the broadcast mirror.
+  const tsDate = new Date(parseInt(status.timestamp) * 1000);
 
-  // 2) Mirror onto broadcast_recipients via whatsapp_message_id
-  //    (added in migration 003). The aggregate trigger on
-  //    broadcast_recipients re-derives the parent broadcast's
-  //    sent/delivered/read/failed counts automatically.
-  const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString();
+  let recipient: { id: string; status: string } | null = null;
+  try {
+    recipient =
+      (
+        await db
+          .select({
+            id: broadcastRecipients.id,
+            status: broadcastRecipients.status,
+          })
+          .from(broadcastRecipients)
+          .where(eq(broadcastRecipients.whatsappMessageId, status.id))
+          .limit(1)
+      )[0] ?? null;
+  } catch (error) {
+    console.error('Error fetching broadcast recipient:', error);
+  }
 
-  const { data: recipient, error: recFetchErr } = await dbAdmin()
-    .from('broadcast_recipients')
-    .select('id, status')
-    .eq('whatsapp_message_id', status.id)
-    .maybeSingle();
+  if (recipient && isValidStatusTransition(recipient.status, status.status)) {
+    const update: Partial<typeof broadcastRecipients.$inferInsert> = {
+      status: status.status,
+    };
+    if (status.status === 'sent') update.sentAt = tsDate;
+    if (status.status === 'delivered') update.deliveredAt = tsDate;
+    if (status.status === 'read') update.readAt = tsDate;
 
-  if (recFetchErr) {
-    console.error('Error fetching broadcast recipient:', recFetchErr);
-  } else if (
-    recipient &&
-    // Guard transitions — forward-only on the success ladder, and
-    // `failed` only from pre-delivered states.
-    isValidStatusTransition(recipient.status, status.status)
-  ) {
-    const update: Record<string, unknown> = { status: status.status };
-    if (status.status === 'sent' && !('sent_at' in update))
-      update.sent_at = tsIso;
-    if (status.status === 'delivered') update.delivered_at = tsIso;
-    if (status.status === 'read') update.read_at = tsIso;
-
-    const { error: recUpdateErr } = await dbAdmin()
-      .from('broadcast_recipients')
-      .update(update)
-      .eq('id', recipient.id);
-
-    if (recUpdateErr) {
-      console.error('Error updating broadcast recipient status:', recUpdateErr);
-    } else {
+    try {
+      await db
+        .update(broadcastRecipients)
+        .set(update)
+        .where(eq(broadcastRecipients.id, recipient.id));
       await publishBroadcastRecipientUpdatedById(recipient.id);
+    } catch (error) {
+      console.error('Error updating broadcast recipient status:', error);
     }
   }
 
-  // 3) Webhook fan-out for messages we store (inbox / API sends).
-  //    Runs last so a slow subscriber can't delay the mirrors above.
-  //    Bounded to one row (message_id isn't unique) purely to resolve
-  //    the owning account for delivery.
+  async function resolveMessageOwner(messageId: string) {
+    const row =
+      (
+        await db
+          .select({
+            conversationId: messages.conversationId,
+            accountId: conversations.accountId,
+          })
+          .from(messages)
+          .innerJoin(
+            conversations,
+            eq(conversations.id, messages.conversationId)
+          )
+          .where(eq(messages.id, messageId))
+          .limit(1)
+      )[0] ?? null;
+
+    return row
+      ? {
+          conversation_id: row.conversationId,
+          conversations: { account_id: row.accountId },
+        }
+      : null;
+  }
+
   if (updatedMessages.length > 0) {
-    const { data: msgRow } = await dbAdmin()
-      .from('messages')
-      .select('conversation_id, conversations(account_id)')
-      .eq('id', updatedMessages[0].id)
-      .limit(1)
-      .maybeSingle();
+    const msgRow = await resolveMessageOwner(String(updatedMessages[0].id));
 
     if (msgRow) {
-      const conv = msgRow.conversations as { account_id: string } | null;
-      const accountId = conv?.account_id;
+      const accountId = msgRow.conversations.account_id;
       if (accountId) {
         await dispatchWebhookEvent(
-          dbAdmin(),
+          db,
           accountId,
           'message.status_updated',
           {
@@ -743,15 +878,8 @@ async function handleStatusUpdate(status: {
 
   await Promise.all(
     updatedMessages.map(async (message) => {
-      const { data: owner } = await dbAdmin()
-        .from('messages')
-        .select('conversation_id, conversations(account_id)')
-        .eq('id', message.id)
-        .limit(1)
-        .maybeSingle();
-
-      const conv = owner?.conversations as { account_id: string } | null;
-      const accountId = conv?.account_id;
+      const owner = await resolveMessageOwner(String(message.id));
+      const accountId = owner?.conversations.account_id;
       const conversationId =
         typeof owner?.conversation_id === 'string'
           ? owner.conversation_id
@@ -777,36 +905,46 @@ async function handleStatusUpdate(status: {
  * broadcast_recipients row, flip it to `replied` so the reply count
  * advances on the parent broadcast.
  *
- * Runs on a best-effort basis — failures here must not break the
- * main inbound-message flow, so errors are swallowed with a log.
+ * Runs on a best-effort basis; failures here must not break the main
+ * inbound-message flow, so errors are swallowed with a log.
  */
 async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
   try {
-    // Most recent outbound broadcast in this account that hasn't
-    // been replied to yet. Account-scoped so a shared inbox reply
-    // marks the broadcast as replied regardless of which teammate
-    // sent it.
-    const { data: recs, error } = await dbAdmin()
-      .from('broadcast_recipients')
-      .select('id, status, broadcast_id, broadcasts!inner(account_id)')
-      .eq('contact_id', contactId)
-      .eq('broadcasts.account_id', accountId)
-      .in('status', ['sent', 'delivered', 'read'])
-      .order('created_at', { ascending: false })
-      .limit(1);
+    const row =
+      (
+        await db
+          .select({
+            id: broadcastRecipients.id,
+            status: broadcastRecipients.status,
+            broadcastId: broadcastRecipients.broadcastId,
+            accountId: broadcasts.accountId,
+          })
+          .from(broadcastRecipients)
+          .innerJoin(
+            broadcasts,
+            eq(broadcasts.id, broadcastRecipients.broadcastId)
+          )
+          .where(
+            and(
+              eq(broadcastRecipients.contactId, contactId),
+              eq(broadcasts.accountId, accountId),
+              inArray(broadcastRecipients.status, ['sent', 'delivered', 'read'])
+            )
+          )
+          .orderBy(desc(broadcastRecipients.createdAt))
+          .limit(1)
+      )[0] ?? null;
 
-    if (error || !recs || recs.length === 0) return;
+    if (!row) return;
 
-    const row = recs[0];
-    const { error: updErr } = await dbAdmin()
-      .from('broadcast_recipients')
-      .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', row.id);
-
-    if (updErr) {
-      console.error('Error marking broadcast recipient replied:', updErr);
-    } else {
+    try {
+      await db
+        .update(broadcastRecipients)
+        .set({ status: 'replied', repliedAt: new Date() })
+        .where(eq(broadcastRecipients.id, row.id));
       await publishBroadcastRecipientUpdatedById(row.id);
+    } catch (error) {
+      console.error('Error marking broadcast recipient replied:', error);
     }
   } catch (err) {
     console.error('flagBroadcastReplyIfAny failed:', err);
@@ -815,33 +953,40 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
 
 /**
  * Resolve a Meta-side message_id into the matching internal UUID, scoped
- * to one conversation. Returns null when we never received the parent
- * (e.g. a swipe-reply to a message older than this CRM install).
+ * to one conversation. Returns null when we never received the parent.
  */
 async function lookupInternalIdByMetaId(
   metaId: string,
   conversationId: string
 ): Promise<string | null> {
-  const { data, error } = await dbAdmin()
-    .from('messages')
-    .select('id')
-    .eq('message_id', metaId)
-    .eq('conversation_id', conversationId)
-    .maybeSingle();
-  if (error) {
-    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message);
+  try {
+    const row =
+      (
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.messageId, metaId),
+              eq(messages.conversationId, conversationId)
+            )
+          )
+          .limit(1)
+      )[0] ?? null;
+    return row?.id ?? null;
+  } catch (error) {
+    console.error(
+      '[webhook] lookupInternalIdByMetaId failed:',
+      error instanceof Error ? error.message : error
+    );
     return null;
   }
-  return data?.id ?? null;
 }
 
 /**
- * Persist an inbound reaction. WhatsApp reactions are not new messages —
+ * Persist an inbound reaction. WhatsApp reactions are not new messages;
  * they're per-(target, actor) state. We upsert / delete on
  * `message_reactions`, never write a row into `messages`.
- *
- * Best-effort: a missing parent (we never received it) is logged and
- * skipped so the webhook still acks 200 to Meta.
  */
 async function handleReaction(
   message: WhatsAppMessage,
@@ -864,30 +1009,43 @@ async function handleReaction(
     return;
   }
 
-  // Empty emoji = removal (per Meta's Cloud API spec).
   if (!reaction.emoji) {
-    const { data: existingReaction } = await dbAdmin()
-      .from('message_reactions')
-      .select('*')
-      .eq('message_id', targetInternalId)
-      .eq('actor_type', 'customer')
-      .eq('actor_id', contactId)
-      .maybeSingle();
-    const { error: delError } = await dbAdmin()
-      .from('message_reactions')
-      .delete()
-      .eq('message_id', targetInternalId)
-      .eq('actor_type', 'customer')
-      .eq('actor_id', contactId);
-    if (delError) {
-      console.error('[webhook] reaction delete failed:', delError.message);
+    const existingReaction =
+      (
+        await db
+          .select()
+          .from(messageReactions)
+          .where(
+            and(
+              eq(messageReactions.messageId, targetInternalId),
+              eq(messageReactions.actorType, 'customer'),
+              eq(messageReactions.actorId, contactId)
+            )
+          )
+          .limit(1)
+      )[0] ?? null;
+    try {
+      await db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, targetInternalId),
+            eq(messageReactions.actorType, 'customer'),
+            eq(messageReactions.actorId, contactId)
+          )
+        );
+    } catch (error) {
+      console.error(
+        '[webhook] reaction delete failed:',
+        error instanceof Error ? error.message : error
+      );
       return;
     }
     if (existingReaction) {
       await publishRealtimeEvent('reaction.deleted', {
         accountId,
         conversationId,
-        payload: { reaction: existingReaction },
+        payload: { reaction: serializeReactionRow(existingReaction) },
       }).catch((error) => {
         console.warn('[realtime] failed to publish reaction.deleted:', error);
       });
@@ -895,35 +1053,44 @@ async function handleReaction(
     return;
   }
 
-  const { data: savedReaction, error: upsertError } = await dbAdmin()
-    .from('message_reactions')
-    .upsert(
-      {
-        message_id: targetInternalId,
-        conversation_id: conversationId,
-        actor_type: 'customer',
-        actor_id: contactId,
-        emoji: reaction.emoji,
-      },
-      { onConflict: 'message_id,actor_type,actor_id' }
-    )
-    .select('*')
-    .single();
-  if (upsertError) {
-    console.error('[webhook] reaction upsert failed:', upsertError.message);
-    return;
-  }
-  if (savedReaction) {
-    await publishRealtimeEvent('reaction.updated', {
-      accountId,
-      conversationId,
-      payload: { reaction: savedReaction },
-    }).catch((error) => {
-      console.warn('[realtime] failed to publish reaction.updated:', error);
-    });
+  try {
+    const savedReaction =
+      (
+        await db
+          .insert(messageReactions)
+          .values({
+            messageId: targetInternalId,
+            conversationId,
+            actorType: 'customer',
+            actorId: contactId,
+            emoji: reaction.emoji,
+          })
+          .onConflictDoUpdate({
+            target: [
+              messageReactions.messageId,
+              messageReactions.actorType,
+              messageReactions.actorId,
+            ],
+            set: { emoji: reaction.emoji, updatedAt: new Date() },
+          })
+          .returning()
+      )[0] ?? null;
+    if (savedReaction) {
+      await publishRealtimeEvent('reaction.updated', {
+        accountId,
+        conversationId,
+        payload: { reaction: serializeReactionRow(savedReaction) },
+      }).catch((error) => {
+        console.warn('[realtime] failed to publish reaction.updated:', error);
+      });
+    }
+  } catch (error) {
+    console.error(
+      '[webhook] reaction upsert failed:',
+      error instanceof Error ? error.message : error
+    );
   }
 }
-
 async function processMessage(
   message: WhatsAppMessage,
   contact: { profile: { name: string }; wa_id: string },
@@ -976,7 +1143,7 @@ async function processMessage(
   // a reaction still fires the event, and a subscriber always sees the
   // thread open before its first message.received.
   if (convResult.created) {
-    await dispatchWebhookEvent(dbAdmin(), accountId, 'conversation.created', {
+    await dispatchWebhookEvent(db, accountId, 'conversation.created', {
       conversation_id: conversation.id,
       contact_id: contactRecord.id,
     });
@@ -1067,38 +1234,47 @@ async function processMessage(
   // BEFORE we insert, so the count is accurate. Covers the case where
   // the contact row already exists (manual add / CSV import) but they've
   // never messaged us before — which new_contact_created wouldn't catch.
-  const { count: priorCustomerMsgCount } = await dbAdmin()
-    .from('messages')
-    .select('id', { count: 'exact', head: true })
-    .eq('conversation_id', conversation.id)
-    .eq('sender_type', 'customer');
-  const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0;
+  const [{ value: priorCustomerMsgCount = 0 } = { value: 0 }] = await db
+    .select({ value: count() })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversation.id),
+        eq(messages.senderType, 'customer')
+      )
+    );
+  const isFirstInboundMessage = priorCustomerMsgCount === 0;
 
-  const { data: insertedMessage, error: msgError } = await dbAdmin()
-    .from('messages')
-    .insert({
-      conversation_id: conversation.id,
-      sender_type: 'customer',
-      content_type: contentType,
-      content_text: contentText,
-      media_url: mediaUrl,
-      message_id: message.id,
-      status: 'delivered',
-      created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
-      reply_to_message_id: replyToInternalId,
-      is_forwarded: Boolean(
-        message.context?.forwarded || message.context?.frequently_forwarded
-      ),
-      // Only populated for content_type='interactive'. Migration 010 added
-      // the column; null for every other content_type so existing inserts
-      // behave identically.
-      interactive_reply_id: interactiveReplyId,
-    })
-    .select('*')
-    .single();
-
-  if (msgError) {
-    console.error('Error inserting message:', msgError);
+  let insertedMessage: ReturnType<typeof serializeMessageRow> | null = null;
+  try {
+    const row =
+      (
+        await db
+          .insert(messages)
+          .values({
+            conversationId: conversation.id,
+            senderType: 'customer',
+            contentType,
+            contentText,
+            mediaUrl,
+            messageId: message.id,
+            status: 'delivered',
+            createdAt: new Date(parseInt(message.timestamp) * 1000),
+            replyToMessageId: replyToInternalId,
+            isForwarded: Boolean(
+              message.context?.forwarded ||
+                message.context?.frequently_forwarded
+            ),
+            // Only populated for content_type='interactive'. Migration 010 added
+            // the column; null for every other content_type so existing inserts
+            // behave identically.
+            interactiveReplyId,
+          })
+          .returning()
+      )[0] ?? null;
+    insertedMessage = row ? serializeMessageRow(row) : null;
+  } catch (error) {
+    console.error('Error inserting message:', error);
     return;
   }
 
@@ -1111,18 +1287,18 @@ async function processMessage(
     updated_at: new Date().toISOString(),
   };
 
-  const { error: convError } = await dbAdmin()
-    .from('conversations')
-    .update({
-      last_message_text: updatedConversation.last_message_text,
-      last_message_at: updatedConversation.last_message_at,
-      unread_count: updatedConversation.unread_count,
-      updated_at: updatedConversation.updated_at,
-    })
-    .eq('id', conversation.id);
-
-  if (convError) {
-    console.error('Error updating conversation:', convError);
+  try {
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: updatedConversation.last_message_text,
+        lastMessageAt: new Date(updatedConversation.last_message_at),
+        unreadCount: updatedConversation.unread_count,
+        updatedAt: new Date(updatedConversation.updated_at),
+      })
+      .where(eq(conversations.id, conversation.id));
+  } catch (error) {
+    console.error('Error updating conversation:', error);
   }
 
   await publishRealtimeEvent('conversation.updated', {
@@ -1293,7 +1469,7 @@ async function processMessage(
   // when the account has no matching endpoint and never throws.
   // (conversation.created is emitted earlier, right after the thread is
   // opened.)
-  await dispatchWebhookEvent(dbAdmin(), accountId, 'message.received', {
+  await dispatchWebhookEvent(db, accountId, 'message.received', {
     conversation_id: conversation.id,
     contact_id: contactRecord.id,
     whatsapp_message_id: message.id,
@@ -1512,7 +1688,7 @@ async function findOrCreateContact(
   // helper backs the manual contact form and CSV import, so all three
   // paths agree on what "same number" means (issue #212).
   const existingContact = await findExistingContact(
-    dbAdmin(),
+    db,
     accountId,
     phone
   );
@@ -1520,10 +1696,10 @@ async function findOrCreateContact(
   if (existingContact) {
     // Update name if it changed
     if (name && name !== existingContact.name) {
-      await dbAdmin()
-        .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
-        .eq('id', existingContact.id);
+      await db
+        .update(contacts)
+        .set({ name, updatedAt: new Date() })
+        .where(eq(contacts.id, existingContact.id));
     }
     return { contact: existingContact, wasCreated: false };
   }
@@ -1532,31 +1708,35 @@ async function findOrCreateContact(
   // user_id is the NOT NULL FK audit column (no inbound message
   // has a single "user who created" it — we attribute to the
   // WhatsApp config owner as a stable default).
-  const { data: newContact, error: createError } = await dbAdmin()
-    .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      phone,
-      name: name || phone,
-    })
-    .select()
-    .single();
+  try {
+    const row =
+      (
+        await db
+          .insert(contacts)
+          .values({
+            accountId,
+            userId: configOwnerUserId,
+            phone,
+            name: name || phone,
+          })
+          .returning()
+      )[0] ?? null;
 
-  if (createError) {
+    return row
+      ? { contact: serializeContactRow(row), wasCreated: true }
+      : null;
+  } catch (createError) {
     // Lost a race: a concurrent inbound delivery (or another path)
     // created this contact between our lookup and insert, and the
     // unique index (migration 022) rejected the duplicate. Re-resolve
     // the existing row instead of dropping the message.
     if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(dbAdmin(), accountId, phone);
+      const raced = await findExistingContact(db, accountId, phone);
       if (raced) return { contact: raced, wasCreated: false };
     }
     console.error('Error creating contact:', createError);
     return null;
   }
-
-  return { contact: newContact, wasCreated: true };
 }
 
 async function findOrCreateConversation(
@@ -1567,34 +1747,49 @@ async function findOrCreateConversation(
   departmentId: string | null
 ) {
   // Look for existing conversation in this account for the inbound line.
-  const { data: existing, error: findError } = await dbAdmin()
-    .from('conversations')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .eq('whatsapp_config_id', whatsappConfigId)
-    .single();
-
-  if (!findError && existing) {
-    if (existing.status === 'closed') {
-      const { data: reopened, error: reopenError } = await dbAdmin()
-        .from('conversations')
-        .update({
-          status: 'pending',
-          assigned_agent_id: null,
-          department_id: departmentId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existing.id)
+  const existingRow =
+    (
+      await db
         .select()
-        .single();
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.accountId, accountId),
+            eq(conversations.contactId, contactId),
+            eq(conversations.whatsappConfigId, whatsappConfigId)
+          )
+        )
+        .limit(1)
+    )[0] ?? null;
+  const existing = existingRow ? serializeConversationRow(existingRow) : null;
 
-      if (reopenError) {
-        console.error('Error reopening closed conversation:', reopenError);
+  if (existing) {
+    if (existing.status === 'closed') {
+      try {
+        const reopened =
+          (
+            await db
+              .update(conversations)
+              .set({
+                status: 'pending',
+                assignedAgentId: null,
+                departmentId,
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, existing.id))
+              .returning()
+          )[0] ?? null;
+
+        return {
+          conversation: reopened
+            ? serializeConversationRow(reopened)
+            : existing,
+          created: false,
+        };
+      } catch (error) {
+        console.error('Error reopening closed conversation:', error);
         return { conversation: existing, created: false };
       }
-
-      return { conversation: reopened, created: false };
     }
 
     return { conversation: existing, created: false };
@@ -1602,24 +1797,28 @@ async function findOrCreateConversation(
 
   // Create new conversation. Same tenancy + audit split as
   // findOrCreateContact above.
-  const { data: newConv, error: createError } = await dbAdmin()
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      contact_id: contactId,
-      whatsapp_config_id: whatsappConfigId,
-      department_id: departmentId,
-      status: 'pending',
-      assigned_agent_id: null,
-    })
-    .select()
-    .single();
+  try {
+    const newConv =
+      (
+        await db
+          .insert(conversations)
+          .values({
+            accountId,
+            userId: configOwnerUserId,
+            contactId,
+            whatsappConfigId,
+            departmentId,
+            status: 'pending',
+            assignedAgentId: null,
+          })
+          .returning()
+      )[0] ?? null;
 
-  if (createError) {
-    console.error('Error creating conversation:', createError);
+    return newConv
+      ? { conversation: serializeConversationRow(newConv), created: true }
+      : null;
+  } catch (error) {
+    console.error('Error creating conversation:', error);
     return null;
   }
-
-  return { conversation: newConv, created: true };
 }

@@ -1,4 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const h = vi.hoisted(() => ({
+  account: null as Record<string, unknown> | null,
+  counts: {} as Record<string, number>,
+}))
+
+vi.mock('@/db/client', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => (h.account ? [h.account] : []),
+        }),
+      }),
+    }),
+    execute: async (query: unknown) => {
+      const sqlText = String(query)
+      const table =
+        sqlText.match(/from\s+([a-z_]+)/i)?.[1] ??
+        Object.keys(h.counts)[0] ??
+        ''
+      return { rows: [{ count: h.counts[table] ?? 0 }] }
+    },
+  },
+}))
 
 import {
   assertCanCreateFlow,
@@ -20,79 +45,54 @@ const baseAccount: AccountEntitlements = {
   trial_ends_at: null,
 }
 
-function fakePostgres({
-  account = baseAccount,
-  counts = {},
-}: {
-  account?: AccountEntitlements
-  counts?: Record<string, number>
-}) {
+function drizzleAccount(account: AccountEntitlements) {
   return {
-    from(_table: string) {
-      void _table
-      return {
-        select() {
-          return {
-            eq() {
-              return {
-                maybeSingle: async () => ({ data: account, error: null }),
-              }
-            },
-          }
-        },
-      }
-    },
-    countFor(table: string) {
-      return counts[table] ?? 0
-    },
+    id: account.id,
+    status: account.status,
+    plan: account.plan,
+    maxUsers: account.max_users,
+    maxFlows: account.max_flows,
+    maxAutomations: account.max_automations,
+    maxWhatsappLines: account.max_whatsapp_lines,
+    allowAi: account.allow_ai,
+    allowApi: account.allow_api,
+    allowBroadcasts: account.allow_broadcasts,
+    trialEndsAt: account.trial_ends_at
+      ? new Date(account.trial_ends_at)
+      : null,
   }
 }
 
-function fakeCountPostgres(args: Parameters<typeof fakePostgres>[0]) {
-  const base = fakePostgres(args)
-  return {
-    from(table: string) {
-      if (table === 'accounts') return base.from(table)
-      return {
-        select: () => ({
-          eq: async () => ({ count: base.countFor(table), error: null }),
-        }),
-      }
-    },
-  } as never
-}
+beforeEach(() => {
+  h.account = drizzleAccount(baseAccount)
+  h.counts = {}
+})
 
 describe('account entitlements', () => {
   it('blocks disabled features', async () => {
-    await expect(
-      assertFeatureEnabled(fakeCountPostgres({}) as never, 'acct', 'ai'),
-    ).rejects.toThrow(/not enabled/)
+    await expect(assertFeatureEnabled(null, 'acct', 'ai')).rejects.toThrow(
+      /not enabled/,
+    )
   })
 
   it('allows enabled features', async () => {
     await expect(
-      assertFeatureEnabled(fakeCountPostgres({}) as never, 'acct', 'broadcasts'),
+      assertFeatureEnabled(null, 'acct', 'broadcasts'),
     ).resolves.toBeUndefined()
   })
 
   it('blocks flow creation at the configured limit', async () => {
-    await expect(
-      assertCanCreateFlow(
-        fakeCountPostgres({ counts: { flows: 2 } }) as never,
-        'acct',
-      ),
-    ).rejects.toThrow(/Flow limit/)
+    h.counts = { flows: 2 }
+    await expect(assertCanCreateFlow(null, 'acct')).rejects.toThrow(
+      /Flow limit/,
+    )
   })
 
   it('blocks writes for suspended accounts', async () => {
-    await expect(
-      assertCanCreateFlow(
-        fakeCountPostgres({
-          account: { ...baseAccount, status: 'suspended' },
-          counts: { flows: 0 },
-        }) as never,
-        'acct',
-      ),
-    ).rejects.toThrow(/suspended/)
+    h.account = drizzleAccount({ ...baseAccount, status: 'suspended' })
+    h.counts = { flows: 0 }
+    await expect(assertCanCreateFlow(null, 'acct')).rejects.toThrow(
+      /suspended/,
+    )
   })
 })

@@ -249,6 +249,7 @@
       "line": "Linea",
       "agent": "Agente",
       "preview": "Vista previa",
+      "statusClosed": "Resuelto",
       "loadingPreview": "Cargando vista previa...",
       "searchInboxPlaceholder": "Buscar en bandeja",
       "departmentFilter": "Filtrar por departamentos",

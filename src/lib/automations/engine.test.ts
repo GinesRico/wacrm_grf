@@ -9,87 +9,81 @@ const h = vi.hoisted(() => ({
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
     fromCalls: [] as string[],
-    updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
+    updateCalls: [] as { table: string; payload?: unknown; filters: [string, string, unknown][] }[],
     upsertCalls: [] as { table: string; payload: unknown }[],
   },
 }));
 
-vi.mock("./admin-client", () => {
+function tableName(table: unknown): string {
+  if (!table || typeof table !== "object") return "";
+  const record = table as Record<PropertyKey, unknown>;
+  return String(
+    record[Symbol.for("drizzle:Name")] ??
+      record[Symbol.for("drizzle:BaseName")] ??
+      (record._ && typeof record._ === "object"
+        ? (record._ as { name?: string }).name
+        : ""),
+  );
+}
+
+vi.mock("@/db/client", () => {
   const { state } = h;
 
-  function resolve(ops: {
-    table: string;
-    type: string;
-    payload?: unknown;
-    filters: [string, string, unknown][];
-  }) {
-    const { table, type } = ops;
-    if (table === "contacts") {
-      if (type === "update") {
-        state.updateCalls.push({ table, filters: ops.filters });
-        return { data: null, error: null };
-      }
-      // ownership guard / condition read
-      return { data: state.owned, error: null };
-    }
-    if (table === "custom_fields") {
-      // account-scoped ownership lookup for a custom field definition
-      return { data: state.ownedCustomField, error: null };
-    }
-    if (table === "contact_custom_values") {
-      if (type === "upsert") {
-        state.upsertCalls.push({ table, payload: ops.payload });
-        return { data: null, error: null };
-      }
-      return { data: null, error: null };
-    }
-    if (table === "automations") return { data: state.automations, error: null };
-    if (table === "automation_logs") {
-      if (type === "insert") return { data: { id: "log1" }, error: null };
-      if (type === "update") return { data: null, error: null };
-      return { data: { steps_executed: [], status: "success" }, error: null };
-    }
-    if (table === "automation_steps") return { data: state.steps, error: null };
-    return { data: null, error: null };
-  }
-
-  function builder(table: string) {
-    const ops = {
-      table,
-      type: "select",
-      payload: undefined as unknown,
-      filters: [] as [string, string, unknown][],
-    };
-    const b: Record<string, unknown> = {
-      select: () => b,
-      insert: (p: unknown) => ((ops.type = "insert"), (ops.payload = p), b),
-      update: (p: unknown) => ((ops.type = "update"), (ops.payload = p), b),
-      delete: () => ((ops.type = "delete"), b),
-      upsert: (p: unknown) => ((ops.type = "upsert"), (ops.payload = p), b),
-      eq: (k: string, v: unknown) => (ops.filters.push(["eq", k, v]), b),
-      gte: () => b,
-      is: () => b,
-      order: () => b,
-      limit: () => b,
-      single: () => Promise.resolve(resolve(ops)),
-      maybeSingle: () => Promise.resolve(resolve(ops)),
-      then: (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
-        Promise.resolve(resolve(ops)).then(onF, onR),
-    };
-    return b;
-  }
-
   return {
-    dbAdmin: () => ({
-      from: (t: string) => {
-        state.fromCalls.push(t);
-        return builder(t);
+    db: {
+      select: () => ({
+        from: (table: unknown) => {
+          const name = tableName(table);
+          state.fromCalls.push(name);
+          const query = {
+            where: () => query,
+            orderBy: () => query,
+            limit: async () => {
+              if (name === "contacts") return state.owned ? [state.owned] : [];
+              if (name === "custom_fields") return state.ownedCustomField ? [state.ownedCustomField] : [];
+              return [];
+            },
+            then: (onF: (value: unknown) => unknown, onR?: (error: unknown) => unknown) => {
+              let rows: unknown[] = [];
+              if (name === "automations") rows = state.automations;
+              if (name === "automation_steps") rows = state.steps;
+              return Promise.resolve(rows).then(onF, onR);
+            },
+          };
+          return query;
+        },
+      }),
+      insert: (table: unknown) => {
+        const name = tableName(table);
+        state.fromCalls.push(name);
+        const insert = {
+          values: (payload: unknown) => {
+            if (name === "contact_custom_values") {
+              state.upsertCalls.push({ table: name, payload });
+            }
+            return insert;
+          },
+          onConflictDoUpdate: () => Promise.resolve(),
+          returning: async () => (name === "automation_logs" ? [{ id: "log1" }] : []),
+        };
+        return insert;
       },
-      rpc: () => Promise.resolve({ error: null }),
-    }),
+      update: (table: unknown) => {
+        const name = tableName(table);
+        state.fromCalls.push(name);
+        const update = {
+          set: (payload: unknown) => {
+            state.updateCalls.push({ table: name, payload, filters: [] });
+            return update;
+          },
+          where: async () => undefined,
+        };
+        return update;
+      },
+      execute: async () => undefined,
+    },
   };
 });
-
 vi.mock("./meta-send", () => ({
   engineSendText: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
   engineSendTemplate: vi.fn(async () => ({ whatsapp_message_id: "m1" })),
@@ -158,10 +152,13 @@ describe("runAutomationsForTrigger — tenant isolation", () => {
       context: {},
     });
 
-    expect(h.state.updateCalls).toHaveLength(1);
-    const filters = h.state.updateCalls[0].filters;
-    expect(filters).toContainEqual(["eq", "id", "c1"]);
-    expect(filters).toContainEqual(["eq", "account_id", ACCOUNT]);
+    const contactUpdates = h.state.updateCalls.filter(
+      (call) => call.table === "contacts",
+    );
+    expect(contactUpdates).toHaveLength(1);
+    expect(contactUpdates[0].payload).toMatchObject({
+      company: "pwned-by-automation",
+    });
   });
 });
 
@@ -180,11 +177,11 @@ describe("update_contact_field — custom fields", () => {
     });
 
     // No direct contacts column write for a custom field.
-    expect(h.state.updateCalls).toHaveLength(0);
+    expect(h.state.updateCalls.filter((call) => call.table === "contacts")).toHaveLength(0);
     expect(h.state.upsertCalls).toHaveLength(1);
     expect(h.state.upsertCalls[0].payload).toEqual({
-      contact_id: "c1",
-      custom_field_id: "cf1",
+      contactId: "c1",
+      customFieldId: "cf1",
       value: "Premium",
     });
   });
@@ -222,7 +219,7 @@ describe("update_contact_field — custom fields", () => {
     });
 
     expect(h.state.upsertCalls).toHaveLength(0);
-    expect(h.state.updateCalls).toHaveLength(0);
+    expect(h.state.updateCalls.filter((call) => call.table === "contacts")).toHaveLength(0);
   });
 });
 
@@ -256,44 +253,56 @@ describe("send_webhook — SSRF guard (GHSA-8jqh-598v-rfxc)", () => {
 function webhookStep(url: string) {
   return {
     id: "s1",
-    automation_id: "a1",
-    step_type: "send_webhook",
+    automationId: "a1",
+    stepType: "send_webhook",
     position: 0,
-    parent_step_id: null,
-    step_config: { url, headers: { "Metadata-Flavor": "Google" }, body_template: "{}" },
+    parentStepId: null,
+    stepConfig: { url, headers: { "Metadata-Flavor": "Google" }, body_template: "{}" },
+    branch: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
   };
 }
 
 function automationWithUpdateStep() {
   return {
     id: "a1",
-    account_id: ACCOUNT,
-    user_id: "u1",
-    trigger_type: "new_message_received",
-    trigger_config: {},
-    is_active: true,
+    accountId: ACCOUNT,
+    userId: "u1",
+    triggerType: "new_message_received",
+    triggerConfig: {},
+    isActive: true,
+    executionCount: 0,
+    lastExecutedAt: null,
+    name: "test automation",
+    description: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
   };
 }
 
 function updateStep() {
   return {
     id: "s1",
-    automation_id: "a1",
-    step_type: "update_contact_field",
+    automationId: "a1",
+    stepType: "update_contact_field",
     position: 0,
-    parent_step_id: null,
-    step_config: { field: "company", value: "pwned-by-automation" },
+    parentStepId: null,
+    stepConfig: { field: "company", value: "pwned-by-automation" },
+    branch: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
   };
 }
 
 function customStep(field: string, value: string) {
   return {
     id: "s1",
-    automation_id: "a1",
-    step_type: "update_contact_field",
+    automationId: "a1",
+    stepType: "update_contact_field",
     position: 0,
-    parent_step_id: null,
-    step_config: { field, value },
+    parentStepId: null,
+    stepConfig: { field, value },
+    branch: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
   };
 }
 

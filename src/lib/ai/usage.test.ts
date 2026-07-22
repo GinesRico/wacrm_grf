@@ -1,17 +1,31 @@
-import { describe, it, expect, vi } from 'vitest'
-import { logAiUsage } from './usage'
-type DbClient = any;
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-function fakeDb() {
-  const insert = vi.fn().mockResolvedValue({ error: null })
-  const db = { from: vi.fn(() => ({ insert })) }
-  return { db: db as unknown as DbClient, insert, from: db.from }
-}
+const h = vi.hoisted(() => ({
+  inserted: null as Record<string, unknown> | null,
+  shouldThrow: false,
+}))
+
+vi.mock('@/db/client', () => ({
+  db: {
+    insert: () => ({
+      values: async (payload: Record<string, unknown>) => {
+        h.inserted = payload
+        if (h.shouldThrow) throw new Error('boom')
+      },
+    }),
+  },
+}))
+
+import { logAiUsage } from './usage'
+
+beforeEach(() => {
+  h.inserted = null
+  h.shouldThrow = false
+})
 
 describe('logAiUsage', () => {
   it('inserts a row mapping normalized usage to the log columns', async () => {
-    const { db, insert, from } = fakeDb()
-    await logAiUsage(db, {
+    await logAiUsage(null, {
       accountId: 'acct-1',
       conversationId: 'conv-1',
       mode: 'auto_reply',
@@ -19,22 +33,21 @@ describe('logAiUsage', () => {
       model: 'claude-x',
       usage: { promptTokens: 30, completionTokens: 6, totalTokens: 36 },
     })
-    expect(from).toHaveBeenCalledWith('ai_usage_log')
-    expect(insert).toHaveBeenCalledWith({
-      account_id: 'acct-1',
-      conversation_id: 'conv-1',
+
+    expect(h.inserted).toEqual({
+      accountId: 'acct-1',
+      conversationId: 'conv-1',
       mode: 'auto_reply',
       provider: 'anthropic',
       model: 'claude-x',
-      prompt_tokens: 30,
-      completion_tokens: 6,
-      total_tokens: 36,
+      promptTokens: 30,
+      completionTokens: 6,
+      totalTokens: 36,
     })
   })
 
   it('is a no-op when the provider reported no usage', async () => {
-    const { db, from } = fakeDb()
-    await logAiUsage(db, {
+    await logAiUsage(null, {
       accountId: 'acct-1',
       conversationId: null,
       mode: 'draft',
@@ -42,14 +55,15 @@ describe('logAiUsage', () => {
       model: 'gpt-x',
       usage: null,
     })
-    expect(from).not.toHaveBeenCalled()
+
+    expect(h.inserted).toBeNull()
   })
 
   it('never throws when the insert errors', async () => {
-    const insert = vi.fn().mockResolvedValue({ error: { message: 'boom' } })
-    const db = { from: vi.fn(() => ({ insert })) } as unknown as DbClient
+    h.shouldThrow = true
+
     await expect(
-      logAiUsage(db, {
+      logAiUsage(null, {
         accountId: 'acct-1',
         conversationId: 'conv-1',
         mode: 'draft',
