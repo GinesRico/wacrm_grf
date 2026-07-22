@@ -17,13 +17,14 @@ import {
   X,
   Check,
   Inbox,
-  CheckSquare,
+  CircleCheckBig,
   Building2,
   User,
   Users,
   Eye,
   CornerDownLeft,
   Ban,
+  ArrowLeftRight,
   Forward,
   ImageIcon,
   Mic,
@@ -746,7 +747,7 @@ export function ConversationList({
               active={tab === 'resolved'}
               onClick={() => setTab('resolved')}
               label={t('tabResolved')}
-              icon={CheckSquare}
+              icon={CircleCheckBig}
             />
             <TabButton
               active={tab === 'search'}
@@ -1248,7 +1249,7 @@ function ConversationItem({
                 )}
               >
                 {isResolved ? (
-                  <Check className="h-3.5 w-3.5" />
+                  <CircleCheckBig className="h-3.5 w-3.5" />
                 ) : (
                   <Eye className="h-3.5 w-3.5" />
                 )}
@@ -1496,7 +1497,7 @@ function ConversationPreviewDialog({
                     aria-label={t('resolve')}
                     className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center rounded-md"
                   >
-                    <CheckSquare className="h-4 w-4" />
+                    <CircleCheckBig className="h-4 w-4" />
                   </button>
                 )}
                 <button
@@ -1511,7 +1512,7 @@ function ConversationPreviewDialog({
                   aria-label={t('transfer')}
                   className="border-border bg-background text-primary hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md border"
                 >
-                  <Forward className="h-4 w-4" />
+                  <ArrowLeftRight className="h-4 w-4" />
                 </button>
               </div>
             </div>

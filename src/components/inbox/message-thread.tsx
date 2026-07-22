@@ -24,8 +24,9 @@ import type {
 import {
   MessageSquare,
   Check,
-  Clock,
-  ArrowLeft,
+  CircleCheckBig,
+  ChevronLeft,
+  ArrowLeftRight,
   RefreshCw,
   MoreVertical,
   Trash2,
@@ -33,6 +34,7 @@ import {
   X,
   Copy,
   CornerUpLeft,
+  Pencil,
 } from 'lucide-react';
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -66,6 +68,7 @@ import { buildReplyPreview } from './reply-quote';
 import { toast } from 'sonner';
 import { useAppConfirm } from '@/hooks/use-app-dialog';
 import { toInteractiveTemplateButton } from '@/lib/inbox/template-buttons';
+import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 
 interface ReplyDraft {
   id: string;
@@ -408,6 +411,7 @@ export function MessageThread({
   const tActions = useTranslations('Inbox.actions');
   const tTimer = useTranslations('Inbox.sessionTimer');
   const tQuote = useTranslations('Inbox.replyQuote');
+  const tSidebar = useTranslations('Inbox.sidebar');
   const locale = useLocale();
   const dateLocale = locale.startsWith('es') ? es : undefined;
   const { confirm, confirmDialog } = useAppConfirm();
@@ -489,6 +493,7 @@ export function MessageThread({
   }, []);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [editingContactOpen, setEditingContactOpen] = useState(false);
   const [transferAgentId, setTransferAgentId] = useState<string>('');
   const [transferDepartmentId, setTransferDepartmentId] = useState<string>('');
   const [transferLineId, setTransferLineId] = useState<string>('');
@@ -1719,9 +1724,6 @@ export function MessageThread({
         : 'text-muted-foreground';
   const assignedAgentId = conversation.assigned_agent_id ?? null;
   const currentAssignee = members.find((p) => p.user_id === assignedAgentId);
-  const assignLabel = assignedAgentId
-    ? (currentAssignee?.full_name ?? t('assigned'))
-    : t('assign');
   const assigneeName = currentAssignee?.full_name ?? t('assigned');
   const departmentHeaderColor = conversation.department?.color?.trim() || null;
 
@@ -1748,7 +1750,7 @@ export function MessageThread({
               aria-label={t('backToConversations')}
               className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md"
             >
-              <ArrowLeft className="h-5 w-5" />
+              <ChevronLeft className="h-5 w-5" />
             </button>
           )}
           <button
@@ -1781,17 +1783,12 @@ export function MessageThread({
                   {t('assignedTo')}: {assigneeName}
                 </span>
               )}
-              {assignedAgentId && (lineName || sessionInfo.availableUntil) && (
+              {assignedAgentId && lineName && (
                 <span className="hidden sm:inline">•</span>
               )}
               {lineName && (
                 <span className="hidden max-w-32 truncate sm:inline">
                   {lineName}
-                </span>
-              )}
-              {sessionInfo.availableUntil && (
-                <span className="hidden truncate md:inline">
-                  {t('availableUntil', { value: sessionInfo.availableUntil })}
                 </span>
               )}
             </div>
@@ -1835,11 +1832,10 @@ export function MessageThread({
             title={statusLabel}
             className={cn(
               'border-border hidden h-7 gap-1 text-[10px] sm:inline-flex',
-              sessionInfo.expired ? 'text-red-400' : statusColor
+              statusColor
             )}
           >
-            <Clock className="h-3 w-3" />
-            {sessionInfo.remaining || statusLabel}
+            {statusLabel}
           </Badge>
 
           {conversation.status === 'pending' && (
@@ -1877,7 +1873,7 @@ export function MessageThread({
                 aria-label={t('resolve')}
                 className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md px-0 text-xs font-medium disabled:opacity-60 sm:w-auto sm:px-3"
               >
-                <Check className="h-3.5 w-3.5" />
+                <CircleCheckBig className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{t('resolve')}</span>
               </button>
             </>
@@ -1897,15 +1893,32 @@ export function MessageThread({
             </button>
           )}
 
-          {/* Assign dropdown */}
+          <button
+            type="button"
+            onClick={() => {
+              setTransferAgentId('');
+              setTransferDepartmentId(conversation.department_id ?? '');
+              setTransferLineId(conversation.whatsapp_config_id ?? '');
+              setTransferOpen(true);
+            }}
+            title={t('transferOrAssign')}
+            aria-label={t('transferOrAssign')}
+            className={cn(
+              'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md',
+              assignedAgentId ? 'text-primary' : 'text-muted-foreground'
+            )}
+          >
+            <ArrowLeftRight className="h-4 w-4" />
+          </button>
+
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
                 'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md',
                 assignedAgentId ? 'text-primary' : 'text-muted-foreground'
               )}
-              title={assignLabel}
-              aria-label={assignLabel}
+              title={t('moreActions')}
+              aria-label={t('moreActions')}
             >
               <MoreVertical className="h-4 w-4" />
             </DropdownMenuTrigger>
@@ -1914,15 +1927,11 @@ export function MessageThread({
               className="border-border bg-popover"
             >
               <DropdownMenuItem
-                onClick={() => {
-                  setTransferAgentId('');
-                  setTransferDepartmentId(conversation.department_id ?? '');
-                  setTransferLineId(conversation.whatsapp_config_id ?? '');
-                  setTransferOpen(true);
-                }}
+                onClick={() => setEditingContactOpen(true)}
                 className="text-sm"
               >
-                {t('transferOrAssign')}
+                <Pencil className="h-4 w-4" />
+                {tSidebar('editContact')}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
@@ -1961,6 +1970,12 @@ export function MessageThread({
         now={now}
         currentUserId={user?.id}
         t={t}
+      />
+      <ContactDetailView
+        open={editingContactOpen}
+        onOpenChange={setEditingContactOpen}
+        contactId={contact.id}
+        onUpdated={() => onRefresh?.()}
       />
       {confirmDialog}
 

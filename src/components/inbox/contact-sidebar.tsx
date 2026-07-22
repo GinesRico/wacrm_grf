@@ -18,11 +18,12 @@ import {
   Mic,
   X,
   Pencil,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { format } from "date-fns";
+import { differenceInHours, format } from "date-fns";
 import { useTranslations } from "next-intl";
 import { ContactDetailView } from "@/components/contacts/contact-detail-view";
 import { useAuth } from "@/hooks/use-auth";
@@ -90,6 +91,7 @@ export function ContactSidebar({
 }: ContactSidebarProps) {
   const tSidebar = useTranslations("Inbox.sidebar");
   const tThread = useTranslations("Inbox.messageThread");
+  const tTimer = useTranslations("Inbox.sessionTimer");
   const { accountId } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ContactSidebarTab>("info");
@@ -229,6 +231,41 @@ export function ContactSidebar({
     [liveMessages, mediaMessages],
   );
 
+  const sessionInfo = useMemo(() => {
+    const sourceMessages = liveMessages ?? [];
+    const lastCustomerMsg = [...sourceMessages]
+      .reverse()
+      .find((message) => message.sender_type === "customer");
+
+    if (!lastCustomerMsg) {
+      return {
+        expired: true,
+        remaining: tTimer("noCustomerMessages"),
+        availableUntil: "",
+      };
+    }
+
+    const lastCustomerDate = new Date(lastCustomerMsg.created_at);
+    const hoursSince = differenceInHours(new Date(), lastCustomerDate);
+    const expired = hoursSince >= 24;
+    const availableUntil = format(
+      new Date(lastCustomerDate.getTime() + 24 * 60 * 60 * 1000),
+      "dd/MM HH:mm",
+    );
+
+    if (expired) {
+      return { expired: true, remaining: tTimer("expired"), availableUntil };
+    }
+
+    const hoursLeft = 24 - hoursSince;
+    const remaining =
+      hoursLeft >= 1
+        ? tTimer("xhRemaining", { hours: Math.floor(hoursLeft) })
+        : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
+
+    return { expired, remaining, availableUntil };
+  }, [liveMessages, tTimer]);
+
   if (!displayedContact) {
     return (
       <div className="flex h-full w-72 items-center justify-center border-l border-border bg-card">
@@ -346,6 +383,26 @@ export function ContactSidebar({
                 </div>
               )}
             </div>
+
+            <Section title={tSidebar("session")} icon={Clock}>
+              <div className="space-y-1 px-1 text-xs">
+                <p
+                  className={cn(
+                    "font-medium",
+                    sessionInfo.expired ? "text-red-400" : "text-primary",
+                  )}
+                >
+                  {sessionInfo.remaining}
+                </p>
+                {sessionInfo.availableUntil && (
+                  <p className="text-muted-foreground">
+                    {tThread("availableUntil", {
+                      value: sessionInfo.availableUntil,
+                    })}
+                  </p>
+                )}
+              </div>
+            </Section>
 
             <Section title={tSidebar("tags")} icon={TagIcon}>
               <div className="flex flex-wrap gap-1">

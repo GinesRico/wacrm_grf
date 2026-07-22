@@ -562,6 +562,7 @@
       "tags": "Tags",
       "notes": "Notes",
       "deals": "Deals",
+      "session": "Session",
       "noTags": "No tags",
       "noDeals": "No deals",
       "starredMessages": "Starred",

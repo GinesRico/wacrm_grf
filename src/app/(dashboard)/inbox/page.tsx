@@ -18,10 +18,6 @@ import { toast } from "sonner";
 import { WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// Remembers the agent's show/hide choice for the desktop contact panel
-// across reloads and sessions (device-scoped, like the theme prefs).
-const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
-
 function conversationSortTime(conversation: Conversation) {
   return conversation.last_message_at ?? conversation.updated_at ?? "";
 }
@@ -131,33 +127,14 @@ export default function InboxPage() {
 
   /**
    * Whether the desktop contact sidebar (tags / deals / notes) is shown.
-   * Defaults to `true` (the historical behaviour) and is restored from
-   * localStorage after mount. We deliberately do NOT read localStorage in
-   * the initializer: the server renders with `true`, so reading a stored
-   * `false` synchronously would produce a hydration mismatch. The effect
-   * below reconciles to the stored value right after mount instead.
+   * Starts closed and only opens when the agent taps the contact info in
+   * the thread header.
    */
-  const [contactPanelOpen, setContactPanelOpen] = useState(true);
+  const [contactPanelOpen, setContactPanelOpen] = useState(false);
   const [jumpToMessageId, setJumpToMessageId] = useState<string | null>(null);
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(CONTACT_PANEL_STORAGE_KEY);
-      if (stored !== null) setContactPanelOpen(stored === "true");
-    } catch {
-      // localStorage can throw in private-browsing / sandboxed contexts.
-    }
-  }, []);
 
   const handleToggleContactPanel = useCallback(() => {
-    setContactPanelOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(CONTACT_PANEL_STORAGE_KEY, String(next));
-      } catch {
-        // Persistence is best-effort; ignore storage failures.
-      }
-      return next;
-    });
+    setContactPanelOpen((prev) => !prev);
   }, []);
 
   // Fire the deep-link auto-select exactly once per URL — subsequent
@@ -569,6 +546,7 @@ export default function InboxPage() {
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
       setMessages([]);
+      setContactPanelOpen(false);
       // Optimistically clear the unread badge for this conv. The
       // server-side reset is fired by the unread-reset effect inside
       // MessageThread (which reads activeConversation.unread_count, not
@@ -657,6 +635,7 @@ export default function InboxPage() {
     setActiveConversation(null);
     setActiveContact(null);
     setMessages([]);
+    setContactPanelOpen(false);
     // Clearing the ref lets the deep-link auto-selector fire again if
     // the user later visits /inbox?c=<same-id> — desirable UX.
     autoSelectedForDeepLinkRef.current = null;
@@ -795,7 +774,7 @@ export default function InboxPage() {
             agent hasn't collapsed it via the thread-header toggle (#258).
             On mobile it's always hidden (the `lg:block` below), so the
             toggle — which is itself desktop-only — never affects it. */}
-        {contactPanelOpen && (
+        {hasActiveConv && activeContact && contactPanelOpen && (
           <div className="hidden lg:block">
             <ContactSidebar
               contact={activeContact}
