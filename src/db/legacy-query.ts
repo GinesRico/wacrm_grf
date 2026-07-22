@@ -288,6 +288,16 @@ async function legacyRpc(name: string, args: Record<string, unknown>) {
     return { data: (result.rows[0] as { data?: unknown } | undefined)?.data ?? null, error: null };
   }
 
+  if (name === "increment_automation_execution_count") {
+    const automationId = args.p_automation_id ?? args.automation_id;
+    await db.execute(
+      sql.raw(
+        `update automations set execution_count = execution_count + 1, last_executed_at = now(), updated_at = now() where id = ${literal(automationId)}`,
+      ),
+    );
+    return { data: null, error: null };
+  }
+
   if (name === "increment_flow_execution") {
     const result = await db.execute(
       sql.raw(`select public.increment_flow_execution(${literal(args.flow_id)}) as data`),
