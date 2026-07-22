@@ -39,7 +39,6 @@ import {
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useLocale, useTranslations } from 'next-intl';
-import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import {
   Select,
@@ -1710,18 +1709,6 @@ export function MessageThread({
     conversation.whatsapp_config?.phone_number_id ||
     null;
   const messageGroups = groupMessagesByDate(messages);
-  const statusLabel =
-    conversation.status === 'open'
-      ? t('statusOpen')
-      : conversation.status === 'pending'
-        ? t('statusPending')
-        : t('statusClosed');
-  const statusColor =
-    conversation.status === 'open'
-      ? 'text-primary'
-      : conversation.status === 'pending'
-        ? 'text-amber-400'
-        : 'text-muted-foreground';
   const assignedAgentId = conversation.assigned_agent_id ?? null;
   const currentAssignee = members.find((p) => p.user_id === assignedAgentId);
   const assigneeName = currentAssignee?.full_name ?? t('assigned');
@@ -1827,16 +1814,23 @@ export function MessageThread({
             </button>
           )}
 
-          <Badge
-            variant="outline"
-            title={statusLabel}
+          <button
+            type="button"
+            onClick={() => {
+              setTransferAgentId('');
+              setTransferDepartmentId(conversation.department_id ?? '');
+              setTransferLineId(conversation.whatsapp_config_id ?? '');
+              setTransferOpen(true);
+            }}
+            title={t('transferOrAssign')}
+            aria-label={t('transferOrAssign')}
             className={cn(
-              'border-border hidden h-7 gap-1 text-[10px] sm:inline-flex',
-              statusColor
+              'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md',
+              assignedAgentId ? 'text-primary' : 'text-muted-foreground'
             )}
           >
-            {statusLabel}
-          </Badge>
+            <ArrowLeftRight className="h-4 w-4" />
+          </button>
 
           {conversation.status === 'pending' && (
             <button
@@ -1892,24 +1886,6 @@ export function MessageThread({
               <span className="hidden sm:inline">{t('reopen')}</span>
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={() => {
-              setTransferAgentId('');
-              setTransferDepartmentId(conversation.department_id ?? '');
-              setTransferLineId(conversation.whatsapp_config_id ?? '');
-              setTransferOpen(true);
-            }}
-            title={t('transferOrAssign')}
-            aria-label={t('transferOrAssign')}
-            className={cn(
-              'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md',
-              assignedAgentId ? 'text-primary' : 'text-muted-foreground'
-            )}
-          >
-            <ArrowLeftRight className="h-4 w-4" />
-          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger
