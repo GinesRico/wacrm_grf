@@ -34,7 +34,6 @@ import {
   X,
   Copy,
   CornerUpLeft,
-  Pencil,
 } from 'lucide-react';
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -1900,19 +1899,26 @@ export function MessageThread({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              className="border-border bg-popover"
+              className="border-border bg-popover min-w-44"
             >
+              {onToggleContactPanel && (
+                <DropdownMenuItem
+                  onClick={onToggleContactPanel}
+                  className="text-sm whitespace-nowrap"
+                >
+                  {tSidebar('contactInfo')}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => setEditingContactOpen(true)}
-                className="text-sm"
+                className="text-sm whitespace-nowrap"
               >
-                <Pencil className="h-4 w-4" />
                 {tSidebar('editContact')}
               </DropdownMenuItem>
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem
                 onClick={() => void handleDeleteConversation()}
-                className="text-destructive text-sm"
+                className="text-destructive text-sm whitespace-nowrap"
               >
                 {t('deleteTicket')}
               </DropdownMenuItem>

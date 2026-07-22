@@ -342,7 +342,7 @@
       "templates": "Plantillas",
       "readOnlyPlaceholder": "Solo lectura: los lectores pueden consultar, pero no responder",
       "sessionExpiredPlaceholder": "Sesion caducada - usa una plantilla",
-      "typeMessagePlaceholder": "Escribe un mensaje...",
+      "typeMessagePlaceholder": "Escribe un mensaje... Usa / para respuestas rapidas",
       "attach": "Adjuntar",
       "readOnlyTitle": "Solo lectura: tu rol no puede enviar mensajes",
       "recording": "Grabando... {current} / {max}",
