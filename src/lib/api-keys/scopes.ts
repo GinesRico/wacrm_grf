@@ -16,9 +16,12 @@
 export const API_SCOPES = [
   'messages:send',
   'messages:read',
+  'templates:read',
   'contacts:read',
   'contacts:write',
   'conversations:read',
+  'automations:read',
+  'automations:write',
   'broadcasts:send',
   'webhooks:manage',
 ] as const;
@@ -29,9 +32,12 @@ export type ApiScope = (typeof API_SCOPES)[number];
 export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'messages:send': 'Send WhatsApp messages',
   'messages:read': 'Read messages and their delivery status',
+  'templates:read': 'List WhatsApp message templates',
   'contacts:read': 'List and read contacts',
   'contacts:write': 'Create and update contacts',
   'conversations:read': 'List and read conversations',
+  'automations:read': 'List automations and read execution logs',
+  'automations:write': 'Trigger automation events for testing or integrations',
   'broadcasts:send': 'Launch broadcast campaigns',
   'webhooks:manage': 'Register and manage outbound event webhooks',
 };

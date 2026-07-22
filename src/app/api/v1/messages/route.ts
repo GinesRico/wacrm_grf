@@ -34,6 +34,9 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { okList } from '@/lib/api/v1/respond';
+import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
+import { listMessages, messageFiltersFromUrl } from '@/lib/api/v1/conversations';
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
 import {
   sendMessageToConversation,
@@ -41,6 +44,28 @@ import {
   SendMessageError,
 } from '@/lib/whatsapp/send-message';
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
+
+export async function GET(request: Request) {
+  try {
+    const ctx = await requireApiKey(request, 'messages:read');
+    const { limit, cursor } = parseListParams(request);
+    const filters = messageFiltersFromUrl(new URL(request.url));
+
+    const { items, nextCursor } = buildPage(
+      await listMessages({
+        accountId: ctx.accountId,
+        limit: limit + 1,
+        cursor,
+        ...filters,
+      }),
+      limit,
+    );
+
+    return okList(items, nextCursor);
+  } catch (err) {
+    return toApiErrorResponse(err);
+  }
+}
 
 export async function POST(request: Request) {
   try {

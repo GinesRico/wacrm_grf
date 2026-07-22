@@ -1,31 +1,28 @@
 import { requireApiKey } from '@/lib/auth/api-context';
-import { okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { fail, okList, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import {
-  conversationExists,
-  listConversationMessages,
-  messageFiltersFromUrl,
-} from '@/lib/api/v1/conversations';
+  getAutomationWithSteps,
+  listAutomationLogs,
+} from '@/lib/api/v1/automations';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await requireApiKey(request, 'messages:read');
+    const ctx = await requireApiKey(request, 'automations:read');
     const { id } = await params;
     const { limit, cursor } = parseListParams(request);
-    const filters = messageFiltersFromUrl(new URL(request.url));
 
-    if (!(await conversationExists(ctx.accountId, id))) {
-      return fail('not_found', 'Conversation not found', 404);
+    if (!(await getAutomationWithSteps(ctx.accountId, id))) {
+      return fail('not_found', 'Automation not found', 404);
     }
 
     const { items, nextCursor } = buildPage(
-      await listConversationMessages({
+      await listAutomationLogs({
         accountId: ctx.accountId,
-        ...filters,
-        conversationId: id,
+        automationId: id,
         limit: limit + 1,
         cursor,
       }),

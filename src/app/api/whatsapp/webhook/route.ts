@@ -228,6 +228,11 @@ interface WhatsAppMessage {
   };
   reaction?: { message_id: string; emoji: string };
   /**
+   * Meta sends template quick-reply button taps as `type: "button"`,
+   * not as `interactive.button_reply`. The payload is the stable id.
+   */
+  button?: { text?: string; payload?: string };
+  /**
    * Set when the customer taps a button or list row on an interactive
    * message we sent. `button_reply.id` / `list_reply.id` is whatever id
    * we put on the button/row when sending — the Flows engine uses this
@@ -1033,6 +1038,8 @@ async function processMessage(
   ]);
   let contentType = ALLOWED_CONTENT_TYPES.has(message.type)
     ? message.type
+    : message.type === 'button'
+      ? 'interactive'
     : message.type === 'sticker'
       ? 'image' // stickers are images
       : 'text'; // reaction, unknown → text fallback
@@ -1437,6 +1444,13 @@ async function parseMessageContent(
 
     case 'reaction':
       return { ...empty, contentText: message.reaction?.emoji || null };
+
+    case 'button':
+      return {
+        ...empty,
+        contentText: message.button?.text || message.button?.payload || null,
+        interactiveReplyId: message.button?.payload || null,
+      };
 
     case 'unsupported':
       return { ...empty, contentText: '[unsupported]' };

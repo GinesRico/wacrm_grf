@@ -8,11 +8,12 @@
 // endpoint's response vocabulary.
 // ============================================================
 
-import { and, asc, desc, eq, inArray, lt, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, lt, or, type SQL } from 'drizzle-orm';
 
 import { db } from '@/db/client';
 import { contactTags, contacts, conversations, messages, tags } from '@/db/schema';
 import type { Cursor } from '@/lib/api/v1/pagination';
+import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import type { Conversation, Message } from '@/types';
 
 export interface ApiConversation {
@@ -38,6 +39,7 @@ export interface ApiConversation {
 export interface ApiMessage {
   id: string;
   conversation_id: string;
+  contact_id: string | null;
   direction: 'inbound' | 'outbound';
   sender_type: string;
   content_type: string;
@@ -49,6 +51,13 @@ export interface ApiMessage {
   reply_to_message_id: string | null;
   interactive_reply_id: string | null;
   created_at: string;
+  contact?: {
+    id: string;
+    phone: string;
+    name: string | null;
+    email: string | null;
+    company: string | null;
+  } | null;
 }
 
 /**
@@ -89,6 +98,7 @@ export function serializeMessage(m: Message): ApiMessage {
   return {
     id: m.id,
     conversation_id: m.conversation_id,
+    contact_id: null,
     // `customer` = inbound (from the contact); anything else is outbound.
     direction: m.sender_type === 'customer' ? 'inbound' : 'outbound',
     sender_type: m.sender_type,
@@ -136,6 +146,7 @@ export function serializeMessageRow(row: typeof messages.$inferSelect): ApiMessa
   return {
     id: row.id,
     conversation_id: row.conversationId,
+    contact_id: null,
     direction: row.senderType === 'customer' ? 'inbound' : 'outbound',
     sender_type: row.senderType,
     content_type: row.contentType,
@@ -147,6 +158,25 @@ export function serializeMessageRow(row: typeof messages.$inferSelect): ApiMessa
     reply_to_message_id: row.replyToMessageId,
     interactive_reply_id: row.interactiveReplyId,
     created_at: row.createdAt.toISOString(),
+  };
+}
+
+function serializeMessageJoinedRow(
+  message: typeof messages.$inferSelect,
+  contact: typeof contacts.$inferSelect | null,
+): ApiMessage {
+  return {
+    ...serializeMessageRow(message),
+    contact_id: contact?.id ?? null,
+    contact: contact
+      ? {
+          id: contact.id,
+          phone: contact.phone,
+          name: contact.name,
+          email: contact.email,
+          company: contact.company,
+        }
+      : null,
   };
 }
 
@@ -235,6 +265,13 @@ export async function listConversationMessages(params: {
   conversationId: string;
   limit: number;
   cursor: Cursor | null;
+  direction?: string | null;
+  contentType?: string | null;
+  status?: string | null;
+  templateName?: string | null;
+  interactiveReplyId?: string | null;
+  createdAfter?: Date | null;
+  createdBefore?: Date | null;
 }): Promise<Array<ApiMessage & { id: string; created_at: string }>> {
   const [conversation] = await db
     .select({ id: conversations.id })
@@ -249,6 +286,7 @@ export async function listConversationMessages(params: {
   if (!conversation) return [];
 
   const whereParts = [eq(messages.conversationId, params.conversationId)];
+  applyMessageFilters(whereParts, params);
   if (params.cursor) {
     const cursorDate = new Date(params.cursor.createdAt);
     whereParts.push(
@@ -267,6 +305,107 @@ export async function listConversationMessages(params: {
     .limit(params.limit);
 
   return rows.map(serializeMessageRow);
+}
+
+function applyMessageFilters(
+  whereParts: SQL[],
+  filters: {
+    direction?: string | null;
+    contentType?: string | null;
+    status?: string | null;
+    templateName?: string | null;
+    interactiveReplyId?: string | null;
+    createdAfter?: Date | null;
+    createdBefore?: Date | null;
+  },
+) {
+  if (filters.direction === 'inbound') {
+    whereParts.push(eq(messages.senderType, 'customer'));
+  } else if (filters.direction === 'outbound') {
+    whereParts.push(or(eq(messages.senderType, 'agent'), eq(messages.senderType, 'bot'))!);
+  }
+  if (filters.contentType) whereParts.push(eq(messages.contentType, filters.contentType));
+  if (filters.status) whereParts.push(eq(messages.status, filters.status));
+  if (filters.templateName) whereParts.push(eq(messages.templateName, filters.templateName));
+  if (filters.interactiveReplyId) {
+    whereParts.push(eq(messages.interactiveReplyId, filters.interactiveReplyId));
+  }
+  if (filters.createdAfter) whereParts.push(gte(messages.createdAt, filters.createdAfter));
+  if (filters.createdBefore) whereParts.push(lte(messages.createdAt, filters.createdBefore));
+}
+
+function parseDateParam(value: string | null): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function messageFiltersFromUrl(url: URL) {
+  return {
+    conversationId: url.searchParams.get('conversation_id'),
+    contactId: url.searchParams.get('contact_id'),
+    phone: url.searchParams.get('phone'),
+    direction: url.searchParams.get('direction'),
+    contentType: url.searchParams.get('content_type'),
+    status: url.searchParams.get('status'),
+    templateName: url.searchParams.get('template_name'),
+    interactiveReplyId: url.searchParams.get('interactive_reply_id'),
+    search: url.searchParams.get('q'),
+    createdAfter: parseDateParam(url.searchParams.get('created_after')),
+    createdBefore: parseDateParam(url.searchParams.get('created_before')),
+  };
+}
+
+export async function listMessages(params: {
+  accountId: string;
+  limit: number;
+  cursor: Cursor | null;
+  conversationId?: string | null;
+  contactId?: string | null;
+  phone?: string | null;
+  direction?: string | null;
+  contentType?: string | null;
+  status?: string | null;
+  templateName?: string | null;
+  interactiveReplyId?: string | null;
+  search?: string | null;
+  createdAfter?: Date | null;
+  createdBefore?: Date | null;
+}): Promise<Array<ApiMessage & { id: string; created_at: string }>> {
+  const whereParts: SQL[] = [eq(conversations.accountId, params.accountId)];
+  if (params.conversationId) {
+    whereParts.push(eq(messages.conversationId, params.conversationId));
+  }
+  if (params.contactId) {
+    whereParts.push(eq(conversations.contactId, params.contactId));
+  }
+  if (params.phone) {
+    whereParts.push(eq(contacts.phoneNormalized, normalizePhone(params.phone)));
+  }
+  if (params.search) {
+    whereParts.push(ilike(messages.contentText, `%${params.search}%`));
+  }
+  applyMessageFilters(whereParts, params);
+  if (params.cursor) {
+    const cursorDate = new Date(params.cursor.createdAt);
+    whereParts.push(
+      or(
+        lt(messages.createdAt, cursorDate),
+        and(eq(messages.createdAt, cursorDate), lt(messages.id, params.cursor.id)),
+      )!,
+    );
+  }
+
+  const rows = await db
+    .select({ message: messages, contact: contacts })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+    .where(and(...whereParts))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(params.limit);
+
+  return rows.map((row) => serializeMessageJoinedRow(row.message, row.contact));
 }
 
 export async function conversationExists(accountId: string, conversationId: string) {
