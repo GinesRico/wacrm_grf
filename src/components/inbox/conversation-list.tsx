@@ -77,6 +77,60 @@ interface InboxCounts {
   resolved: number;
 }
 
+const INBOX_PREFERENCES_STORAGE_KEY = 'wacrm:inbox:conversation-list';
+
+interface InboxPreferences {
+  tab: InboxTab;
+  subtab: InboxSubtab;
+  scope: InboxScope;
+  selectedDepartmentIds: string[];
+  selectedTagIds: string[];
+  selectedCompany: string | null;
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function readInboxPreferences(): Partial<InboxPreferences> | null {
+  try {
+    const raw = localStorage.getItem(INBOX_PREFERENCES_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      tab:
+        parsed.tab === 'resolved' || parsed.tab === 'search'
+          ? parsed.tab
+          : parsed.tab === 'inbox'
+            ? 'inbox'
+            : undefined,
+      subtab: parsed.subtab === 'pending' ? 'pending' : 'open',
+      scope: parsed.scope === 'all' ? 'all' : 'mine',
+      selectedDepartmentIds: readStringArray(parsed.selectedDepartmentIds),
+      selectedTagIds: readStringArray(parsed.selectedTagIds),
+      selectedCompany:
+        typeof parsed.selectedCompany === 'string'
+          ? parsed.selectedCompany
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeInboxPreferences(preferences: InboxPreferences) {
+  try {
+    localStorage.setItem(
+      INBOX_PREFERENCES_STORAGE_KEY,
+      JSON.stringify(preferences)
+    );
+  } catch {
+    // localStorage persistence is best-effort.
+  }
+}
+
 type MediaPreviewKind =
   | 'image'
   | 'audio'
@@ -257,10 +311,50 @@ export function ConversationList({
   const fetchKeyRef = useRef('');
   const fetchSeqRef = useRef(0);
   const activeStatusRef = useRef<Conversation['status'] | null>(null);
+  const conversationStatusesRef = useRef<Map<string, Conversation['status']>>(
+    new Map()
+  );
+  const preferencesHydratedRef = useRef(false);
   useEffect(() => {
     onConversationsLoadedRef.current = onConversationsLoaded;
     conversationsCountRef.current = conversations.length;
   });
+
+  useEffect(() => {
+    const stored = readInboxPreferences();
+    queueMicrotask(() => {
+      if (stored?.tab) setTab(stored.tab);
+      if (stored?.subtab) setSubtab(stored.subtab);
+      if (stored?.scope) setScope(stored.scope);
+      if (stored?.selectedDepartmentIds) {
+        setSelectedDepartmentIds(stored.selectedDepartmentIds);
+      }
+      if (stored?.selectedTagIds) setSelectedTagIds(stored.selectedTagIds);
+      if (stored && 'selectedCompany' in stored) {
+        setSelectedCompany(stored.selectedCompany ?? null);
+      }
+      preferencesHydratedRef.current = true;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesHydratedRef.current) return;
+    writeInboxPreferences({
+      tab,
+      subtab,
+      scope,
+      selectedDepartmentIds,
+      selectedTagIds,
+      selectedCompany,
+    });
+  }, [
+    tab,
+    subtab,
+    scope,
+    selectedDepartmentIds,
+    selectedTagIds,
+    selectedCompany,
+  ]);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedSearch(search.trim()), 500);
@@ -442,22 +536,6 @@ export function ConversationList({
   ]);
 
   useEffect(() => {
-    if (loading) return;
-    if (tab !== 'inbox' || subtab !== 'open') return;
-    if (filtered.length > 0) return;
-    if (counts.inboxPending > 0 || visiblePendingCount > 0) {
-      queueMicrotask(() => setSubtab('pending'));
-    }
-  }, [
-    counts.inboxPending,
-    filtered.length,
-    loading,
-    subtab,
-    tab,
-    visiblePendingCount,
-  ]);
-
-  useEffect(() => {
     let cancelled = false;
     const activeStatus =
       conversations.find(
@@ -465,6 +543,35 @@ export function ConversationList({
       )?.status ?? null;
     const previousStatus = activeStatusRef.current;
     activeStatusRef.current = activeStatus;
+    const previousStatuses = conversationStatusesRef.current;
+    const nextStatuses = new Map(
+      conversations.map((conversation) => [
+        conversation.id,
+        conversation.status,
+      ])
+    );
+    conversationStatusesRef.current = nextStatuses;
+
+    const closedOpenConversation = conversations.some(
+      (conversation) =>
+        previousStatuses.get(conversation.id) === 'open' &&
+        conversation.status === 'closed'
+    );
+    const openCount = conversations.filter(
+      (conversation) => conversation.status === 'open'
+    ).length;
+
+    if (
+      closedOpenConversation &&
+      openCount === 0 &&
+      (counts.inboxPending > 0 || visiblePendingCount > 0)
+    ) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setTab('inbox');
+        setSubtab('pending');
+      });
+    }
 
     if (previousStatus !== 'closed') {
       return () => {
@@ -488,7 +595,12 @@ export function ConversationList({
     return () => {
       cancelled = true;
     };
-  }, [activeConversationId, conversations]);
+  }, [
+    activeConversationId,
+    conversations,
+    counts.inboxPending,
+    visiblePendingCount,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>

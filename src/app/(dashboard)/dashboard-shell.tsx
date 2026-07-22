@@ -17,6 +17,7 @@ import {
 } from "@/lib/realtime/soketi-client";
 
 const CHUNK_RELOAD_KEY = "wacrm:last-chunk-reload";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "wacrm:dashboard:sidebar-collapsed";
 const REALTIME_DEBUG =
   process.env.NEXT_PUBLIC_REALTIME_DEBUG === "true" ||
   process.env.NODE_ENV !== "production";
@@ -49,6 +50,28 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
+  const handleToggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((value) => {
+      const next = !value;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+      } catch {
+        // Persistence is best-effort; keep the current tab responsive.
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+      if (stored !== null) {
+        queueMicrotask(() => setSidebarCollapsed(stored === "true"));
+      }
+    } catch {
+      // localStorage can be unavailable in constrained contexts.
+    }
+  }, []);
 
   useEffect(() => {
     const handleResourceError = (event: ErrorEvent) => {
@@ -92,13 +115,19 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     let channelName: string | null = null;
 
     if (!user) {
-      setRealtimeReady(false);
-      setRealtimeError(null);
+      queueMicrotask(() => {
+        setRealtimeReady(false);
+        setRealtimeError(null);
+      });
       return;
     }
     if (!accountId) {
-      setRealtimeReady(false);
-      setRealtimeError(profileLoading ? null : "Realtime account is not ready.");
+      queueMicrotask(() => {
+        setRealtimeReady(false);
+        setRealtimeError(
+          profileLoading ? null : "Realtime account is not ready.",
+        );
+      });
       return;
     }
 
@@ -199,7 +228,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         open={sidebarOpen}
         onClose={closeSidebar}
         collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+        onToggleCollapsed={handleToggleSidebarCollapsed}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header onOpenSidebar={() => setSidebarOpen(true)} />

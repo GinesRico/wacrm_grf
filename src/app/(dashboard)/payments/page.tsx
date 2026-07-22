@@ -2,12 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CreditCard, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { CreditCard, ExternalLink, Loader2, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface PaymentLink {
   id: string;
@@ -25,12 +34,38 @@ interface PaymentLink {
 }
 
 const STATUS = ["all", "pending", "paid", "failed"] as const;
+const STATUS_LABELS: Record<(typeof STATUS)[number], string> = {
+  all: "Todos",
+  pending: "Pendientes",
+  paid: "Pagados",
+  failed: "Fallidos",
+};
+const PAYMENT_STATUS_LABELS: Record<PaymentLink["status"], string> = {
+  pending: "Pendiente",
+  paid: "Pagado",
+  failed: "Fallido",
+  expired: "Caducado",
+  cancelled: "Cancelado",
+};
+const PAYMENT_STATUS_CLASSES: Record<PaymentLink["status"], string> = {
+  pending: "border-amber-200 bg-amber-50 text-amber-700",
+  paid: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  failed: "border-red-200 bg-red-50 text-red-700",
+  expired: "border-slate-200 bg-slate-50 text-slate-700",
+  cancelled: "border-slate-200 bg-slate-50 text-slate-700",
+};
 
 export default function PaymentsPage() {
   const [payments, setPayments] = useState<PaymentLink[]>([]);
   const [status, setStatus] = useState<(typeof STATUS)[number]>("all");
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [concept, setConcept] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +106,48 @@ export default function PaymentsPage() {
     }
   }
 
+  async function createPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amountNumber = Number(amount.replace(",", "."));
+    const conceptText = concept.trim();
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      toast.error("Introduce un importe valido");
+      return;
+    }
+    if (!conceptText) {
+      toast.error("Introduce un concepto");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await fetch("/api/integrations/arvera-payments/payment-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount_eur: amountNumber,
+          concept: conceptText,
+          email: email.trim() || undefined,
+          phone: phone.trim() || undefined,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || "No se pudo crear el pago");
+        return;
+      }
+      toast.success("Pago creado");
+      setCreateOpen(false);
+      setAmount("");
+      setConcept("");
+      setEmail("");
+      setPhone("");
+      setStatus("all");
+      void load();
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -82,21 +159,27 @@ export default function PaymentsPage() {
             Enlaces generados con Pagos Arvera.
           </p>
         </div>
-        <div className="flex flex-wrap gap-1">
-          {STATUS.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setStatus(item)}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                status === item
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {item === "all" ? "Todos" : item}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            Crear pago
+          </Button>
+          <div className="flex flex-wrap gap-1">
+            {STATUS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setStatus(item)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                  status === item
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {STATUS_LABELS[item]}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -142,8 +225,8 @@ export default function PaymentsPage() {
                     {(payment.amount_cents / 100).toFixed(2)} {payment.currency}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge className="border-border bg-muted text-muted-foreground">
-                      {payment.status}
+                    <Badge className={PAYMENT_STATUS_CLASSES[payment.status]}>
+                      {PAYMENT_STATUS_LABELS[payment.status]}
                     </Badge>
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
@@ -191,6 +274,72 @@ export default function PaymentsPage() {
           </table>
         </div>
       )}
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Crear pago</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={createPayment} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="payment-amount">Importe EUR</Label>
+                <Input
+                  id="payment-amount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={amount}
+                  onChange={(event) => setAmount(event.target.value)}
+                  placeholder="121.00"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="payment-concept">Concepto</Label>
+                <Input
+                  id="payment-concept"
+                  value={concept}
+                  onChange={(event) => setConcept(event.target.value)}
+                  placeholder="Factura 1074"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="payment-email">Email</Label>
+                <Input
+                  id="payment-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="cliente@example.com"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="payment-phone">Telefono</Label>
+                <Input
+                  id="payment-phone"
+                  value={phone}
+                  onChange={(event) => setPhone(event.target.value)}
+                  placeholder="600123456"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateOpen(false)}
+                disabled={creating}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={creating}>
+                {creating ? <Loader2 className="size-4 animate-spin" /> : null}
+                Crear pago
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
