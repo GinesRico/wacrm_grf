@@ -21,7 +21,7 @@ function quoteIdent(value: string): string {
 function literal(value: unknown): string {
   if (value === null) return "null";
   if (value instanceof Date) return `'${value.toISOString().replaceAll("'", "''")}'`;
-  if (Array.isArray(value)) return `array[${value.map(literal).join(", ")}]`;
+  if (Array.isArray(value)) return `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb`;
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "object") return `'${JSON.stringify(value).replaceAll("'", "''")}'::jsonb`;
