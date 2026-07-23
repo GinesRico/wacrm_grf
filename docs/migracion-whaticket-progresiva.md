@@ -16,13 +16,23 @@ pnpm migrate:whaticket
 El script pregunta los valores necesarios y permite saltar fases ya ejecutadas.
 Por defecto carga el perfil ARVERA conocido y solo pregunta si quieres editarlo.
 
+Si lo ejecutas desde la consola de la app WACRM en Coolify, normalmente no hay
+binario `docker` ni acceso directo a las rutas del host. En ese caso el script
+salta automaticamente las fases 1-6, pensadas para el host Docker, y puede
+continuar con la verificacion/export/import siempre que la base puente ya exista
+y sea accesible por red.
+
+Para que el paquete JSON + media sobreviva a redeploys, configura en Coolify un
+storage persistente montado en `/app/storage`. Evita usar `/tmp`: el contenedor
+puede limpiarlo o recrearlo.
+
 Valores habituales:
 
 ```text
 Contenedor PostgreSQL puente: ppt6w0ho4yywicm0yon1tt4d
 Base puente: whaticket_import_tmp
 Ruta snapshot public: /home/docker/whaticket/backup/export_snapshot/public
-Paquete exportado: /tmp/whaticket-export
+Paquete exportado: /app/storage/whaticket-export
 Cuenta WACRM destino: 4441e304-18b7-487f-98c3-57a101728091
 ```
 
@@ -34,7 +44,7 @@ Cuenta WACRM destino: 4441e304-18b7-487f-98c3-57a101728091
 4. Copiar el dump al contenedor PostgreSQL puente.
 5. Crear o recrear la base puente.
 6. Restaurar con `pg_restore --no-owner --role=postgres`.
-7. Verificar tablas y conteos principales.
+7. Verificar tablas y conteos principales conectando directamente a PostgreSQL.
 8. Exportar desde la base puente a JSON + media con `pnpm export:whaticket-db`.
 9. Ejecutar migraciones de WACRM.
 10. Ejecutar import real con media en Alarik.
@@ -43,7 +53,7 @@ El dry-run sigue disponible como comando manual cuando quieras validar sin
 escribir:
 
 ```bash
-pnpm import:whaticket /tmp/whaticket-export \
+pnpm import:whaticket /app/storage/whaticket-export \
   --account=4441e304-18b7-487f-98c3-57a101728091 \
   --media=skip \
   --dry-run
@@ -72,7 +82,7 @@ refrescas la base puente/export y vuelves a ejecutar el import real.
 
 Si una fase ya esta hecha, responde `n` cuando el script pregunte si quieres
 ejecutarla. Por ejemplo, si la base puente ya esta restaurada, puedes saltar las
-fases 1-7 y continuar desde la exportacion a `/tmp/whaticket-export`.
+fases 1-7 y continuar desde la exportacion a `/app/storage/whaticket-export`.
 
 ## Seguridad
 

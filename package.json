@@ -41,6 +41,7 @@
                     "export:whaticket-db":  "node scripts/export-whaticket-db.mjs",
                     "import:whaticket":  "node scripts/import-whaticket.mjs",
                     "migrate:whaticket":  "node scripts/migrate-whaticket-progressive.mjs",
+                    "verify:whaticket-bridge":  "node scripts/verify-whaticket-bridge.mjs",
                     "format":  "prettier --write .",
                     "format:check":  "prettier --check .",
                     "test":  "vitest run",

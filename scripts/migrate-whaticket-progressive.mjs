@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -20,7 +20,7 @@ const DEFAULTS = {
   bridgeDbPort: '5432',
   bridgeDbPass: '',
   bridgeDumpInContainer: '/tmp/whaticket_backup.dump',
-  exportDir: '/tmp/whaticket-export',
+  exportDir: '/app/storage/whaticket-export',
   accountId: '4441e304-18b7-487f-98c3-57a101728091',
   mediaMode: 'alarik',
 };
@@ -33,6 +33,13 @@ function envPrefix(env) {
   return Object.entries(env)
     .map(([key, value]) => `${key}=${q(value)}`)
     .join(' ');
+}
+
+function hasCommand(command) {
+  const result = spawnSync('sh', ['-lc', `command -v ${command}`], {
+    stdio: 'ignore',
+  });
+  return result.status === 0;
 }
 
 async function prompt(rl, label, defaultValue, { secret = false } = {}) {
@@ -67,6 +74,10 @@ function run(command, options = {}) {
 
 async function maybeRun(rl, title, command, options = {}) {
   console.log(`\n=== ${title} ===`);
+  if (options.requiresDocker && !options.dockerAvailable) {
+    console.log('Saltado: este paso requiere acceso al host Docker y no esta disponible aqui.');
+    return false;
+  }
   if (!(await confirm(rl, 'Ejecutar este paso?', options.defaultYes ?? true))) {
     console.log('Saltado.');
     return false;
@@ -122,6 +133,12 @@ async function main() {
   const rl = readline.createInterface({ input, output });
   try {
     const config = await collectConfig(rl);
+    const dockerAvailable = hasCommand('docker');
+    if (!dockerAvailable) {
+      console.log(
+        '\nDocker no esta disponible en este entorno. Se saltaran automaticamente las fases de backup/restore/resync que requieren acceso al host Docker.'
+      );
+    }
 
     console.log('\nResumen:');
     console.table({
@@ -141,28 +158,35 @@ async function main() {
     await maybeRun(
       rl,
       '1. Crear dump custom de WhaTicket produccion dentro del contenedor',
-      `docker exec -t ${q(config.sourceDbContainer)} pg_dump -U ${q(config.sourceDbUser)} -d ${q(config.sourceDbName)} -Fc -f ${q(config.sourceDumpInContainer)}`
+      `docker exec -t ${q(config.sourceDbContainer)} pg_dump -U ${q(config.sourceDbUser)} -d ${q(config.sourceDbName)} -Fc -f ${q(config.sourceDumpInContainer)}`,
+      { requiresDocker: true, dockerAvailable }
     );
 
     await maybeRun(
       rl,
       '2. Copiar dump desde contenedor produccion al host',
-      `mkdir -p ${q(path.dirname(config.dumpHostPath))} && docker cp ${q(`${config.sourceDbContainer}:${config.sourceDumpInContainer}`)} ${q(config.dumpHostPath)}`
+      `mkdir -p ${q(path.dirname(config.dumpHostPath))} && docker cp ${q(`${config.sourceDbContainer}:${config.sourceDumpInContainer}`)} ${q(config.dumpHostPath)}`,
+      { requiresDocker: true, dockerAvailable }
     );
 
     await maybeRun(
       rl,
       '3. Resync/copia de adjuntos public a snapshot',
-      `mkdir -p ${q(config.snapshotPublicDir)} && rsync -a --ignore-missing-args ${q(`${config.sourcePublicDir.replace(/\/$/, '')}/`)} ${q(`${config.snapshotPublicDir.replace(/\/$/, '')}/`)}`
+      `mkdir -p ${q(config.snapshotPublicDir)} && rsync -a --ignore-missing-args ${q(`${config.sourcePublicDir.replace(/\/$/, '')}/`)} ${q(`${config.snapshotPublicDir.replace(/\/$/, '')}/`)}`,
+      { requiresDocker: true, dockerAvailable }
     );
 
     await maybeRun(
       rl,
       '4. Copiar dump host al contenedor PostgreSQL puente',
-      `docker cp ${q(config.dumpHostPath)} ${q(`${config.bridgeContainer}:${config.bridgeDumpInContainer}`)}`
+      `docker cp ${q(config.dumpHostPath)} ${q(`${config.bridgeContainer}:${config.bridgeDumpInContainer}`)}`,
+      { requiresDocker: true, dockerAvailable }
     );
 
-    if (
+    if (!dockerAvailable) {
+      console.log('\n=== 5. Crear/recrear base puente ===');
+      console.log('Saltado: este paso requiere acceso al host Docker y no esta disponible aqui.');
+    } else if (
       await confirm(
         rl,
         `5. Recrear la base puente ${config.bridgeDbName}? Esto borra su contenido actual`,
@@ -178,20 +202,27 @@ async function main() {
         rl,
         '5. Crear base puente si no existe',
         `docker exec -t ${q(config.bridgeContainer)} createdb -U ${q(config.bridgeDbUser)} ${q(config.bridgeDbName)}`,
-        { defaultYes: false }
+        { defaultYes: false, requiresDocker: true, dockerAvailable }
       );
     }
 
     await maybeRun(
       rl,
       '6. Restaurar dump en base puente',
-      `docker exec -t ${q(config.bridgeContainer)} pg_restore --no-owner --role=${q(config.bridgeDbUser)} -U ${q(config.bridgeDbUser)} -d ${q(config.bridgeDbName)} ${q(config.bridgeDumpInContainer)}`
+      `docker exec -t ${q(config.bridgeContainer)} pg_restore --no-owner --role=${q(config.bridgeDbUser)} -U ${q(config.bridgeDbUser)} -d ${q(config.bridgeDbName)} ${q(config.bridgeDumpInContainer)}`,
+      { requiresDocker: true, dockerAvailable }
     );
 
     await maybeRun(
       rl,
-      '7. Verificar tablas y conteos principales en base puente',
-      `docker exec -t ${q(config.bridgeContainer)} psql -U ${q(config.bridgeDbUser)} -d ${q(config.bridgeDbName)} -c '\\dt' -c 'select count(*) as tickets from "Tickets"; select count(*) as messages from "Messages"; select count(*) as contacts from "Contacts"; select count(*) as quick_answers from "QuickAnswers"; select count(*) as ticket_status_events from "TicketStatusEvents";'`
+      '7. Verificar conteos principales en base puente',
+      `${envPrefix({
+        WHATICKET_DB_HOST: config.bridgeDbHost,
+        WHATICKET_DB_PORT: config.bridgeDbPort,
+        WHATICKET_DB_NAME: config.bridgeDbName,
+        WHATICKET_DB_USER: config.bridgeDbUser,
+        WHATICKET_DB_PASS: config.bridgeDbPass,
+      })} pnpm verify:whaticket-bridge`
     );
 
     await maybeRun(

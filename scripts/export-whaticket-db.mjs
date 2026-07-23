@@ -36,7 +36,7 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm export:whaticket-db --out=/tmp/whaticket-export --public=/path/to/whaticket/public',
+    'Usage: pnpm export:whaticket-db --out=/app/storage/whaticket-export --public=/path/to/whaticket/public',
     '',
     'Connection can be set with WHATICKET_DATABASE_URL or WHATICKET_DB_HOST/PORT/NAME/USER/PASS.',
   ].join('\n');
@@ -162,7 +162,9 @@ async function main() {
   await loadLocalEnvIfAvailable();
 
   const args = parseArgs(process.argv.slice(2));
-  const outputDir = path.resolve(args.out || process.env.EXPORT_DIR || path.join('/tmp', `whaticket-export-${timestamp()}`));
+  const outputDir = path.resolve(
+    args.out || process.env.EXPORT_DIR || path.join('/app/storage', `whaticket-export-${timestamp()}`)
+  );
   const publicDir = args.public || process.env.WHATICKET_PUBLIC_DIR;
   if (!publicDir) throw new Error(usage());
 
