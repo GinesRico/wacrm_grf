@@ -366,6 +366,15 @@ async function setMap(
   );
 }
 
+function importedUserEmail(originalEmail, legacyId) {
+  const email = text(originalEmail);
+  if (!email || !email.includes('@')) {
+    return `whaticket-user-${legacyId}@legacy.local`;
+  }
+  const [local, domain] = email.split('@');
+  return `${local}+whaticket-${legacyId}@${domain}`;
+}
+
 async function ensureUser(client, ctx, row, passwordHash) {
   const legacyId = legacy(row.legacyId);
   const mapped = await getMap(
@@ -377,13 +386,34 @@ async function ensureUser(client, ctx, row, passwordHash) {
   );
   if (mapped) return mapped;
 
-  const email = text(row.email) ?? `whaticket-user-${legacyId}@legacy.local`;
+  let email = text(row.email) ?? `whaticket-user-${legacyId}@legacy.local`;
   const name = text(row.name) ?? email;
-  const existingUser = await queryOne(
+  let existingUser = await queryOne(
     client,
     'select id from "user" where lower(email) = lower($1)',
     [email]
   );
+
+  if (existingUser) {
+    const existingProfile = await queryOne(
+      client,
+      'select account_id from profiles where user_id = $1',
+      [existingUser.id]
+    );
+    if (existingProfile && existingProfile.account_id !== ctx.accountId) {
+      const originalEmail = email;
+      email = importedUserEmail(originalEmail, legacyId);
+      console.warn(
+        `User ${originalEmail} belongs to another WACRM account; importing legacy user ${legacyId} as ${email}.`
+      );
+      existingUser = await queryOne(
+        client,
+        'select id from "user" where lower(email) = lower($1)',
+        [email]
+      );
+    }
+  }
+
   let userId = existingUser?.id ?? crypto.randomUUID();
 
   if (!existingUser) {
