@@ -1175,6 +1175,39 @@ export const appointmentWebhookEvents = pgTable(
   ],
 );
 
+export const whaticketLegacyMap = pgTable(
+  "whaticket_legacy_map",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: "cascade" }),
+    importKey: text("import_key").notNull(),
+    entityType: text("entity_type").notNull(),
+    legacyId: text("legacy_id").notNull(),
+    newId: text("new_id"),
+    payload: jsonb("payload").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("whaticket_legacy_map_unique").on(
+      table.accountId,
+      table.importKey,
+      table.entityType,
+      table.legacyId,
+    ),
+    index("idx_whaticket_legacy_map_lookup").on(
+      table.accountId,
+      table.importKey,
+      table.entityType,
+    ),
+  ],
+);
+
 export const appointmentAvailabilityMessages = pgTable(
   "appointment_availability_messages",
   {

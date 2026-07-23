@@ -176,6 +176,13 @@
       "when": 1784653200000,
       "tag": "0024_seed_arvera_integration_apps",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784822400000,
+      "tag": "0025_whaticket_legacy_map",
+      "breakpoints": true
     }
   ]
 }
