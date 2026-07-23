@@ -38,6 +38,7 @@
                     "db:generate":  "drizzle-kit generate",
                     "db:migrate":  "drizzle-kit migrate",
                     "db:studio":  "drizzle-kit studio",
+                    "export:whaticket-db":  "node scripts/export-whaticket-db.mjs",
                     "import:whaticket":  "node scripts/import-whaticket.mjs",
                     "format":  "prettier --write .",
                     "format:check":  "prettier --check .",
