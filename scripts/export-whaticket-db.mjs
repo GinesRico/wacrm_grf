@@ -4,15 +4,21 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import nextEnv from '@next/env';
 import pg from 'pg';
 
 const { Pool } = pg;
-const { loadEnvConfig } = nextEnv;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(__dirname, '..');
-loadEnvConfig(projectDir);
+
+async function loadLocalEnvIfAvailable() {
+  try {
+    const nextEnv = await import('@next/env');
+    nextEnv.default.loadEnvConfig(projectDir);
+  } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+  }
+}
 
 const DEFAULT_BATCH_SIZE = 1000;
 
@@ -153,6 +159,8 @@ async function exportBatchedRows({
 }
 
 async function main() {
+  await loadLocalEnvIfAvailable();
+
   const args = parseArgs(process.argv.slice(2));
   const outputDir = path.resolve(args.out || process.env.EXPORT_DIR || path.join('/tmp', `whaticket-export-${timestamp()}`));
   const publicDir = args.public || process.env.WHATICKET_PUBLIC_DIR;

@@ -5,16 +5,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import nextEnv from '@next/env';
 import { hashPassword } from 'better-auth/crypto';
 import pg from 'pg';
 
 const { Pool } = pg;
-const { loadEnvConfig } = nextEnv;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(__dirname, '..');
-loadEnvConfig(projectDir);
+
+async function loadLocalEnvIfAvailable() {
+  try {
+    const nextEnv = await import('@next/env');
+    nextEnv.default.loadEnvConfig(projectDir);
+  } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+  }
+}
 
 const DEFAULT_PASSWORD = 'rme39msu';
 const DEFAULT_COLOR = '#22c55e';
@@ -1032,6 +1038,8 @@ async function importTicketStatusEvent(client, ctx, row) {
 let exportDirGlobal = null;
 
 async function main() {
+  await loadLocalEnvIfAvailable();
+
   const args = parseArgs(process.argv.slice(2));
   await validateExportDir(args.exportDir);
   exportDirGlobal = args.exportDir;
