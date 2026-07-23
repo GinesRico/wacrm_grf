@@ -152,6 +152,34 @@ function safeImportKey(value) {
   );
 }
 
+function elapsedSince(startedAt) {
+  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+async function runPhase(label, rows, worker, options = {}) {
+  const total = rows.length;
+  const every = options.every ?? (total > 50000 ? 5000 : 1000);
+  const startedAt = Date.now();
+  console.log(`\n[${label}] starting ${total} rows`);
+  let processed = 0;
+  for (const row of rows) {
+    await worker(row, processed);
+    processed += 1;
+    if (processed === total || processed % every === 0) {
+      const pct = total > 0 ? ((processed / total) * 100).toFixed(1) : '100.0';
+      console.log(
+        `[${label}] ${processed}/${total} (${pct}%) elapsed ${elapsedSince(startedAt)}`
+      );
+    }
+  }
+  if (total === 0) {
+    console.log(`[${label}] 0/0 (100.0%) elapsed ${elapsedSince(startedAt)}`);
+  }
+}
+
 function encryptPlaceholderToken(textValue) {
   const key = process.env.ENCRYPTION_KEY;
   if (!key || !/^[0-9a-fA-F]{64}$/.test(key)) {
@@ -1127,14 +1155,27 @@ async function main() {
 
     await client.query('begin');
 
-    for (const row of data.users)
-      await ensureUser(client, ctx, row, passwordHash);
+    console.log(
+      `Importing WhaTicket package into account ${ctx.accountId} with media=${args.media}${args.dryRun ? ' (dry-run)' : ''}`
+    );
+
+    await runPhase(
+      'users',
+      data.users,
+      (row) => ensureUser(client, ctx, row, passwordHash),
+      { every: 1 }
+    );
     summary.users = data.users.length;
 
-    for (const row of data.queues) await ensureDepartment(client, ctx, row);
+    await runPhase(
+      'queues',
+      data.queues,
+      (row) => ensureDepartment(client, ctx, row),
+      { every: 1 }
+    );
     summary.queues = data.queues.length;
 
-    for (const row of data.usersQueues) {
+    await runPhase('users_queues', data.usersQueues, async (row) => {
       await ensureDepartmentMember(
         client,
         ctx.accountId,
@@ -1153,59 +1194,76 @@ async function main() {
           legacy(row.userLegacyId)
         )
       );
-    }
+    });
     summary.usersQueues = data.usersQueues.length;
 
-    for (const row of data.whatsapps) {
-      const queueLegacyId = whatsappQueueByWhatsapp.get(
-        legacy(row.legacyId)
-      )?.[0];
-      const departmentId = queueLegacyId
-        ? await getMap(
-            client,
-            ctx.accountId,
-            ctx.importKey,
-            'queue',
-            queueLegacyId
-          )
-        : null;
-      await ensureWhatsapp(client, ctx, row, departmentId);
-    }
+    await runPhase(
+      'whatsapps',
+      data.whatsapps,
+      async (row) => {
+        const queueLegacyId = whatsappQueueByWhatsapp.get(
+          legacy(row.legacyId)
+        )?.[0];
+        const departmentId = queueLegacyId
+          ? await getMap(
+              client,
+              ctx.accountId,
+              ctx.importKey,
+              'queue',
+              queueLegacyId
+            )
+          : null;
+        await ensureWhatsapp(client, ctx, row, departmentId);
+      },
+      { every: 1 }
+    );
     summary.whatsapps = data.whatsapps.length;
 
-    for (const row of data.contacts) await ensureContact(client, ctx, row);
+    await runPhase('contacts', data.contacts, (row) =>
+      ensureContact(client, ctx, row)
+    );
     summary.contacts = data.contacts.length;
 
-    for (const row of data.contactFields)
-      await ensureCustomFieldValue(client, ctx, row);
+    await runPhase('contact_custom_fields', data.contactFields, (row) =>
+      ensureCustomFieldValue(client, ctx, row)
+    );
     summary.contactCustomFields = data.contactFields.length;
 
-    for (const row of data.tickets) await ensureConversation(client, ctx, row);
+    await runPhase('tickets', data.tickets, (row) =>
+      ensureConversation(client, ctx, row)
+    );
     summary.tickets = data.tickets.length;
 
     const mediaMode = args.dryRun ? 'skip' : args.media;
-    for (const row of data.messages)
-      await ensureMessage(
-        client,
-        ctx,
-        row,
-        ticketByLegacy,
-        mediaMode,
-        warnings
-      );
+    await runPhase(
+      'messages',
+      data.messages,
+      (row) =>
+        ensureMessage(client, ctx, row, ticketByLegacy, mediaMode, warnings),
+      { every: 5000 }
+    );
     summary.messages = data.messages.length;
+    console.log('\n[quoted_messages] resolving message quotes');
     summary.quotedMessagesUpdated = await updateQuotedMessages(
       client,
       ctx,
       data.messages
     );
+    console.log(
+      `[quoted_messages] updated ${summary.quotedMessagesUpdated} quote links`
+    );
 
-    for (const row of data.quickAnswers)
-      await importQuickReply(client, ctx, row, mediaMode, warnings);
+    await runPhase('quick_answers', data.quickAnswers, (row) =>
+      importQuickReply(client, ctx, row, mediaMode, warnings)
+    );
     summary.quickAnswers = data.quickAnswers.length;
 
-    for (const row of data.ticketStatusEvents)
-      await importTicketStatusEvent(client, ctx, row);
+    await runPhase(
+      'ticket_status_events',
+      data.ticketStatusEvents,
+      (row) => importTicketStatusEvent(client, ctx, row),
+      { every: 5000 }
+    );
     summary.ticketStatusEvents = data.ticketStatusEvents.length;
 
     if (args.dryRun) {
