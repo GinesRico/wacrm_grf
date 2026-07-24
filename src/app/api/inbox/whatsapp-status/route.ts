@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import { whatsappConfig } from "@/db/schema";
@@ -9,13 +9,18 @@ import { toErrorResponse } from "@/lib/auth/errors";
 export async function GET() {
   try {
     const ctx = await getCurrentDbAccount();
-    const [line] = await db
-      .select({ status: whatsappConfig.status })
+    const [connectedLine] = await db
+      .select({ id: whatsappConfig.id })
       .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, ctx.accountId))
+      .where(
+        and(
+          eq(whatsappConfig.accountId, ctx.accountId),
+          eq(whatsappConfig.status, "connected"),
+        ),
+      )
       .limit(1);
 
-    return NextResponse.json({ connected: line?.status === "connected" });
+    return NextResponse.json({ connected: Boolean(connectedLine) });
   } catch (err) {
     return toErrorResponse(err);
   }

@@ -210,8 +210,10 @@ export default function InboxPage() {
     }
   }, []);
 
-  // Check WhatsApp connection status on mount
+  // Check whether at least one WhatsApp line can send.
   useEffect(() => {
+    if (!accountId) return;
+
     const checkConnection = async () => {
       const res = await fetch("/api/inbox/whatsapp-status", {
         cache: "no-store",
@@ -225,7 +227,7 @@ export default function InboxPage() {
     };
 
     void checkConnection();
-  }, []);
+  }, [accountId, resyncToken]);
 
   // Handle realtime message events
   const handleMessageEvent = useCallback(
