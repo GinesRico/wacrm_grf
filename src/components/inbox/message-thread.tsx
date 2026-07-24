@@ -34,6 +34,7 @@ import {
   X,
   Copy,
   CornerUpLeft,
+  UserRound,
 } from 'lucide-react';
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -1757,7 +1758,7 @@ export function MessageThread({
                 className="h-full w-full object-cover"
               />
             ) : (
-              displayName.charAt(0).toUpperCase()
+              <UserRound className="h-4 w-4" />
             )}
           </button>
           <button

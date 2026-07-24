@@ -100,7 +100,9 @@ function whaticketSystemMessageText(value) {
   if (!raw) return null;
   const cleaned = raw
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[*_~]/g, '')
     .replace(/^[\s_*~\-\u2013\u2014]+|[\s_*~\-\u2013\u2014]+$/g, '')
+    .replace(/\s+/g, ' ')
     .trim();
   if (isWhaticketSystemText(cleaned)) {
     return cleaned;
@@ -112,7 +114,7 @@ function isWhaticketSystemText(value) {
   const cleaned = text(value);
   if (!cleaned) return false;
   return (
-    /^Chat (aceptado|devuelto a cola|resuelto|reabierto)\b/i.test(cleaned) ||
+    /^Chat (aceptado|devuelto(?: a cola)?|resuelto|reabierto)\b/i.test(cleaned) ||
     /^Estado cambiado\b/i.test(cleaned)
   );
 }
@@ -1221,7 +1223,7 @@ async function importTicketStatusEvent(client, ctx, row) {
                              and $2::timestamptz + interval '30 seconds'
           and (
             content_text = $3
-            or content_text ~* '^Chat (aceptado|devuelto a cola|resuelto|reabierto)\\b'
+            or content_text ~* '^Chat (aceptado|devuelto( a cola)?|resuelto|reabierto)\\b'
             or content_text ~* '^Estado cambiado\\b'
           )
         order by abs(extract(epoch from (created_at - $2::timestamptz))) asc

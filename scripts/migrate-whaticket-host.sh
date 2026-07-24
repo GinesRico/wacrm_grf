@@ -21,7 +21,10 @@ WACRM_APP_CONTAINER="${WACRM_APP_CONTAINER:-}"
 WACRM_WORKDIR="${WACRM_WORKDIR:-/app}"
 EXPORT_DIR="${EXPORT_DIR:-/app/storage/whaticket-export}"
 ACCOUNT_ID="${ACCOUNT_ID:-4441e304-18b7-487f-98c3-57a101728091}"
+IMPORT_KEY="${IMPORT_KEY:-2026-07-23T15:52:07.787Z}"
 MEDIA_MODE="${MEDIA_MODE:-alarik}"
+STATUS_EVENTS_MODE="${STATUS_EVENTS_MODE:-dedupe}"
+REPAIR_MEDIA="${REPAIR_MEDIA:-true}"
 
 WHATICKET_DB_PASS="${WHATICKET_DB_PASS:-}"
 
@@ -115,6 +118,10 @@ main() {
   echo "Snapshot adjuntos: ${SNAPSHOT_PUBLIC_DIR}"
   echo "Export persistente: ${EXPORT_DIR}"
   echo "Cuenta destino: ${ACCOUNT_ID}"
+  echo "Import key incremental: ${IMPORT_KEY}"
+  echo "Modo media: ${MEDIA_MODE}"
+  echo "Eventos de estado: ${STATUS_EVENTS_MODE}"
+  echo "Reparar media/avatar: ${REPAIR_MEDIA}"
   echo
 
   confirm "Continuar con esta configuracion?" "yes" || exit 0
@@ -164,7 +171,17 @@ main() {
   fi
 
   if confirm "10. Ejecutar import REAL en WACRM?" "no"; then
-    run docker exec -w "$WACRM_WORKDIR" "$WACRM_APP_CONTAINER" pnpm import:whaticket "$EXPORT_DIR" --account="$ACCOUNT_ID" --media="$MEDIA_MODE"
+    local import_args=(
+      pnpm import:whaticket "$EXPORT_DIR"
+      "--account=$ACCOUNT_ID"
+      "--import-key=$IMPORT_KEY"
+      "--media=$MEDIA_MODE"
+      "--status-events=$STATUS_EVENTS_MODE"
+    )
+    if [[ "$REPAIR_MEDIA" == "true" || "$REPAIR_MEDIA" == "1" || "$REPAIR_MEDIA" == "yes" || "$REPAIR_MEDIA" == "si" ]]; then
+      import_args+=(--repair-media)
+    fi
+    run docker exec -w "$WACRM_WORKDIR" "$WACRM_APP_CONTAINER" "${import_args[@]}"
   fi
 
   echo

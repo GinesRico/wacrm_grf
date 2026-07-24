@@ -31,6 +31,23 @@ puedes pasarlo asi:
 WACRM_APP_CONTAINER=nombre_contenedor_wacrm bash scripts/migrate-whaticket-host.sh
 ```
 
+Para ARVERA el script ya usa por defecto el import incremental existente:
+
+```text
+IMPORT_KEY=2026-07-23T15:52:07.787Z
+STATUS_EVENTS_MODE=dedupe
+REPAIR_MEDIA=true
+```
+
+Puedes sobrescribirlo si hiciera falta:
+
+```bash
+IMPORT_KEY='2026-07-23T15:52:07.787Z' \
+STATUS_EVENTS_MODE=dedupe \
+REPAIR_MEDIA=true \
+bash scripts/migrate-whaticket-host.sh
+```
+
 El script pregunta los valores necesarios y permite saltar fases ya ejecutadas.
 Por defecto carga el perfil ARVERA conocido y solo pregunta si quieres editarlo.
 

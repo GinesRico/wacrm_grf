@@ -964,32 +964,33 @@ export function MessageBubble({
     { label: t('status'), value: statusLabel(message.status, t) },
     { label: t('type'), value: contentTypeLabel(message.content_type, t) },
     { label: t('createdAt'), value: formatMessageInfoDate(message.created_at) },
-    {
-      label: t('sentAt'),
-      value: formatMessageInfoDate(message.sent_at),
-      muted: !message.sent_at,
-    },
-    {
-      label: t('deliveredAt'),
-      value: formatMessageInfoDate(message.delivered_at),
-      muted: !message.delivered_at,
-    },
-    {
-      label: t('readAt'),
-      value: formatMessageInfoDate(message.read_at),
-      muted: !message.read_at,
-    },
-    ...(message.failed_at || message.status === 'failed'
+    ...(isAgent
       ? [
           {
-            label: t('failedAt'),
-            value: formatMessageInfoDate(message.failed_at),
-            muted: !message.failed_at,
+            label: t('sentAt'),
+            value: formatMessageInfoDate(message.sent_at),
+            muted: !message.sent_at,
           },
+          {
+            label: t('deliveredAt'),
+            value: formatMessageInfoDate(message.delivered_at),
+            muted: !message.delivered_at,
+          },
+          {
+            label: t('readAt'),
+            value: formatMessageInfoDate(message.read_at),
+            muted: !message.read_at,
+          },
+          ...(message.failed_at || message.status === 'failed'
+            ? [
+                {
+                  label: t('failedAt'),
+                  value: formatMessageInfoDate(message.failed_at),
+                  muted: !message.failed_at,
+                },
+              ]
+            : []),
         ]
-      : []),
-    ...(message.message_id
-      ? [{ label: t('whatsappId'), value: message.message_id }]
       : []),
   ].map((row) => ({
     ...row,
