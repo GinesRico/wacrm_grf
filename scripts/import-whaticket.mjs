@@ -63,7 +63,7 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] [--password=rme39msu] [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--repair-media] [--dry-run]',
+    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] [--password=rme39msu] [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--reconcile-live=auto|skip] [--reconcile-window-hours=12] [--repair-media] [--dry-run]',
     '',
     'The export directory must contain manifest.json, the JSON files exported by WhaTicket, and media/.',
   ].join('\n');
@@ -361,6 +361,10 @@ async function queryOne(client, sql, params = []) {
 
 async function exec(client, sql, params = []) {
   return client.query(sql, params);
+}
+
+function qIdent(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
 }
 
 async function resolveAccount(client, accountId) {
@@ -1338,6 +1342,255 @@ async function importTicketStatusEvent(client, ctx, row) {
   return messageId;
 }
 
+async function referencingConversationColumns(client) {
+  const { rows } = await client.query(`
+    select kcu.table_name, kcu.column_name
+    from information_schema.table_constraints tc
+    join information_schema.key_column_usage kcu
+      on tc.constraint_name = kcu.constraint_name
+     and tc.table_schema = kcu.table_schema
+    join information_schema.constraint_column_usage ccu
+      on ccu.constraint_name = tc.constraint_name
+     and ccu.table_schema = tc.table_schema
+    where tc.constraint_type = 'FOREIGN KEY'
+      and tc.table_schema = 'public'
+      and ccu.table_schema = 'public'
+      and ccu.table_name = 'conversations'
+      and ccu.column_name = 'id'
+      and not (kcu.table_name = 'messages' and kcu.column_name = 'conversation_id')
+    order by kcu.table_name, kcu.column_name
+  `);
+  return rows;
+}
+
+async function findLiveConversationMergeCandidates(client, ctx) {
+  const { rows } = await client.query(
+    `
+    with conversation_stats as (
+      select
+        c.id,
+        c.contact_id,
+        c.created_at,
+        coalesce(min(m.created_at), c.created_at) as first_message_at,
+        coalesce(max(m.created_at), c.last_message_at, c.created_at) as last_message_at,
+        count(m.id)::int as message_count,
+        count(m.id) filter (where m.message_id like 'whaticket:%')::int as whaticket_message_count
+      from conversations c
+      left join messages m on m.conversation_id = c.id
+      where c.account_id = $1
+      group by c.id
+    ),
+    imported as (
+      select s.*
+      from conversation_stats s
+      join whaticket_legacy_map lm
+        on lm.account_id = $1
+       and lm.import_key = $2
+       and lm.entity_type = 'ticket'
+       and lm.new_id = s.id::text
+      where s.whaticket_message_count > 0
+    ),
+    native as (
+      select s.*
+      from conversation_stats s
+      left join whaticket_legacy_map lm
+        on lm.account_id = $1
+       and lm.import_key = $2
+       and lm.entity_type = 'ticket'
+       and lm.new_id = s.id::text
+      where lm.new_id is null
+        and s.message_count > 0
+        and s.whaticket_message_count = 0
+    ),
+    candidates as (
+      select
+        n.id as from_conversation_id,
+        i.id as to_conversation_id,
+        n.contact_id,
+        n.message_count as native_message_count,
+        abs(extract(epoch from (n.first_message_at - i.first_message_at))) as distance_seconds,
+        row_number() over (
+          partition by n.id
+          order by abs(extract(epoch from (n.first_message_at - i.first_message_at))) asc
+        ) as rn
+      from native n
+      join imported i on i.contact_id = n.contact_id
+      where n.first_message_at <= i.last_message_at + ($3::text || ' hours')::interval
+        and n.last_message_at >= i.first_message_at - ($3::text || ' hours')::interval
+    )
+    select *
+    from candidates
+    where rn = 1
+    order by distance_seconds asc
+    `,
+    [ctx.accountId, ctx.importKey, ctx.reconcileWindowHours]
+  );
+  return rows;
+}
+
+async function moveConversationReferences(client, fromConversationId, toConversationId) {
+  const references = await referencingConversationColumns(client);
+  let updated = 0;
+  for (const ref of references) {
+    const table = qIdent(ref.table_name);
+    const column = qIdent(ref.column_name);
+    const result = await exec(
+      client,
+      `update ${table} set ${column} = $1 where ${column} = $2`,
+      [toConversationId, fromConversationId]
+    );
+    updated += result.rowCount ?? 0;
+  }
+  return updated;
+}
+
+async function deleteDuplicateMessagesInConversation(client, ctx, conversationId) {
+  const { rows } = await client.query(
+    `
+    with ranked as (
+      select
+        id,
+        message_id,
+        first_value(id) over duplicate_window as keep_id,
+        row_number() over duplicate_window as rn
+      from messages
+      where conversation_id = $1
+        and (content_text is not null or media_url is not null)
+      window duplicate_window as (
+        partition by
+          sender_type,
+          content_type,
+          regexp_replace(trim(coalesce(content_text, '')), '\\s+', ' ', 'g'),
+          coalesce(media_url, ''),
+          date_trunc('minute', created_at)
+        order by
+          case when message_id like 'whaticket:%' then 1 else 0 end,
+          created_at asc,
+          id asc
+      )
+    )
+    select id, keep_id, message_id
+    from ranked
+    where rn > 1
+    `,
+    [conversationId]
+  );
+
+  for (const row of rows) {
+    await exec(
+      client,
+      `
+      update whaticket_legacy_map
+         set new_id = $4,
+             updated_at = now()
+       where account_id = $1
+         and import_key = $2
+         and entity_type in ('message', 'ticket_status_event')
+         and new_id = $3
+      `,
+      [ctx.accountId, ctx.importKey, row.id, row.keep_id]
+    );
+    await exec(
+      client,
+      'update messages set reply_to_message_id = $1 where reply_to_message_id = $2',
+      [row.keep_id, row.id]
+    );
+    await exec(
+      client,
+      'update messages set forwarded_from_message_id = $1 where forwarded_from_message_id = $2',
+      [row.keep_id, row.id]
+    );
+    await exec(client, 'delete from messages where id = $1', [row.id]);
+  }
+
+  return rows.length;
+}
+
+async function refreshConversationLastMessage(client, conversationId) {
+  await exec(
+    client,
+    `
+    update conversations c
+       set last_message_text = latest.content_text,
+           last_message_at = latest.created_at,
+           updated_at = now()
+      from (
+        select content_text, created_at
+        from messages
+        where conversation_id = $1
+        order by created_at desc, id desc
+        limit 1
+      ) latest
+     where c.id = $1
+    `,
+    [conversationId]
+  );
+}
+
+async function reconcileLiveConversations(client, ctx) {
+  if (ctx.reconcileLiveMode === 'skip') {
+    console.log('\n[reconcile_live] skipped');
+    return {
+      mode: 'skip',
+      candidateConversations: 0,
+      mergedConversations: 0,
+      movedMessages: 0,
+      deletedDuplicateMessages: 0,
+      updatedReferences: 0,
+    };
+  }
+
+  const candidates = await findLiveConversationMergeCandidates(client, ctx);
+  console.log(
+    `\n[reconcile_live] ${candidates.length} native conversation candidates within ${ctx.reconcileWindowHours}h`
+  );
+
+  const summary = {
+    mode: ctx.reconcileLiveMode,
+    candidateConversations: candidates.length,
+    mergedConversations: 0,
+    movedMessages: 0,
+    deletedDuplicateMessages: 0,
+    updatedReferences: 0,
+  };
+
+  const touchedTargets = new Set();
+  for (const row of candidates) {
+    const fromConversationId = row.from_conversation_id;
+    const toConversationId = row.to_conversation_id;
+    const movedMessages = await exec(
+      client,
+      'update messages set conversation_id = $1 where conversation_id = $2',
+      [toConversationId, fromConversationId]
+    );
+    summary.movedMessages += movedMessages.rowCount ?? 0;
+    summary.updatedReferences += await moveConversationReferences(
+      client,
+      fromConversationId,
+      toConversationId
+    );
+    await exec(client, 'delete from conversations where id = $1', [
+      fromConversationId,
+    ]);
+    summary.mergedConversations += 1;
+    touchedTargets.add(toConversationId);
+  }
+
+  for (const conversationId of touchedTargets) {
+    summary.deletedDuplicateMessages += await deleteDuplicateMessagesInConversation(
+      client,
+      ctx,
+      conversationId
+    );
+    await refreshConversationLastMessage(client, conversationId);
+  }
+
+  console.log(
+    `[reconcile_live] merged ${summary.mergedConversations}, moved ${summary.movedMessages} messages, deleted ${summary.deletedDuplicateMessages} duplicates`
+  );
+  return summary;
+}
+
 let exportDirGlobal = null;
 
 async function main() {
@@ -1356,6 +1609,14 @@ async function main() {
   const statusEventsMode = text(args['status-events']) ?? 'dedupe';
   if (!['dedupe', 'skip', 'system'].includes(statusEventsMode)) {
     throw new Error('Unsupported --status-events mode. Use dedupe, system, or skip.');
+  }
+  const reconcileLiveMode = text(args['reconcile-live']) ?? 'auto';
+  if (!['auto', 'skip'].includes(reconcileLiveMode)) {
+    throw new Error('Unsupported --reconcile-live mode. Use auto or skip.');
+  }
+  const reconcileWindowHours = Number(args['reconcile-window-hours'] ?? 12);
+  if (!Number.isFinite(reconcileWindowHours) || reconcileWindowHours < 0) {
+    throw new Error('--reconcile-window-hours must be a positive number.');
   }
 
   const data = {
@@ -1391,6 +1652,8 @@ async function main() {
       importKey,
       repairMedia: Boolean(args['repair-media']),
       statusEventsMode,
+      reconcileLiveMode,
+      reconcileWindowHours,
     };
     const passwordHash = await hashPassword(args.password || DEFAULT_PASSWORD);
     const whatsappQueueByWhatsapp = new Map();
@@ -1523,6 +1786,7 @@ async function main() {
       );
     }
     summary.ticketStatusEvents = data.ticketStatusEvents.length;
+    summary.reconcileLive = await reconcileLiveConversations(client, ctx);
 
     if (args.dryRun) {
       await client.query('rollback');

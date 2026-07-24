@@ -36,6 +36,8 @@ Para ARVERA el script ya usa por defecto el import incremental existente:
 ```text
 IMPORT_KEY=2026-07-23T15:52:07.787Z
 STATUS_EVENTS_MODE=dedupe
+RECONCILE_LIVE=auto
+RECONCILE_WINDOW_HOURS=12
 REPAIR_MEDIA=true
 ```
 
@@ -44,6 +46,8 @@ Puedes sobrescribirlo si hiciera falta:
 ```bash
 IMPORT_KEY='2026-07-23T15:52:07.787Z' \
 STATUS_EVENTS_MODE=dedupe \
+RECONCILE_LIVE=auto \
+RECONCILE_WINDOW_HOURS=12 \
 REPAIR_MEDIA=true \
 bash scripts/migrate-whaticket-host.sh
 ```
@@ -82,7 +86,8 @@ Cuenta WACRM destino: 4441e304-18b7-487f-98c3-57a101728091
 7. Verificar tablas y conteos principales conectando directamente a PostgreSQL.
 8. Exportar desde la base puente a JSON + media con `pnpm export:whaticket-db`.
 9. Ejecutar migraciones de WACRM.
-10. Ejecutar import real con media en Alarik.
+10. Ejecutar import real con media en Alarik, reconciliando chats nativos
+    creados durante la migracion si coinciden con tickets importados.
 
 El dry-run sigue disponible como comando manual cuando quieras validar sin
 escribir:
@@ -99,6 +104,24 @@ con deduplicacion. Si WhaTicket ya trae el aviso dentro de `messages.json`, por
 ejemplo `_Chat aceptado por ..._`, ese mensaje se normaliza como `content_type =
 system` y el evento equivalente no crea otra fila. Si el aviso solo existe en
 `ticket_status_events.json`, se crea como mensaje `system`.
+
+Tambien por defecto el importador ejecuta `--reconcile-live=auto`. Esta fase
+fusiona conversaciones nativas creadas en WACRM durante la migracion dentro del
+ticket importado equivalente cuando se cumplen todas estas condiciones: misma
+cuenta, mismo contacto, conversacion destino mapeada a un ticket WhaTicket,
+conversacion origen sin mensajes `whaticket:%`, y mensajes dentro de la ventana
+configurada con `--reconcile-window-hours` (12 horas por defecto). Al fusionar,
+deduplica mensajes iguales en el mismo minuto y conserva preferentemente el
+mensaje nativo de WACRM/Meta frente al importado.
+
+Puedes desactivar esa reconciliacion con:
+
+```bash
+pnpm import:whaticket /app/storage/whaticket-export \
+  --account=4441e304-18b7-487f-98c3-57a101728091 \
+  --media=alarik \
+  --reconcile-live=skip
+```
 
 Puedes forzar todos los eventos, incluso si se duplican, con:
 

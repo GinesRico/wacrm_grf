@@ -24,6 +24,8 @@ ACCOUNT_ID="${ACCOUNT_ID:-4441e304-18b7-487f-98c3-57a101728091}"
 IMPORT_KEY="${IMPORT_KEY:-2026-07-23T15:52:07.787Z}"
 MEDIA_MODE="${MEDIA_MODE:-alarik}"
 STATUS_EVENTS_MODE="${STATUS_EVENTS_MODE:-dedupe}"
+RECONCILE_LIVE="${RECONCILE_LIVE:-auto}"
+RECONCILE_WINDOW_HOURS="${RECONCILE_WINDOW_HOURS:-12}"
 REPAIR_MEDIA="${REPAIR_MEDIA:-true}"
 
 WHATICKET_DB_PASS="${WHATICKET_DB_PASS:-}"
@@ -121,6 +123,7 @@ main() {
   echo "Import key incremental: ${IMPORT_KEY}"
   echo "Modo media: ${MEDIA_MODE}"
   echo "Eventos de estado: ${STATUS_EVENTS_MODE}"
+  echo "Reconciliar chats nativos durante migracion: ${RECONCILE_LIVE} (${RECONCILE_WINDOW_HOURS}h)"
   echo "Reparar media/avatar: ${REPAIR_MEDIA}"
   echo
 
@@ -177,6 +180,8 @@ main() {
       "--import-key=$IMPORT_KEY"
       "--media=$MEDIA_MODE"
       "--status-events=$STATUS_EVENTS_MODE"
+      "--reconcile-live=$RECONCILE_LIVE"
+      "--reconcile-window-hours=$RECONCILE_WINDOW_HOURS"
     )
     if [[ "$REPAIR_MEDIA" == "true" || "$REPAIR_MEDIA" == "1" || "$REPAIR_MEDIA" == "yes" || "$REPAIR_MEDIA" == "si" ]]; then
       import_args+=(--repair-media)

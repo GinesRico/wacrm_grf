@@ -22,7 +22,11 @@ const DEFAULTS = {
   bridgeDumpInContainer: '/tmp/whaticket_backup.dump',
   exportDir: '/app/storage/whaticket-export',
   accountId: '4441e304-18b7-487f-98c3-57a101728091',
+  importKey: '2026-07-23T15:52:07.787Z',
   mediaMode: 'alarik',
+  statusEventsMode: 'dedupe',
+  reconcileLiveMode: 'auto',
+  reconcileWindowHours: '12',
 };
 
 function q(value) {
@@ -122,7 +126,11 @@ async function collectConfig(rl) {
   config.exportDir = await prompt(rl, 'Directorio paquete exportado JSON+media', DEFAULTS.exportDir);
 
   config.accountId = await prompt(rl, 'UUID cuenta WACRM destino', DEFAULTS.accountId);
+  config.importKey = await prompt(rl, 'Import key incremental', DEFAULTS.importKey);
   config.mediaMode = await prompt(rl, 'Modo media para import final (alarik/public/skip)', DEFAULTS.mediaMode);
+  config.statusEventsMode = await prompt(rl, 'Modo eventos estado (dedupe/system/skip)', DEFAULTS.statusEventsMode);
+  config.reconcileLiveMode = await prompt(rl, 'Reconciliar chats nativos (auto/skip)', DEFAULTS.reconcileLiveMode);
+  config.reconcileWindowHours = await prompt(rl, 'Ventana reconciliacion en horas', DEFAULTS.reconcileWindowHours);
 
   config.sourceDumpInContainer = DEFAULTS.sourceDumpInContainer;
   config.bridgeDumpInContainer = DEFAULTS.bridgeDumpInContainer;
@@ -150,7 +158,11 @@ async function main() {
       bridge: `${config.bridgeDbUser}@${config.bridgeDbHost}:${config.bridgeDbPort}/${config.bridgeDbName}`,
       exportDir: config.exportDir,
       accountId: config.accountId,
+      importKey: config.importKey,
       mediaMode: config.mediaMode,
+      statusEventsMode: config.statusEventsMode,
+      reconcileLiveMode: config.reconcileLiveMode,
+      reconcileWindowHours: config.reconcileWindowHours,
     });
 
     if (!(await confirm(rl, 'Continuar con esta configuracion?', true))) return;
@@ -247,7 +259,16 @@ async function main() {
       )
     ) {
       await run(
-        `pnpm import:whaticket ${q(config.exportDir)} --account=${q(config.accountId)} --media=${q(config.mediaMode)}`
+        [
+          `pnpm import:whaticket ${q(config.exportDir)}`,
+          `--account=${q(config.accountId)}`,
+          `--import-key=${q(config.importKey)}`,
+          `--media=${q(config.mediaMode)}`,
+          `--status-events=${q(config.statusEventsMode)}`,
+          `--reconcile-live=${q(config.reconcileLiveMode)}`,
+          `--reconcile-window-hours=${q(config.reconcileWindowHours)}`,
+          '--repair-media',
+        ].join(' ')
       );
     }
 
