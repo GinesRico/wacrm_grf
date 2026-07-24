@@ -38,7 +38,11 @@ export async function POST(request: Request) {
     }
 
     const [config] = await db
-      .select({ id: whatsappConfig.id, department_id: whatsappConfig.departmentId })
+      .select({
+        id: whatsappConfig.id,
+        department_id: whatsappConfig.departmentId,
+        status: whatsappConfig.status,
+      })
       .from(whatsappConfig)
       .where(
         and(
@@ -52,6 +56,12 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: 'Selected WhatsApp line was not found.' },
         { status: 404 },
+      );
+    }
+    if (config.status !== 'connected') {
+      return NextResponse.json(
+        { error: 'The selected WhatsApp line is not connected. Connect it or choose another line.' },
+        { status: 409 },
       );
     }
 

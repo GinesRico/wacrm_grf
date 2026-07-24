@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import { departmentMembers, departments as departmentsTable, profiles, whatsappConfig } from "@/db/schema";
@@ -49,7 +49,11 @@ export async function GET() {
           })
           .from(whatsappConfig)
           .where(eq(whatsappConfig.accountId, ctx.accountId))
-          .orderBy(desc(whatsappConfig.isDefault), asc(whatsappConfig.createdAt)),
+          .orderBy(
+            desc(sql`${whatsappConfig.status} = 'connected'`),
+            desc(whatsappConfig.isDefault),
+            asc(whatsappConfig.createdAt),
+          ),
       ]);
 
     const canSeeEmails = canManageMembers(ctx.role);

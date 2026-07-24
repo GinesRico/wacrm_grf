@@ -13,6 +13,24 @@ al codigo de WACRM:
 pnpm migrate:whaticket
 ```
 
+## Script desde el host Docker
+
+Para ejecutar el flujo completo fuera de las consolas de Coolify, entra por SSH
+al servidor Docker y ejecuta:
+
+```bash
+bash scripts/migrate-whaticket-host.sh
+```
+
+Este script usa los valores ARVERA por defecto, hace `docker exec` contra los
+contenores de WhaTicket/base puente y despues lanza `pnpm` dentro del contenedor
+WACRM. Si no detecta el contenedor WACRM, lo pregunta una sola vez. Tambien
+puedes pasarlo asi:
+
+```bash
+WACRM_APP_CONTAINER=nombre_contenedor_wacrm bash scripts/migrate-whaticket-host.sh
+```
+
 El script pregunta los valores necesarios y permite saltar fases ya ejecutadas.
 Por defecto carga el perfil ARVERA conocido y solo pregunta si quieres editarlo.
 
@@ -58,6 +76,45 @@ pnpm import:whaticket /app/storage/whaticket-export \
   --media=skip \
   --dry-run
 ```
+
+Por defecto el importador trata `ticket_status_events` como mensajes de sistema
+con deduplicacion. Si WhaTicket ya trae el aviso dentro de `messages.json`, por
+ejemplo `_Chat aceptado por ..._`, ese mensaje se normaliza como `content_type =
+system` y el evento equivalente no crea otra fila. Si el aviso solo existe en
+`ticket_status_events.json`, se crea como mensaje `system`.
+
+Puedes forzar todos los eventos, incluso si se duplican, con:
+
+```bash
+pnpm import:whaticket /app/storage/whaticket-export \
+  --account=4441e304-18b7-487f-98c3-57a101728091 \
+  --media=alarik \
+  --status-events=system
+```
+
+O saltar por completo la tabla de eventos con:
+
+```bash
+pnpm import:whaticket /app/storage/whaticket-export \
+  --account=4441e304-18b7-487f-98c3-57a101728091 \
+  --media=alarik \
+  --status-events=skip
+```
+
+Si ya habias importado y necesitas corregir adjuntos o convertir esos mensajes
+informativos ya mapeados, reejecuta con el mismo paquete/import-key y:
+
+```bash
+pnpm import:whaticket /app/storage/whaticket-export \
+  --account=4441e304-18b7-487f-98c3-57a101728091 \
+  --media=alarik \
+  --repair-media
+```
+
+Las fotos de perfil de contactos se tratan igual que adjuntos importables:
+si `profilePicUrl` apunta a un fichero/cache existente en el snapshot `public`,
+se copia al paquete y se sube/copia durante el import. Si no existe el fichero,
+WACRM deja `contacts.avatar_url` vacio para no mantener enlaces rotos.
 
 ## Incrementalidad
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -80,23 +81,96 @@ function safeBaseName(value) {
   }
 }
 
+let publicFileIndex = null;
+
+async function buildPublicFileIndex(root) {
+  const index = new Map();
+  async function walk(dir) {
+    let entries = [];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.isFile()) {
+        const list = index.get(entry.name) ?? [];
+        list.push(fullPath);
+        index.set(entry.name, list);
+      }
+    }
+  }
+
+  await walk(root);
+  return index;
+}
+
+function mediaPathCandidates(root, sourceFileName) {
+  const raw = String(sourceFileName ?? '');
+  if (!raw) return [];
+
+  let mediaPath = raw;
+  try {
+    mediaPath = decodeURIComponent(new URL(raw).pathname);
+  } catch {
+    mediaPath = raw;
+  }
+
+  const cleaned = mediaPath.replaceAll('\\', '/').replace(/^\/+/, '');
+  const parts = cleaned.split('/').filter(Boolean);
+  const publicIndex = parts.lastIndexOf('public');
+  const candidates = [
+    path.resolve(root, cleaned),
+    path.resolve(root, path.basename(cleaned)),
+  ];
+
+  if (publicIndex >= 0 && publicIndex < parts.length - 1) {
+    candidates.push(path.resolve(root, ...parts.slice(publicIndex + 1)));
+  }
+
+  return [...new Set(candidates)];
+}
+
+async function findPublicFile(publicDir, sourceFileName) {
+  const root = path.resolve(publicDir);
+  const baseName = safeBaseName(sourceFileName);
+  if (!baseName) return null;
+
+  for (const candidate of mediaPathCandidates(root, sourceFileName)) {
+    if (!candidate.startsWith(root + path.sep)) continue;
+    try {
+      await fsp.access(candidate, fs.constants.R_OK);
+      return candidate;
+    } catch {
+      // Try the next candidate, then fall back to the indexed basename lookup.
+    }
+  }
+
+  publicFileIndex ??= await buildPublicFileIndex(root);
+  return publicFileIndex.get(baseName)?.[0] ?? null;
+}
+
 async function copyPublicFile(publicDir, outputDir, sourceFileName, mediaKind) {
   const safeName = safeBaseName(sourceFileName);
   if (!safeName) return { exportedPath: null, missing: false };
 
-  const root = path.resolve(publicDir);
-  const sourcePath = path.resolve(root, safeName);
-  if (!sourcePath.startsWith(root + path.sep)) {
+  const sourcePath = await findPublicFile(publicDir, sourceFileName);
+  if (!sourcePath) {
     return { exportedPath: null, missing: true };
   }
 
-  try {
-    await fsp.access(sourcePath, fs.constants.R_OK);
-  } catch {
-    return { exportedPath: null, missing: true };
-  }
-
-  const targetRelativePath = path.join('media', mediaKind, safeName);
+  const parsedName = path.parse(safeName);
+  const sourceHash = crypto
+    .createHash('sha1')
+    .update(path.relative(path.resolve(publicDir), sourcePath))
+    .digest('hex')
+    .slice(0, 10);
+  const targetName = `${parsedName.name}-${sourceHash}${parsedName.ext}`;
+  const targetRelativePath = path.join('media', mediaKind, targetName);
   const targetPath = path.join(outputDir, targetRelativePath);
   await ensureDir(path.dirname(targetPath));
   await fsp.copyFile(sourcePath, targetPath);
@@ -169,6 +243,7 @@ async function main() {
   if (!publicDir) throw new Error(usage());
 
   await ensureDir(outputDir);
+  await ensureDir(path.join(outputDir, 'media', 'contacts'));
   await ensureDir(path.join(outputDir, 'media', 'messages'));
   await ensureDir(path.join(outputDir, 'media', 'quick_answers'));
 
@@ -185,17 +260,27 @@ async function main() {
       path.join(outputDir, 'contacts.json'),
       'select * from "Contacts" order by id asc',
       [],
-      (contact) => ({
-        legacyId: contact.id,
-        name: contact.name,
-        number: contact.number,
-        lid: contact.lid,
-        email: contact.email,
-        profilePicUrl: contact.profilePicUrl,
-        isGroup: contact.isGroup,
-        createdAt: contact.createdAt,
-        updatedAt: contact.updatedAt,
-      }),
+      async (contact) => {
+        const copiedAvatar = await copyPublicFile(
+          publicDir,
+          outputDir,
+          contact.profilePicUrl,
+          'contacts'
+        );
+        return {
+          legacyId: contact.id,
+          name: contact.name,
+          number: contact.number,
+          lid: contact.lid,
+          email: contact.email,
+          profilePicUrl: contact.profilePicUrl,
+          exportedAvatarPath: copiedAvatar.exportedPath,
+          avatarMissing: copiedAvatar.missing,
+          isGroup: contact.isGroup,
+          createdAt: contact.createdAt,
+          updatedAt: contact.updatedAt,
+        };
+      },
       counts,
       'contacts'
     );
@@ -439,7 +524,7 @@ async function main() {
         'quick_answers.json',
         'ticket_status_events.json',
       ],
-      mediaDirs: ['media/messages', 'media/quick_answers'],
+      mediaDirs: ['media/contacts', 'media/messages', 'media/quick_answers'],
       sensitiveFieldsExcluded: [
         'Users.passwordHash',
         'Users.password',

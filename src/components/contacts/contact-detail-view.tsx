@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Phone,
   Mail,
@@ -34,6 +34,7 @@ import {
   Save,
   DollarSign,
   LayoutTemplate,
+  UserRound,
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 
@@ -309,16 +310,6 @@ export function ContactDetailView({
     }
   }
 
-  function getInitials(name?: string | null) {
-    if (!name) return '?';
-    return name
-      .split(' ')
-      .map((w) => w[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  }
-
   return (
     <>
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -336,8 +327,14 @@ export function ContactDetailView({
             <SheetHeader className="p-4 border-b border-border/50">
               <div className="flex items-center gap-3">
                 <Avatar className="size-12 bg-muted border border-border">
+                  {contact.avatar_url ? (
+                    <AvatarImage
+                      src={contact.avatar_url}
+                      alt={contact.name || t('unnamed')}
+                    />
+                  ) : null}
                   <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
-                    {getInitials(contact.name)}
+                    <UserRound className="size-5" />
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">

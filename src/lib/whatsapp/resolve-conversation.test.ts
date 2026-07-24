@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
-  config: { id: 'cfg-1' } as { id: string } | null,
+  config: { id: 'cfg-1', status: 'connected' } as { id: string; status: string } | null,
   contact: null as { id: string; name?: string | null } | null,
   conversation: null as { id: string } | null,
   insertedContactId: 'c-new',
@@ -52,7 +52,7 @@ import { resolveConversationByPhone } from './resolve-conversation'
 import { SendMessageError } from './send-message'
 
 beforeEach(() => {
-  h.config = { id: 'cfg-1' }
+  h.config = { id: 'cfg-1', status: 'connected' }
   h.contact = null
   h.conversation = null
   h.insertedContactId = 'c-new'

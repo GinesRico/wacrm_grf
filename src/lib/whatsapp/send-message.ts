@@ -281,8 +281,15 @@ export async function sendMessageToConversation(
       400,
     );
   }
+  if (config.status !== "connected") {
+    throw new SendMessageError(
+      "whatsapp_not_connected",
+      "The selected WhatsApp line is not connected. Connect it or choose another line.",
+      409,
+    );
+  }
 
-  if (!conversation.whatsappConfigId) {
+  if (conversation.whatsappConfigId !== config.id) {
     void db
       .update(conversations)
       .set({ whatsappConfigId: config.id, updatedAt: new Date() })

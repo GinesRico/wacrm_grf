@@ -19,6 +19,7 @@ import {
   X,
   Pencil,
   Clock,
+  UserRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -275,8 +276,6 @@ export function ContactSidebar({
   }
 
   const displayName = displayedContact.name || displayedContact.phone;
-  const initials = displayName.charAt(0).toUpperCase();
-
   const tabs: Array<{
     id: ContactSidebarTab;
     label: string;
@@ -355,7 +354,7 @@ export function ContactSidebar({
                       className="h-28 w-28 rounded-full object-cover"
                     />
                   ) : (
-                    initials
+                    <UserRound className="h-10 w-10" />
                   )}
                 </div>
                 <h3 className="mt-3 text-sm font-semibold text-foreground">

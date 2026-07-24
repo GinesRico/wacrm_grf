@@ -1,8 +1,8 @@
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db/client";
-import { departments, whatsappConfig } from "@/db/schema";
+import { conversations, departments, whatsappConfig } from "@/db/schema";
 import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
 import { toErrorResponse } from "@/lib/auth/errors";
 import { assertCanCreateWhatsAppLine } from "@/lib/platform/entitlements";
@@ -400,28 +400,95 @@ export async function DELETE(request: Request) {
     const ctx = await requireDbRole("admin");
     const url = new URL(request.url);
     const id = url.searchParams.get("id");
+    let target: { id: string; isDefault: boolean } | null = null;
+    let currentDefault: { id: string } | null = null;
+    let reassignmentTarget: { id: string } | null = null;
 
-    await db
-      .delete(whatsappConfig)
-      .where(
-        id
-          ? and(eq(whatsappConfig.accountId, ctx.accountId), eq(whatsappConfig.id, id))
-          : eq(whatsappConfig.accountId, ctx.accountId),
-      );
+    if (id) {
+      const [targetRow] = await db
+        .select({ id: whatsappConfig.id, isDefault: whatsappConfig.isDefault })
+        .from(whatsappConfig)
+        .where(and(eq(whatsappConfig.accountId, ctx.accountId), eq(whatsappConfig.id, id)))
+        .limit(1);
+      target = targetRow ?? null;
 
-    const [remaining] = await db
-      .select({ id: whatsappConfig.id })
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, ctx.accountId))
-      .orderBy(desc(whatsappConfig.isDefault), asc(whatsappConfig.createdAt))
-      .limit(1);
+      if (!target) {
+        return NextResponse.json({ error: "WhatsApp line not found." }, { status: 404 });
+      }
 
-    if (remaining?.id) {
-      await db
-        .update(whatsappConfig)
-        .set({ isDefault: true, updatedAt: new Date() })
-        .where(and(eq(whatsappConfig.id, remaining.id), eq(whatsappConfig.accountId, ctx.accountId)));
+      const [currentDefaultRow] = await db
+        .select({ id: whatsappConfig.id })
+        .from(whatsappConfig)
+        .where(
+          and(
+            eq(whatsappConfig.accountId, ctx.accountId),
+            eq(whatsappConfig.isDefault, true),
+            ne(whatsappConfig.id, id),
+          ),
+        )
+        .orderBy(asc(whatsappConfig.createdAt))
+        .limit(1);
+      currentDefault = currentDefaultRow ?? null;
+
+      if (currentDefault) {
+        reassignmentTarget = currentDefault;
+      } else {
+        const [reassignmentTargetRow] = await db
+          .select({ id: whatsappConfig.id })
+          .from(whatsappConfig)
+          .where(and(eq(whatsappConfig.accountId, ctx.accountId), ne(whatsappConfig.id, id)))
+          .orderBy(
+            desc(sql`${whatsappConfig.status} = 'connected'`),
+            asc(whatsappConfig.createdAt),
+          )
+          .limit(1);
+        reassignmentTarget = reassignmentTargetRow ?? null;
+      }
+
+      if (!reassignmentTarget?.id) {
+        return NextResponse.json(
+          {
+            error:
+              "Create another WhatsApp line before deleting this one so resolved chats can be reassigned.",
+          },
+          { status: 409 },
+        );
+      }
     }
+
+    await db.transaction(async (tx) => {
+      if (id) {
+        await tx
+          .update(conversations)
+          .set({ whatsappConfigId: reassignmentTarget!.id, updatedAt: new Date() })
+          .where(
+            and(
+              eq(conversations.accountId, ctx.accountId),
+              eq(conversations.whatsappConfigId, id),
+              eq(conversations.status, "closed"),
+            ),
+          );
+
+        await tx
+          .delete(whatsappConfig)
+          .where(and(eq(whatsappConfig.accountId, ctx.accountId), eq(whatsappConfig.id, id)));
+
+        if (target!.isDefault || !currentDefault) {
+          await tx
+            .update(whatsappConfig)
+            .set({ isDefault: false, updatedAt: new Date() })
+            .where(eq(whatsappConfig.accountId, ctx.accountId));
+          await tx
+            .update(whatsappConfig)
+            .set({ isDefault: true, updatedAt: new Date() })
+            .where(and(eq(whatsappConfig.id, reassignmentTarget!.id), eq(whatsappConfig.accountId, ctx.accountId)));
+        }
+
+        return;
+      }
+
+      await tx.delete(whatsappConfig).where(eq(whatsappConfig.accountId, ctx.accountId));
+    });
 
     await publishRealtimeEvent("whatsapp_config.deleted", {
       accountId: ctx.accountId,

@@ -34,6 +34,7 @@ import {
   LayoutTemplate,
   MessageSquare,
   ExternalLink,
+  UserRound,
 } from 'lucide-react';
 import { format, type Locale } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -1124,7 +1125,6 @@ function ConversationItem({
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || t('unknown');
-  const initials = displayName.charAt(0).toUpperCase();
   const lineName =
     conversation.whatsapp_config?.label ||
     conversation.whatsapp_config?.phone_number_id ||
@@ -1192,7 +1192,7 @@ function ConversationItem({
                 className="h-10 w-10 rounded-full object-cover"
               />
             ) : (
-              initials
+              <UserRound className="h-4 w-4" />
             )}
           </div>
 
@@ -1325,7 +1325,6 @@ function ConversationPreviewDialog({
   >({});
   const contact = conversation?.contact;
   const displayName = contact?.name || contact?.phone || t('unknown');
-  const initials = displayName.charAt(0).toUpperCase();
   const lineName =
     conversation?.whatsapp_config?.label ||
     conversation?.whatsapp_config?.phone_number_id ||
@@ -1448,7 +1447,7 @@ function ConversationPreviewDialog({
                       className="h-10 w-10 rounded-full object-cover"
                     />
                   ) : (
-                    initials
+                    <UserRound className="h-4 w-4" />
                   )}
                 </div>
                 {assignedInitial && (

@@ -12,9 +12,9 @@ import {
   ExternalLink,
   Zap,
   AlertTriangle,
-  RotateCcw,
   Plus,
   Star,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { useTranslations } from 'next-intl';
@@ -408,9 +408,11 @@ export function WhatsAppConfig() {
 
   async function handleReset() {
     const ok = await confirm({
-      title: t('resetTitle'),
-      description: t('resetConfirm'),
-      confirmLabel: t('reset'),
+      title: t('deleteLineTitle'),
+      description: t('deleteLineConfirm', {
+        name: config?.label || config?.phone_number_id || t('lineName'),
+      }),
+      confirmLabel: t('deleteLine'),
       cancelLabel: t('cancel'),
       destructive: true,
     });
@@ -428,20 +430,9 @@ export function WhatsAppConfig() {
         return;
       }
 
-      toast.success(t('configCleared'));
-      setConfig(null);
-      setConfigs([]);
+      toast.success(t('lineDeleted'));
       setSelectedConfigId(null);
-      setLineLabel('');
-      setDepartmentId('');
-      setPhoneNumberId('');
-      setWabaId('');
-      setAccessToken('');
-      setVerifyToken('');
-      setTokenEdited(false);
-      setConnectionStatus('disconnected');
-      setResetReason(null);
-      setStatusMessage('');
+      await fetchConfig();
     } catch (err) {
       console.error('Reset error:', err);
       toast.error(t('resetFailed'));
@@ -614,8 +605,8 @@ export function WhatsAppConfig() {
                     </>
                   ) : (
                     <>
-                      <RotateCcw className="size-4" />
-                      {t('resetConfig')}
+                      <Trash2 className="size-4" />
+                      {t('deleteLine')}
                     </>
                   )}
                 </Button>
@@ -965,8 +956,8 @@ export function WhatsAppConfig() {
                 </>
               ) : (
                 <>
-                  <RotateCcw className="size-4" />
-                  {t('resetConfig')}
+                  <Trash2 className="size-4" />
+                  {t('deleteLine')}
                 </>
               )}
             </Button>

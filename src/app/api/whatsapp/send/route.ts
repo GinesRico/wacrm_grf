@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db/client";
@@ -104,6 +104,12 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
+      if (resolved === "not_connected") {
+        return NextResponse.json(
+          { error: "The selected WhatsApp line is not connected. Connect it or choose another line." },
+          { status: 409 },
+        );
+      }
       if (!resolved) {
         return NextResponse.json(
           { error: "Failed to open a conversation for this contact" },
@@ -163,22 +169,28 @@ async function findOrCreateConversation(
   userId: string,
   contactId: string,
   whatsappConfigId: string | null,
-): Promise<string | "not_open" | null> {
+): Promise<string | "not_open" | "not_connected" | null> {
   let resolvedConfigId = whatsappConfigId;
   if (resolvedConfigId) {
     const [line] = await db
-      .select({ id: whatsappConfig.id })
+      .select({ id: whatsappConfig.id, status: whatsappConfig.status })
       .from(whatsappConfig)
       .where(and(eq(whatsappConfig.id, resolvedConfigId), eq(whatsappConfig.accountId, accountId)))
       .limit(1);
     if (!line) return null;
+    if (line.status !== "connected") return "not_connected";
   } else {
     const [line] = await db
-      .select({ id: whatsappConfig.id })
+      .select({ id: whatsappConfig.id, status: whatsappConfig.status })
       .from(whatsappConfig)
       .where(eq(whatsappConfig.accountId, accountId))
-      .orderBy(desc(whatsappConfig.isDefault), whatsappConfig.createdAt)
+      .orderBy(
+        desc(sql`${whatsappConfig.status} = 'connected'`),
+        desc(whatsappConfig.isDefault),
+        whatsappConfig.createdAt,
+      )
       .limit(1);
+    if (line && line.status !== "connected") return "not_connected";
     resolvedConfigId = line?.id ?? null;
   }
 

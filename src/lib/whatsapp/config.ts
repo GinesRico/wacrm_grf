@@ -1,4 +1,4 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 
 import { db } from '@/db/client';
 import { conversations, whatsappConfig } from '@/db/schema';
@@ -28,7 +28,11 @@ export async function getDefaultWhatsAppConfig(
     .select()
     .from(whatsappConfig)
     .where(eq(whatsappConfig.accountId, accountId))
-    .orderBy(desc(whatsappConfig.isDefault), asc(whatsappConfig.createdAt))
+    .orderBy(
+      desc(sql`${whatsappConfig.status} = 'connected'`),
+      desc(whatsappConfig.isDefault),
+      asc(whatsappConfig.createdAt),
+    )
     .limit(1);
 
   return config ? serializeConfig(config) : null;
@@ -62,7 +66,7 @@ export async function getWhatsAppConfigForConversation(
   const configId = conversation?.whatsappConfigId;
   if (configId) {
     const config = await getWhatsAppConfigById(client, accountId, configId);
-    if (config) return config;
+    if (config?.status === 'connected') return config;
   }
 
   return getDefaultWhatsAppConfig(client, accountId);

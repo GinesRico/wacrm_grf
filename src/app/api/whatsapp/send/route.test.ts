@@ -39,7 +39,7 @@ vi.mock('@/db/client', () => ({
           orderBy: () => ({
             limit: async () => {
               h.selectStep += 1
-              return [{ id: 'cfg-1' }]
+              return [{ id: 'cfg-1', status: 'connected' }]
             },
           }),
           limit: async () => {

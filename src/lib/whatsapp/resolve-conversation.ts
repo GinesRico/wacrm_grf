@@ -39,6 +39,13 @@ export async function resolveConversationByPhone(
       400,
     );
   }
+  if (config.status !== "connected") {
+    throw new SendMessageError(
+      "whatsapp_not_connected",
+      "The selected WhatsApp line is not connected. Connect it or choose another line.",
+      409,
+    );
+  }
 
   const ownerUserId = await resolveAuditUserId(accountId);
 

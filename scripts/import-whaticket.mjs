@@ -50,7 +50,7 @@ function parseArgs(argv) {
       args.dryRun = true;
     } else if (arg.startsWith('--')) {
       const [key, ...rest] = arg.slice(2).split('=');
-      args[key] = rest.join('=');
+      args[key] = rest.length ? rest.join('=') : true;
     } else {
       positional.push(arg);
     }
@@ -63,7 +63,7 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] [--password=rme39msu] [--media=alarik|public|skip] [--import-key=<key>] [--dry-run]',
+    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] [--password=rme39msu] [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--repair-media] [--dry-run]',
     '',
     'The export directory must contain manifest.json, the JSON files exported by WhaTicket, and media/.',
   ].join('\n');
@@ -93,6 +93,25 @@ function text(value) {
   if (value === null || value === undefined) return null;
   const valueText = String(value).trim();
   return valueText || null;
+}
+
+function whaticketSystemMessageText(value) {
+  const raw = text(value);
+  if (!raw) return null;
+  const cleaned = raw.replace(/^[_*]+|[_*]+$/g, '').trim();
+  if (isWhaticketSystemText(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+function isWhaticketSystemText(value) {
+  const cleaned = text(value);
+  if (!cleaned) return false;
+  return (
+    /^Chat (aceptado|devuelto a cola|resuelto|reabierto)\b/i.test(cleaned) ||
+    /^Estado cambiado\b/i.test(cleaned)
+  );
 }
 
 function legacy(value) {
@@ -616,7 +635,25 @@ async function ensureWhatsapp(client, ctx, row, departmentId) {
   return whatsappId;
 }
 
-async function ensureContact(client, ctx, row) {
+async function copyContactAvatar(ctx, row, mediaMode, warnings) {
+  const avatarRow = {
+    legacyId: row.legacyId,
+    mediaFileName: row.profilePicUrl,
+    exportedMediaPath: row.exportedAvatarPath,
+    mediaMissing: row.avatarMissing,
+  };
+  return copyMedia(
+    exportDirGlobal,
+    ctx.accountId,
+    ctx.importKey,
+    'contacts',
+    avatarRow,
+    mediaMode,
+    warnings
+  );
+}
+
+async function ensureContact(client, ctx, row, mediaMode, warnings) {
   const legacyId = legacy(row.legacyId);
   const mapped = await getMap(
     client,
@@ -625,7 +662,12 @@ async function ensureContact(client, ctx, row) {
     'contact',
     legacyId
   );
-  if (mapped) return mapped;
+  if (mapped) {
+    if (ctx.repairMedia) {
+      await repairContactAvatar(client, ctx, mapped, row, mediaMode, warnings);
+    }
+    return mapped;
+  }
 
   const phone = text(row.number) ?? text(row.lid) ?? `legacy-${legacyId}`;
   const phoneNormalized = normalizePhone(phone);
@@ -637,6 +679,7 @@ async function ensureContact(client, ctx, row) {
       )
     : null;
   const contactId = existing?.id ?? crypto.randomUUID();
+  const avatarUrl = await copyContactAvatar(ctx, row, mediaMode, warnings);
   if (!existing) {
     await exec(
       client,
@@ -651,11 +694,13 @@ async function ensureContact(client, ctx, row) {
         phoneNormalized || null,
         text(row.name),
         text(row.email),
-        text(row.profilePicUrl),
+        avatarUrl,
         dateOrNow(row.createdAt),
         dateOrNow(row.updatedAt),
       ]
     );
+  } else if (ctx.repairMedia) {
+    await repairContactAvatar(client, ctx, contactId, row, mediaMode, warnings);
   }
   await setMap(
     client,
@@ -667,6 +712,21 @@ async function ensureContact(client, ctx, row) {
     row
   );
   return contactId;
+}
+
+async function repairContactAvatar(client, ctx, contactId, row, mediaMode, warnings) {
+  if (mediaMode === 'skip') {
+    await exec(client, 'update contacts set avatar_url = null where id = $1', [
+      contactId,
+    ]);
+    return;
+  }
+
+  const avatarUrl = await copyContactAvatar(ctx, row, mediaMode, warnings);
+  await exec(client, 'update contacts set avatar_url = $2 where id = $1', [
+    contactId,
+    avatarUrl,
+  ]);
 }
 
 async function ensureCustomFieldValue(client, ctx, row) {
@@ -836,7 +896,10 @@ async function ensureMessage(
     'message',
     legacyId
   );
-  if (mapped) return mapped;
+  if (mapped) {
+    await repairMappedMessage(client, ctx, mapped, row, mediaMode, warnings);
+    return mapped;
+  }
 
   const conversationId = await getMap(
     client,
@@ -846,6 +909,35 @@ async function ensureMessage(
     legacy(row.ticketLegacyId)
   );
   if (!conversationId) return null;
+  const systemText = whaticketSystemMessageText(row.body);
+  if (systemText) {
+    const messageId = crypto.randomUUID();
+    await exec(
+      client,
+      `insert into messages
+        (id, conversation_id, sender_type, sender_id, content_type, content_text,
+         message_id, status, is_starred, created_at)
+       values ($1, $2, 'bot', null, 'system', $3, $4, 'sent', false, $5)`,
+      [
+        messageId,
+        conversationId,
+        systemText,
+        legacyId ? `whaticket:${legacyId}` : null,
+        dateOrNow(row.createdAt),
+      ]
+    );
+    await setMap(
+      client,
+      ctx.accountId,
+      ctx.importKey,
+      'message',
+      legacyId,
+      messageId,
+      row
+    );
+    return messageId;
+  }
+
   const ticket = ticketByLegacy.get(legacy(row.ticketLegacyId));
   const senderUserId = ticket
     ? await getMap(
@@ -909,6 +1001,55 @@ async function ensureMessage(
     row
   );
   return messageId;
+}
+
+async function repairMappedMessage(client, ctx, messageId, row, mediaMode, warnings) {
+  const systemText = whaticketSystemMessageText(row.body);
+  if (systemText) {
+    await exec(
+      client,
+      `update messages
+          set sender_type = 'bot',
+              sender_id = null,
+              content_type = 'system',
+              content_text = $2,
+              media_url = null
+        where id = $1
+          and (content_type <> 'system' or content_text is distinct from $2)`,
+      [messageId, systemText]
+    );
+    return;
+  }
+
+  if (!ctx.repairMedia || mediaMode === 'skip') return;
+  if (!row?.exportedMediaPath || row.mediaMissing) return;
+
+  const existing = await queryOne(
+    client,
+    'select media_url from messages where id = $1',
+    [messageId]
+  );
+  if (existing?.media_url) return;
+
+  const mediaUrl = await copyMedia(
+    exportDirGlobal,
+    ctx.accountId,
+    ctx.importKey,
+    'messages',
+    row,
+    mediaMode,
+    warnings
+  );
+  if (!mediaUrl) return;
+
+  await exec(
+    client,
+    `update messages
+        set media_url = $2,
+            content_type = $3
+      where id = $1`,
+    [messageId, mediaUrl, normalizeMediaType(row.mediaType, true)]
+  );
 }
 
 async function importQuickReply(client, ctx, row, mediaMode, warnings) {
@@ -1065,6 +1206,42 @@ async function importTicketStatusEvent(client, ctx, row) {
     legacy(row.triggeredByUserLegacyId)
   );
   const agentName = await userDisplayName(client, userId);
+  const systemText = systemTextForStatusEvent(row, agentName);
+  if (ctx.statusEventsMode === 'dedupe') {
+    const existingSystemMessage = await queryOne(
+      client,
+      `select id
+         from messages
+        where conversation_id = $1
+          and content_type = 'system'
+          and created_at between $2::timestamptz - interval '30 seconds'
+                             and $2::timestamptz + interval '30 seconds'
+          and (
+            content_text = $3
+            or content_text ~* '^Chat (aceptado|devuelto a cola|resuelto|reabierto)\\b'
+            or content_text ~* '^Estado cambiado\\b'
+          )
+        order by abs(extract(epoch from (created_at - $2::timestamptz))) asc
+        limit 1`,
+      [conversationId, dateOrNow(row.createdAt), systemText]
+    );
+    if (existingSystemMessage?.id) {
+      await setMap(
+        client,
+        ctx.accountId,
+        ctx.importKey,
+        'ticket_status_event',
+        legacyId,
+        existingSystemMessage.id,
+        {
+          ...row,
+          dedupedToMessageId: existingSystemMessage.id,
+        }
+      );
+      return existingSystemMessage.id;
+    }
+  }
+
   const messageId = crypto.randomUUID();
   await exec(
     client,
@@ -1076,7 +1253,7 @@ async function importTicketStatusEvent(client, ctx, row) {
       messageId,
       conversationId,
       userId,
-      systemTextForStatusEvent(row, agentName),
+      systemText,
       legacyId ? `whaticket-status:${legacyId}` : null,
       dateOrNow(row.createdAt),
     ]
@@ -1108,6 +1285,10 @@ async function main() {
     text(args['import-key']) ??
     text(manifest.generatedAt) ??
     path.basename(args.exportDir);
+  const statusEventsMode = text(args['status-events']) ?? 'dedupe';
+  if (!['dedupe', 'skip', 'system'].includes(statusEventsMode)) {
+    throw new Error('Unsupported --status-events mode. Use dedupe, system, or skip.');
+  }
 
   const data = {
     contacts: await readJson(args.exportDir, 'contacts.json'),
@@ -1140,6 +1321,8 @@ async function main() {
       accountId: account.id,
       ownerUserId: args['owner-user'] || account.ownerUserId,
       importKey,
+      repairMedia: Boolean(args['repair-media']),
+      statusEventsMode,
     };
     const passwordHash = await hashPassword(args.password || DEFAULT_PASSWORD);
     const whatsappQueueByWhatsapp = new Map();
@@ -1219,8 +1402,10 @@ async function main() {
     );
     summary.whatsapps = data.whatsapps.length;
 
+    const mediaMode = args.dryRun ? 'skip' : args.media;
+
     await runPhase('contacts', data.contacts, (row) =>
-      ensureContact(client, ctx, row)
+      ensureContact(client, ctx, row, mediaMode, warnings)
     );
     summary.contacts = data.contacts.length;
 
@@ -1234,7 +1419,6 @@ async function main() {
     );
     summary.tickets = data.tickets.length;
 
-    const mediaMode = args.dryRun ? 'skip' : args.media;
     await runPhase(
       'messages',
       data.messages,
@@ -1258,12 +1442,18 @@ async function main() {
     );
     summary.quickAnswers = data.quickAnswers.length;
 
-    await runPhase(
-      'ticket_status_events',
-      data.ticketStatusEvents,
-      (row) => importTicketStatusEvent(client, ctx, row),
-      { every: 5000 }
-    );
+    if (statusEventsMode !== 'skip') {
+      await runPhase(
+        'ticket_status_events',
+        data.ticketStatusEvents,
+        (row) => importTicketStatusEvent(client, ctx, row),
+        { every: 5000 }
+      );
+    } else {
+      console.log(
+        `\n[ticket_status_events] skipped ${data.ticketStatusEvents.length} rows`
+      );
+    }
     summary.ticketStatusEvents = data.ticketStatusEvents.length;
 
     if (args.dryRun) {
