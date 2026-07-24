@@ -64,6 +64,17 @@ function bestName(canonical, duplicates) {
   return better?.name ?? canonical.name;
 }
 
+function bestPhoneNormalized(canonical, duplicates) {
+  return (
+    normalizedDigits(canonical.phone) ||
+    normalizedDigits(canonical.phone_normalized) ||
+    duplicates
+      .map((contact) => normalizedDigits(contact.phone) || normalizedDigits(contact.phone_normalized))
+      .find(Boolean) ||
+    null
+  );
+}
+
 async function referencingContactColumns(client) {
   const { rows } = await client.query(`
     select kcu.table_name, kcu.column_name
@@ -87,34 +98,45 @@ async function referencingContactColumns(client) {
 async function duplicateGroups(client, accountId) {
   const { rows } = await client.query(
     `
+    with contact_keys as (
+      select
+        c.*,
+        coalesce(
+          nullif(regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g'), ''),
+          nullif(regexp_replace(coalesce(c.phone_normalized, ''), '\\D', '', 'g'), '')
+        ) as phone_key
+      from contacts c
+      where c.account_id = $1
+    )
     select
       c.*,
-      count(conv.id)::int as conversation_count
-    from contacts c
-    left join conversations conv on conv.contact_id = c.id
-    where c.account_id = $1
-      and c.phone_normalized is not null
-      and c.phone_normalized <> ''
-      and c.phone_normalized in (
-        select phone_normalized
-        from contacts
-        where account_id = $1
-          and phone_normalized is not null
-          and phone_normalized <> ''
-        group by phone_normalized
+      c.phone_key,
+      (
+        select count(*)::int
+        from conversations conv
+        where conv.contact_id = c.id
+      ) as conversation_count
+    from contact_keys c
+    where c.phone_key is not null
+      and c.phone_key <> ''
+      and c.phone_key in (
+        select phone_key
+        from contact_keys
+        where phone_key is not null
+          and phone_key <> ''
+        group by phone_key
         having count(*) > 1
       )
-    group by c.id
-    order by c.phone_normalized, c.created_at
+    order by c.phone_key, c.created_at
     `,
     [accountId]
   );
 
   const groups = new Map();
   for (const row of rows) {
-    const list = groups.get(row.phone_normalized) ?? [];
+    const list = groups.get(row.phone_key) ?? [];
     list.push(row);
-    groups.set(row.phone_normalized, list);
+    groups.set(row.phone_key, list);
   }
   return groups;
 }
@@ -192,6 +214,17 @@ async function mergeContact(client, accountId, canonical, duplicates, references
     duplicateIds,
   ]);
 
+  await client.query(
+    `
+    update contacts
+       set phone_normalized = $2,
+           updated_at = now()
+     where id = $1
+       and (phone_normalized is distinct from $2)
+    `,
+    [canonicalId, bestPhoneNormalized(canonical, duplicates)]
+  );
+
   return { merged: duplicateIds.length, updatedRefs };
 }
 
@@ -216,14 +249,14 @@ async function main() {
     summary.duplicateGroups = groups.size;
 
     const examples = [];
-    for (const [phoneNormalized, contacts] of groups) {
+    for (const [phoneKey, contacts] of groups) {
       const canonical = pickCanonical(contacts);
       const duplicates = contacts.filter((contact) => contact.id !== canonical.id);
       summary.duplicateContacts += duplicates.length;
 
       if (examples.length < 20) {
         examples.push({
-          phone_normalized: phoneNormalized,
+          phone_key: phoneKey,
           keep_id: canonical.id,
           keep_name: canonical.name,
           duplicate_names: duplicates.map((contact) => contact.name).join(' | '),
