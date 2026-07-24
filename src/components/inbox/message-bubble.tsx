@@ -127,6 +127,47 @@ function contentTypeLabel(
   }
 }
 
+function fileNameFromUrl(url: string | null | undefined) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const rawName = decodeURIComponent(parsed.pathname.split('/').pop() ?? '');
+    return rawName || null;
+  } catch {
+    const rawName = decodeURIComponent(
+      String(url).split(/[?#]/)[0].split('/').pop() ?? ''
+    );
+    return rawName || null;
+  }
+}
+
+function fileExtension(name: string | null | undefined) {
+  const match = name?.match(/\.([a-z0-9]{2,8})$/i);
+  return match?.[1]?.toUpperCase() ?? null;
+}
+
+function isFileNameLike(value: string | null | undefined) {
+  if (!value) return false;
+  return /^[^\n\r]{1,120}\.[a-z0-9]{2,8}$/i.test(value.trim());
+}
+
+function documentTitle(
+  message: Message,
+  t: ReturnType<typeof useTranslations>
+) {
+  const text = message.content_text?.trim() || null;
+  if (isFileNameLike(text)) return text;
+  const urlName = fileNameFromUrl(message.media_url);
+  const extension = fileExtension(urlName);
+  return extension ? `${t('document')} ${extension}` : t('document');
+}
+
+function documentCaption(message: Message) {
+  const text = message.content_text?.trim();
+  if (!text || isFileNameLike(text)) return null;
+  return text;
+}
+
 function MessageInfoRow({
   label,
   value,
@@ -813,19 +854,42 @@ function MessageContent({
           />
         );
       }
-      return (
-        <a
-          href={message.media_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bg-muted/50 hover:bg-muted flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
-        >
-          <FileText className="text-muted-foreground h-5 w-5 shrink-0" />
-          <span className="truncate">
-            <WhatsAppText text={message.content_text || t('document')} />
-          </span>
-        </a>
-      );
+      {
+        const title = documentTitle(message, t);
+        const caption = documentCaption(message);
+        const extension = fileExtension(title);
+
+        return (
+          <div className="min-w-0">
+            <a
+              href={message.media_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="border-border/70 bg-background/80 hover:bg-background flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-sm shadow-sm transition-colors"
+            >
+              <span className="bg-muted text-muted-foreground flex h-10 w-10 shrink-0 items-center justify-center rounded-md">
+                <FileText className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="text-foreground block truncate font-medium">
+                  {title}
+                </span>
+                <span className="text-muted-foreground mt-0.5 flex items-center gap-1 text-xs">
+                  {extension ? <span>{extension}</span> : null}
+                  {extension ? <span>·</span> : null}
+                  <span>{t('openDocument')}</span>
+                </span>
+              </span>
+              <ExternalLink className="text-muted-foreground h-4 w-4 shrink-0" />
+            </a>
+            {caption ? (
+              <p className="mt-2 text-sm break-words whitespace-pre-wrap">
+                <WhatsAppText text={caption} />
+              </p>
+            ) : null}
+          </div>
+        );
+      }
 
     case 'template': {
       const templatePayload = mergeTemplatePayload(

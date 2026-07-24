@@ -1432,11 +1432,11 @@ function ConversationPreviewDialog({
     <Dialog open={conversation !== null} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton
-        className="max-h-[80vh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        className="max-h-[84vh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
       >
         {conversation && (
           <>
-            <div className="border-border bg-card flex items-center gap-3 border-b px-4 py-3">
+            <div className="border-border bg-card flex min-w-0 items-center gap-3 border-b py-3 pr-14 pl-4">
               <div className="relative h-11 w-11 shrink-0">
                 <div className="bg-muted text-foreground flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium">
                   {contact?.avatar_url ? (
@@ -1460,11 +1460,11 @@ function ConversationPreviewDialog({
                 )}
               </div>
 
-              <div className="min-w-0 flex-1">
-                <DialogTitle className="truncate text-sm font-semibold">
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <DialogTitle className="max-w-full truncate text-sm leading-5 font-semibold">
                   {displayName}
                 </DialogTitle>
-                <div className="text-muted-foreground mt-1 flex items-center gap-1.5 text-xs">
+                <div className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1.5 text-xs">
                   {lineInitial && (
                     <span
                       title={`${t('line')}: ${lineName}`}
@@ -1473,10 +1473,10 @@ function ConversationPreviewDialog({
                       {lineInitial}
                     </span>
                   )}
-                  {lineName && <span className="truncate">{lineName}</span>}
+                  {lineName && <span className="min-w-0 truncate">{lineName}</span>}
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2 pr-8">
+              <div className="flex shrink-0 items-center gap-2">
                 {conversation.status === 'pending' && (
                   <button
                     type="button"
@@ -1516,8 +1516,8 @@ function ConversationPreviewDialog({
               </div>
             </div>
 
-            <ScrollArea className="bg-background h-[58vh] bg-[url('/inbox-doodle.svg')] bg-repeat">
-              <div className="space-y-2 p-4">
+            <ScrollArea className="bg-background h-[62vh] bg-[url('/inbox-doodle.svg')] bg-repeat">
+              <div className="space-y-2 px-6 py-4 sm:px-8">
                 {loading ? (
                   <p className="text-muted-foreground text-center text-xs">
                     {t('loadingPreview')}
@@ -1708,10 +1708,10 @@ function PreviewMessageBubble({
   const text = message.content_text || fallback;
 
   return (
-    <div className={cn('flex', isAgent ? 'justify-end' : 'justify-start')}>
+    <div className={cn('flex w-full', isAgent ? 'justify-end' : 'justify-start')}>
       <div
         className={cn(
-          'max-w-[78%] rounded-lg px-3 py-2 text-sm shadow-sm',
+          'min-w-20 max-w-[min(82%,34rem)] rounded-lg px-3 py-2 text-sm shadow-sm',
           isDeleted
             ? isAgent
               ? 'border-primary/20 bg-primary/10 text-primary/80 border'
