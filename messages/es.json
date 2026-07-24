@@ -306,6 +306,7 @@
       "resolve": "Resolver",
       "returnToPending": "Devolver",
       "reopen": "Reabrir",
+      "moreActions": "Mas acciones",
       "acceptBeforeReply": "Acepta este chat para responder.",
       "reopenBeforeReply": "Reabre este chat para responder.",
       "ticketActionFailed": "No se pudo actualizar el ticket: {reason}",

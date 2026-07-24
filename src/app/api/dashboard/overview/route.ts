@@ -12,18 +12,31 @@ import {
   daysAgoStart,
   lastNDayKeys,
   localDayKey,
+  mondayIndex,
   startOfLocalDay,
 } from "@/lib/dashboard/date-utils";
 import type {
   ConversationsSeriesPoint,
   MetricsBundle,
   PipelineDonutData,
+  ResponseTimeSummary,
 } from "@/lib/dashboard/types";
 
 function toIso(value: Date | string | number | null | undefined): string {
   if (value instanceof Date) return value.toISOString();
   if (value == null) return new Date(0).toISOString();
   return new Date(value).toISOString();
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function startOfLocalWeek(d: Date = new Date()): Date {
+  const out = startOfLocalDay(d);
+  out.setDate(out.getDate() - mondayIndex(out));
+  return out;
 }
 
 export async function GET(request: Request) {
@@ -33,6 +46,12 @@ export async function GET(request: Request) {
     const range = Math.min(Math.max(Number(url.searchParams.get("range") ?? 30), 1), 90);
     const todayStart = startOfLocalDay();
     const yesterdayStart = daysAgoStart(1);
+    const responseRangeStart = daysAgoStart(range - 1);
+    const thisWeekStart = startOfLocalWeek();
+    const lastWeekStart = new Date(thisWeekStart);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const responseQueryStart =
+      responseRangeStart < lastWeekStart ? responseRangeStart : lastWeekStart;
 
     const [
       openConvResult,
@@ -44,6 +63,7 @@ export async function GET(request: Request) {
       messagesTodayResult,
       messagesYesterdayResult,
       messageSeriesResult,
+      responseTimeResult,
       pipelineResult,
       activityRows,
     ] = await Promise.all([
@@ -111,6 +131,44 @@ export async function GET(request: Request) {
         order by m.created_at asc
       `),
       db.execute(sql`
+        with ordered_messages as (
+          select
+            m.id,
+            m.conversation_id,
+            m.sender_type,
+            m.created_at,
+            lag(m.sender_type) over (
+              partition by m.conversation_id
+              order by m.created_at, m.id
+            ) as previous_sender_type
+          from messages m
+          join conversations c on c.id = m.conversation_id
+          where c.account_id = ${ctx.accountId}
+            and m.deleted_at is null
+            and m.created_at >= ${responseQueryStart}
+        ),
+        pending_starts as (
+          select id, conversation_id, created_at
+          from ordered_messages
+          where sender_type = 'customer'
+            and coalesce(previous_sender_type, '') <> 'customer'
+        )
+        select
+          ps.created_at as pending_at,
+          first_reply.created_at as replied_at
+        from pending_starts ps
+        join lateral (
+          select m.created_at
+          from messages m
+          where m.conversation_id = ps.conversation_id
+            and m.deleted_at is null
+            and m.sender_type in ('agent', 'bot')
+            and m.created_at > ps.created_at
+          order by m.created_at, m.id
+          limit 1
+        ) first_reply on true
+      `),
+      db.execute(sql`
         select
           ps.id,
           ps.name,
@@ -152,6 +210,10 @@ export async function GET(request: Request) {
     const messageSeriesRows = messageSeriesResult.rows as Array<{
       created_at: Date | string;
       sender_type: string;
+    }>;
+    const responseTimeRows = responseTimeResult.rows as Array<{
+      pending_at: Date | string;
+      replied_at: Date | string;
     }>;
     const stageRows = pipelineResult.rows as Array<{
       id: string;
@@ -196,6 +258,34 @@ export async function GET(request: Request) {
       ...(buckets.get(day) ?? { incoming: 0, outgoing: 0 }),
     }));
 
+    const responseMinutesByDow = Array.from({ length: 7 }, () => [] as number[]);
+    const thisWeekResponseMinutes: number[] = [];
+    const lastWeekResponseMinutes: number[] = [];
+    for (const row of responseTimeRows) {
+      const pendingAt = new Date(row.pending_at);
+      const repliedAt = new Date(row.replied_at);
+      const minutes = (repliedAt.getTime() - pendingAt.getTime()) / 60000;
+      if (!Number.isFinite(minutes) || minutes < 0) continue;
+
+      if (pendingAt >= responseRangeStart) {
+        responseMinutesByDow[mondayIndex(pendingAt)].push(minutes);
+      }
+      if (pendingAt >= thisWeekStart) {
+        thisWeekResponseMinutes.push(minutes);
+      } else if (pendingAt >= lastWeekStart && pendingAt < thisWeekStart) {
+        lastWeekResponseMinutes.push(minutes);
+      }
+    }
+    const responseTime: ResponseTimeSummary = {
+      buckets: responseMinutesByDow.map((values, dow) => ({
+        dow,
+        avgMinutes: average(values),
+        samples: values.length,
+      })),
+      thisWeekAvg: average(thisWeekResponseMinutes),
+      lastWeekAvg: average(lastWeekResponseMinutes),
+    };
+
     const byStage = new Map<string, { id: string; name: string; color: string; dealCount: number; totalValue: number }>();
     for (const row of stageRows) {
       const current = byStage.get(row.id) ?? {
@@ -236,7 +326,7 @@ export async function GET(request: Request) {
       metrics,
       series,
       pipeline,
-      responseTime: { buckets: [], thisWeekAvg: null, lastWeekAvg: null },
+      responseTime,
       activity,
     });
   } catch (err) {

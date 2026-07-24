@@ -1,0 +1,109 @@
+services:
+  wacrm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wacrm:production
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      soketi:
+        condition: service_started
+      alarik:
+        condition: service_started
+    ports:
+      - "${WACRM_PORT:-3001}:3000"
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://arv:change-me-postgres-password@postgres:5432/wavera}
+      SOKETI_APP_ID: ${SOKETI_APP_ID:-0jEQKRk60CjyDc6T}
+      NEXT_PUBLIC_SOKETI_APP_KEY: ${NEXT_PUBLIC_SOKETI_APP_KEY:-change-me-soketi-key}
+      SOKETI_APP_SECRET: ${SOKETI_APP_SECRET:-change-me-soketi-secret}
+      SOKETI_HOST: ${SOKETI_HOST:-soketi}
+      SOKETI_PORT: ${SOKETI_PORT:-6001}
+      SOKETI_TLS: ${SOKETI_TLS:-false}
+      NEXT_PUBLIC_SOKETI_HOST: ${NEXT_PUBLIC_SOKETI_HOST:-soketi.arvera.es}
+      NEXT_PUBLIC_SOKETI_PORT: ${NEXT_PUBLIC_SOKETI_PORT:-443}
+      NEXT_PUBLIC_SOKETI_TLS: ${NEXT_PUBLIC_SOKETI_TLS:-true}
+      S3_ENDPOINT: ${S3_ENDPOINT:-https://s3.arvera.es}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-https://s3.arvera.es/wacrm-media}
+    volumes:
+      - wacrm-storage:/app/storage
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wavera}
+      POSTGRES_USER: ${POSTGRES_USER:-arv}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-postgres-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  soketi:
+    image: quay.io/soketi/soketi:1.6-16-debian
+    restart: unless-stopped
+    environment:
+      SERVICE_URL_SOKETI_6001: ${SERVICE_URL_SOKETI_6001:-https://soketi.arvera.es:6001}
+      SERVICE_USER_SOKETI: ${SERVICE_USER_SOKETI:-0jEQKRk60CjyDc6T}
+      SERVICE_REALBASE64_64_SOKETIKEY: ${SERVICE_REALBASE64_64_SOKETIKEY:-change-me-soketi-key}
+      SERVICE_REALBASE64_64_SOKETISECRET: ${SERVICE_REALBASE64_64_SOKETISECRET:-change-me-soketi-secret}
+      SOKETI_DEBUG: ${SOKETI_DEBUG:-0}
+      SOKETI_DEFAULT_APP_ID: ${SERVICE_USER_SOKETI:-0jEQKRk60CjyDc6T}
+      SOKETI_DEFAULT_APP_KEY: ${SERVICE_REALBASE64_64_SOKETIKEY:-change-me-soketi-key}
+      SOKETI_DEFAULT_APP_SECRET: ${SERVICE_REALBASE64_64_SOKETISECRET:-change-me-soketi-secret}
+      SOKETI_DEFAULT_APP_ENABLE_CLIENT_MESSAGES: ${DEFAULT_APP_ENABLE_CLIENT_MESSAGES:-}
+      SOKETI_PUSHER_SCHEME: ${SOKETI_PUSHER_SCHEME:-https}
+      SOKETI_METRICS_SERVER_PORT: "9601"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6001' || exit 1"]
+      interval: 5s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "${SOKETI_PORT_PUBLIC:-6001}:6001"
+      - "${SOKETI_METRICS_PORT_PUBLIC:-9601}:9601"
+
+  alarik:
+    image: ghcr.io/achtungsoftware/alarik:latest
+    restart: unless-stopped
+    ports:
+      - "${ALARIK_API_PORT:-8080}:8080"
+    environment:
+      API_BASE_URL: ${ALARIK_API_BASE_URL:-https://s3.arvera.es}
+      CONSOLE_BASE_URL: ${ALARIK_CONSOLE_BASE_URL:-https://alarik.arvera.es}
+      ADMIN_USERNAME: ${ALARIK_ADMIN_USERNAME:-alarik}
+      ADMIN_PASSWORD: ${ALARIK_ADMIN_PASSWORD:-change-me-alarik-admin-password}
+      JWT: ${ALARIK_JWT:-change-this-secure-jwt-key}
+      ALLOW_ACCOUNT_CREATION: ${ALARIK_ALLOW_ACCOUNT_CREATION:-false}
+      CORS_ALLOW_ORIGINS: ${ALARIK_CORS_ALLOW_ORIGINS:-https://alarik.arvera.es,https://wacrm.arvera.es}
+    volumes:
+      - alarik-storage:/app/Storage
+
+  alarik-console:
+    image: ghcr.io/achtungsoftware/alarik-console:latest
+    restart: unless-stopped
+    depends_on:
+      - alarik
+    ports:
+      - "${ALARIK_CONSOLE_PORT:-3000}:3000"
+    environment:
+      NUXT_PUBLIC_API_BASE_URL: ${ALARIK_API_BASE_URL:-https://s3.arvera.es}
+      NUXT_PUBLIC_CONSOLE_BASE_URL: ${ALARIK_CONSOLE_BASE_URL:-https://alarik.arvera.es}
+      NUXT_PUBLIC_ALLOW_ACCOUNT_CREATION: ${ALARIK_ALLOW_ACCOUNT_CREATION:-false}
+      CORS_ALLOW_ORIGINS: ${ALARIK_CORS_ALLOW_ORIGINS:-https://alarik.arvera.es,https://wacrm.arvera.es}
+
+volumes:
+  postgres-data:
+  wacrm-storage:
+  alarik-storage:

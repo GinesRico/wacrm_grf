@@ -279,12 +279,12 @@ export function StartConversationButton({
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="gap-0 p-0 sm:max-w-[430px]">
+        <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[430px]">
           <DialogHeader className="border-border border-b px-5 py-4">
             <DialogTitle>{t('title')}</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 px-5 py-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
             <div className="grid grid-cols-2 gap-3">
               <Field label={t('prefix')}>
                 <Select
@@ -363,7 +363,7 @@ export function StartConversationButton({
                 {t('loading')}
               </div>
             ) : suggestions.length > 0 && query.trim() ? (
-              <div className="border-border bg-card max-h-48 overflow-y-auto rounded-lg border p-1">
+              <div className="border-border bg-card max-h-40 overflow-y-auto rounded-lg border p-1">
                 {suggestions.map((contact) => (
                   <button
                     key={contact.id}
@@ -402,7 +402,7 @@ export function StartConversationButton({
             ) : null}
           </div>
 
-          <DialogFooter className="px-5">
+          <DialogFooter className="border-border bg-background border-t px-5 py-3">
             <Button
               variant="outline"
               onClick={() => setOpen(false)}

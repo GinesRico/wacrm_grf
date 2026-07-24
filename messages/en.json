@@ -371,6 +371,7 @@
       "resolve": "Resolve",
       "returnToPending": "Return",
       "reopen": "Reopen",
+      "moreActions": "More actions",
       "acceptBeforeReply": "Accept this chat before replying.",
       "reopenBeforeReply": "Reopen this chat before replying.",
       "ticketActionFailed": "Could not update the ticket: {reason}",
