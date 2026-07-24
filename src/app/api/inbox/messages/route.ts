@@ -1,17 +1,19 @@
-import { NextResponse } from "next/server";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { NextResponse } from 'next/server';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
-import { db } from "@/db/client";
-import { conversations, messageReactions, messages } from "@/db/schema";
-import { getCurrentDbAccount, requireDbRole } from "@/lib/auth/current-account";
-import { toErrorResponse } from "@/lib/auth/errors";
-import { getInboxConversationById } from "@/lib/inbox/conversations";
-import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
+import { db } from '@/db/client';
+import { conversations, messageReactions, messages } from '@/db/schema';
+import { getCurrentDbAccount, requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
+import { getInboxConversationById } from '@/lib/inbox/conversations';
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 
 function asStringArray(value: unknown): string[] {
-  if (typeof value === "string" && value.length > 0) return [value];
+  if (typeof value === 'string' && value.length > 0) return [value];
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+  return value.filter(
+    (item): item is string => typeof item === 'string' && item.length > 0
+  );
 }
 
 function toMessageRow(row: typeof messages.$inferSelect) {
@@ -26,6 +28,10 @@ function toMessageRow(row: typeof messages.$inferSelect) {
     template_name: row.templateName,
     message_id: row.messageId,
     status: row.status,
+    sent_at: row.sentAt?.toISOString() ?? null,
+    delivered_at: row.deliveredAt?.toISOString() ?? null,
+    read_at: row.readAt?.toISOString() ?? null,
+    failed_at: row.failedAt?.toISOString() ?? null,
     reply_to_message_id: row.replyToMessageId,
     interactive_reply_id: row.interactiveReplyId,
     interactive_payload: row.interactivePayload,
@@ -51,11 +57,19 @@ function toReactionRow(row: typeof messageReactions.$inferSelect) {
   };
 }
 
-async function assertConversationAccess(accountId: string, conversationId: string) {
+async function assertConversationAccess(
+  accountId: string,
+  conversationId: string
+) {
   const [conversation] = await db
     .select({ id: conversations.id })
     .from(conversations)
-    .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, accountId)
+      )
+    )
     .limit(1);
   return Boolean(conversation);
 }
@@ -64,15 +78,24 @@ export async function GET(request: Request) {
   try {
     const ctx = await getCurrentDbAccount();
     const url = new URL(request.url);
-    const conversationId = url.searchParams.get("conversation_id");
+    const conversationId = url.searchParams.get('conversation_id');
 
     if (!conversationId) {
-      return NextResponse.json({ error: "conversation_id is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: 'conversation_id is required.' },
+        { status: 400 }
+      );
     }
 
-    const allowed = await assertConversationAccess(ctx.accountId, conversationId);
+    const allowed = await assertConversationAccess(
+      ctx.accountId,
+      conversationId
+    );
     if (!allowed) {
-      return NextResponse.json({ error: "Conversation not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Conversation not found.' },
+        { status: 404 }
+      );
     }
 
     const [messageRows, reactionRows] = await Promise.all([
@@ -98,16 +121,19 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const ctx = await requireDbRole("agent");
+    const ctx = await requireDbRole('agent');
     const body = await request.json().catch(() => ({}));
     const action = body?.action;
     const messageIds = asStringArray(body?.message_ids ?? body?.message_id);
 
-    if (action !== "delete" && action !== "star") {
-      return NextResponse.json({ error: "Invalid action." }, { status: 400 });
+    if (action !== 'delete' && action !== 'star') {
+      return NextResponse.json({ error: 'Invalid action.' }, { status: 400 });
     }
     if (messageIds.length === 0) {
-      return NextResponse.json({ error: "message_ids is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: 'message_ids is required.' },
+        { status: 400 }
+      );
     }
 
     const targetMessages = await db
@@ -120,19 +146,20 @@ export async function PATCH(request: Request) {
       .where(
         and(
           inArray(messages.id, messageIds),
-          eq(conversations.accountId, ctx.accountId),
-        ),
+          eq(conversations.accountId, ctx.accountId)
+        )
       );
 
-    const validIds = targetMessages.map(
-      (message) => message.id,
-    );
+    const validIds = targetMessages.map((message) => message.id);
 
     if (validIds.length === 0) {
-      return NextResponse.json({ error: "Message not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: 'Message not found.' },
+        { status: 404 }
+      );
     }
 
-    if (action === "star") {
+    if (action === 'star') {
       const starred = Boolean(body?.is_starred);
       const updatedRows = await db
         .update(messages)
@@ -142,14 +169,17 @@ export async function PATCH(request: Request) {
 
       await Promise.all(
         updatedRows.map((message) =>
-          publishRealtimeEvent("message.updated", {
+          publishRealtimeEvent('message.updated', {
             accountId: ctx.accountId,
             conversationId: message.conversationId,
             payload: { message: toMessageRow(message) },
           }).catch((error) => {
-            console.warn("[realtime] failed to publish message.updated:", error);
-          }),
-        ),
+            console.warn(
+              '[realtime] failed to publish message.updated:',
+              error
+            );
+          })
+        )
       );
 
       return NextResponse.json({ messages: updatedRows.map(toMessageRow) });
@@ -166,11 +196,7 @@ export async function PATCH(request: Request) {
       .returning();
 
     const conversationIds = Array.from(
-      new Set(
-        updatedRows.map(
-          (message) => message.conversationId,
-        ),
-      ),
+      new Set(updatedRows.map((message) => message.conversationId))
     );
 
     await Promise.all(
@@ -185,8 +211,8 @@ export async function PATCH(request: Request) {
           .where(
             and(
               eq(messages.conversationId, conversationId),
-              isNull(messages.deletedAt),
-            ),
+              isNull(messages.deletedAt)
+            )
           )
           .orderBy(sql`${messages.createdAt} desc`)
           .limit(1);
@@ -202,33 +228,39 @@ export async function PATCH(request: Request) {
           .where(
             and(
               eq(conversations.id, conversationId),
-              eq(conversations.accountId, ctx.accountId),
-            ),
+              eq(conversations.accountId, ctx.accountId)
+            )
           );
 
-        const conversation = await getInboxConversationById(ctx.accountId, conversationId);
+        const conversation = await getInboxConversationById(
+          ctx.accountId,
+          conversationId
+        );
         if (conversation) {
-          await publishRealtimeEvent("conversation.updated", {
+          await publishRealtimeEvent('conversation.updated', {
             accountId: ctx.accountId,
             conversationId,
             payload: { conversation },
           }).catch((error) => {
-            console.warn("[realtime] failed to publish conversation.updated:", error);
+            console.warn(
+              '[realtime] failed to publish conversation.updated:',
+              error
+            );
           });
         }
-      }),
+      })
     );
 
     await Promise.all(
       updatedRows.map((message) =>
-        publishRealtimeEvent("message.updated", {
+        publishRealtimeEvent('message.updated', {
           accountId: ctx.accountId,
           conversationId: message.conversationId,
           payload: { message: toMessageRow(message) },
         }).catch((error) => {
-          console.warn("[realtime] failed to publish message.updated:", error);
-        }),
-      ),
+          console.warn('[realtime] failed to publish message.updated:', error);
+        })
+      )
     );
 
     return NextResponse.json({ messages: updatedRows.map(toMessageRow) });

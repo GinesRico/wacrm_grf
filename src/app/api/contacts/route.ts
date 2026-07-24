@@ -46,6 +46,27 @@ function serializeRawContact(row: Record<string, unknown>) {
   };
 }
 
+function contactOrderBy(sortBy: string, sortDir: string) {
+  const direction = sortDir === "desc" ? sql`desc` : sql`asc`;
+  const nulls = sortDir === "desc" ? sql`nulls last` : sql`nulls first`;
+  const fallback = sql`created_at desc`;
+
+  const expression =
+    sortBy === "phone"
+      ? sql`phone`
+      : sortBy === "email"
+        ? sql`lower(coalesce(email, ''))`
+        : sortBy === "company"
+          ? sql`lower(coalesce(company, ''))`
+          : sortBy === "tags"
+            ? sql`lower(coalesce(tag_names, ''))`
+            : sortBy === "created_at"
+              ? sql`created_at`
+              : sql`lower(coalesce(name, ''))`;
+
+  return sql`${expression} ${direction} ${nulls}, ${fallback}`;
+}
+
 export async function GET(request: Request) {
   try {
     const ctx = await getCurrentDbAccount();
@@ -53,20 +74,29 @@ export async function GET(request: Request) {
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
     const offset = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
     const search = url.searchParams.get("search")?.trim() ?? "";
+    const sortBy = url.searchParams.get("sort_by") ?? "created_at";
+    const sortDir = url.searchParams.get("sort_dir") === "asc" ? "asc" : "desc";
     const tagIds = (url.searchParams.get("tag_ids") ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
+    const orderBy = contactOrderBy(sortBy, sortDir);
 
     const result = await db.execute(sql`
       with filtered as (
-        select distinct c.*
+        select distinct c.*, sort_tag_data.tag_names
         from contacts c
         ${
           tagIds.length > 0
             ? sql`join contact_tags ctag_filter on ctag_filter.contact_id = c.id`
             : sql``
         }
+        left join lateral (
+          select string_agg(t.name, ', ' order by t.name asc) as tag_names
+          from contact_tags ctag_sort
+          join tags t on t.id = ctag_sort.tag_id
+          where ctag_sort.contact_id = c.id
+        ) sort_tag_data on true
         where c.account_id = ${ctx.accountId}
           ${
             search
@@ -82,7 +112,7 @@ export async function GET(request: Request) {
       counted as (
         select *, count(*) over()::int as total_count
         from filtered
-        order by created_at desc
+        order by ${orderBy}
         limit ${limit}
         offset ${offset}
       )

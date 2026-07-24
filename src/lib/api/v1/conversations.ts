@@ -8,10 +8,28 @@
 // endpoint's response vocabulary.
 // ============================================================
 
-import { and, asc, desc, eq, gte, ilike, inArray, lte, lt, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  lte,
+  lt,
+  or,
+  type SQL,
+} from 'drizzle-orm';
 
 import { db } from '@/db/client';
-import { contactTags, contacts, conversations, messages, tags } from '@/db/schema';
+import {
+  contactTags,
+  contacts,
+  conversations,
+  messages,
+  tags,
+} from '@/db/schema';
 import type { Cursor } from '@/lib/api/v1/pagination';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import type { Conversation, Message } from '@/types';
@@ -48,6 +66,10 @@ export interface ApiMessage {
   template_name: string | null;
   whatsapp_message_id: string | null;
   status: string;
+  sent_at: string | null;
+  delivered_at: string | null;
+  read_at: string | null;
+  failed_at: string | null;
   reply_to_message_id: string | null;
   interactive_reply_id: string | null;
   created_at: string;
@@ -108,6 +130,10 @@ export function serializeMessage(m: Message): ApiMessage {
     template_name: m.template_name ?? null,
     whatsapp_message_id: m.message_id ?? null,
     status: m.status,
+    sent_at: m.sent_at ?? null,
+    delivered_at: m.delivered_at ?? null,
+    read_at: m.read_at ?? null,
+    failed_at: m.failed_at ?? null,
     reply_to_message_id: m.reply_to_message_id ?? null,
     interactive_reply_id: m.interactive_reply_id ?? null,
     created_at: m.created_at,
@@ -117,7 +143,7 @@ export function serializeMessage(m: Message): ApiMessage {
 function serializeConversationRow(
   conv: typeof conversations.$inferSelect,
   contact: typeof contacts.$inferSelect | null,
-  rowTags: { id: string; name: string; color: string }[] = [],
+  rowTags: { id: string; name: string; color: string }[] = []
 ): ApiConversation {
   return {
     id: conv.id,
@@ -142,7 +168,9 @@ function serializeConversationRow(
   };
 }
 
-export function serializeMessageRow(row: typeof messages.$inferSelect): ApiMessage {
+export function serializeMessageRow(
+  row: typeof messages.$inferSelect
+): ApiMessage {
   return {
     id: row.id,
     conversation_id: row.conversationId,
@@ -155,6 +183,10 @@ export function serializeMessageRow(row: typeof messages.$inferSelect): ApiMessa
     template_name: row.templateName,
     whatsapp_message_id: row.messageId,
     status: row.status,
+    sent_at: row.sentAt?.toISOString() ?? null,
+    delivered_at: row.deliveredAt?.toISOString() ?? null,
+    read_at: row.readAt?.toISOString() ?? null,
+    failed_at: row.failedAt?.toISOString() ?? null,
     reply_to_message_id: row.replyToMessageId,
     interactive_reply_id: row.interactiveReplyId,
     created_at: row.createdAt.toISOString(),
@@ -163,7 +195,7 @@ export function serializeMessageRow(row: typeof messages.$inferSelect): ApiMessa
 
 function serializeMessageJoinedRow(
   message: typeof messages.$inferSelect,
-  contact: typeof contacts.$inferSelect | null,
+  contact: typeof contacts.$inferSelect | null
 ): ApiMessage {
   return {
     ...serializeMessageRow(message),
@@ -181,7 +213,8 @@ function serializeMessageJoinedRow(
 }
 
 async function tagsByContactIds(contactIds: string[]) {
-  if (contactIds.length === 0) return new Map<string, { id: string; name: string; color: string }[]>();
+  if (contactIds.length === 0)
+    return new Map<string, { id: string; name: string; color: string }[]>();
   const rows = await db
     .select({
       contactId: contactTags.contactId,
@@ -194,7 +227,10 @@ async function tagsByContactIds(contactIds: string[]) {
     .where(inArray(contactTags.contactId, contactIds))
     .orderBy(asc(tags.name));
 
-  const byContact = new Map<string, { id: string; name: string; color: string }[]>();
+  const byContact = new Map<
+    string,
+    { id: string; name: string; color: string }[]
+  >();
   for (const row of rows) {
     const list = byContact.get(row.contactId) ?? [];
     list.push({ id: row.id, name: row.name, color: row.color });
@@ -212,14 +248,18 @@ export async function listConversations(params: {
 }): Promise<Array<ApiConversation & { id: string; created_at: string }>> {
   const whereParts = [eq(conversations.accountId, params.accountId)];
   if (params.status) whereParts.push(eq(conversations.status, params.status));
-  if (params.contactId) whereParts.push(eq(conversations.contactId, params.contactId));
+  if (params.contactId)
+    whereParts.push(eq(conversations.contactId, params.contactId));
   if (params.cursor) {
     const cursorDate = new Date(params.cursor.createdAt);
     whereParts.push(
       or(
         lt(conversations.createdAt, cursorDate),
-        and(eq(conversations.createdAt, cursorDate), lt(conversations.id, params.cursor.id)),
-      )!,
+        and(
+          eq(conversations.createdAt, cursorDate),
+          lt(conversations.id, params.cursor.id)
+        )
+      )!
     );
   }
 
@@ -231,32 +271,36 @@ export async function listConversations(params: {
     .orderBy(desc(conversations.createdAt), desc(conversations.id))
     .limit(params.limit);
 
-  const tagMap = await tagsByContactIds(rows.flatMap((row) => (row.contact ? [row.contact.id] : [])));
+  const tagMap = await tagsByContactIds(
+    rows.flatMap((row) => (row.contact ? [row.contact.id] : []))
+  );
   return rows.map((row) =>
     serializeConversationRow(
       row.conversation,
       row.contact,
-      row.contact ? tagMap.get(row.contact.id) ?? [] : [],
-    ),
+      row.contact ? (tagMap.get(row.contact.id) ?? []) : []
+    )
   );
 }
 
 export async function getConversationById(
   accountId: string,
-  id: string,
+  id: string
 ): Promise<ApiConversation | null> {
   const [row] = await db
     .select({ conversation: conversations, contact: contacts })
     .from(conversations)
     .leftJoin(contacts, eq(conversations.contactId, contacts.id))
-    .where(and(eq(conversations.id, id), eq(conversations.accountId, accountId)))
+    .where(
+      and(eq(conversations.id, id), eq(conversations.accountId, accountId))
+    )
     .limit(1);
   if (!row) return null;
   const tagMap = await tagsByContactIds(row.contact ? [row.contact.id] : []);
   return serializeConversationRow(
     row.conversation,
     row.contact,
-    row.contact ? tagMap.get(row.contact.id) ?? [] : [],
+    row.contact ? (tagMap.get(row.contact.id) ?? []) : []
   );
 }
 
@@ -279,8 +323,8 @@ export async function listConversationMessages(params: {
     .where(
       and(
         eq(conversations.id, params.conversationId),
-        eq(conversations.accountId, params.accountId),
-      ),
+        eq(conversations.accountId, params.accountId)
+      )
     )
     .limit(1);
   if (!conversation) return [];
@@ -292,8 +336,11 @@ export async function listConversationMessages(params: {
     whereParts.push(
       or(
         lt(messages.createdAt, cursorDate),
-        and(eq(messages.createdAt, cursorDate), lt(messages.id, params.cursor.id)),
-      )!,
+        and(
+          eq(messages.createdAt, cursorDate),
+          lt(messages.id, params.cursor.id)
+        )
+      )!
     );
   }
 
@@ -317,21 +364,29 @@ function applyMessageFilters(
     interactiveReplyId?: string | null;
     createdAfter?: Date | null;
     createdBefore?: Date | null;
-  },
+  }
 ) {
   if (filters.direction === 'inbound') {
     whereParts.push(eq(messages.senderType, 'customer'));
   } else if (filters.direction === 'outbound') {
-    whereParts.push(or(eq(messages.senderType, 'agent'), eq(messages.senderType, 'bot'))!);
+    whereParts.push(
+      or(eq(messages.senderType, 'agent'), eq(messages.senderType, 'bot'))!
+    );
   }
-  if (filters.contentType) whereParts.push(eq(messages.contentType, filters.contentType));
+  if (filters.contentType)
+    whereParts.push(eq(messages.contentType, filters.contentType));
   if (filters.status) whereParts.push(eq(messages.status, filters.status));
-  if (filters.templateName) whereParts.push(eq(messages.templateName, filters.templateName));
+  if (filters.templateName)
+    whereParts.push(eq(messages.templateName, filters.templateName));
   if (filters.interactiveReplyId) {
-    whereParts.push(eq(messages.interactiveReplyId, filters.interactiveReplyId));
+    whereParts.push(
+      eq(messages.interactiveReplyId, filters.interactiveReplyId)
+    );
   }
-  if (filters.createdAfter) whereParts.push(gte(messages.createdAt, filters.createdAfter));
-  if (filters.createdBefore) whereParts.push(lte(messages.createdAt, filters.createdBefore));
+  if (filters.createdAfter)
+    whereParts.push(gte(messages.createdAt, filters.createdAfter));
+  if (filters.createdBefore)
+    whereParts.push(lte(messages.createdAt, filters.createdBefore));
 }
 
 function parseDateParam(value: string | null): Date | null {
@@ -391,8 +446,11 @@ export async function listMessages(params: {
     whereParts.push(
       or(
         lt(messages.createdAt, cursorDate),
-        and(eq(messages.createdAt, cursorDate), lt(messages.id, params.cursor.id)),
-      )!,
+        and(
+          eq(messages.createdAt, cursorDate),
+          lt(messages.id, params.cursor.id)
+        )
+      )!
     );
   }
 
@@ -408,11 +466,19 @@ export async function listMessages(params: {
   return rows.map((row) => serializeMessageJoinedRow(row.message, row.contact));
 }
 
-export async function conversationExists(accountId: string, conversationId: string) {
+export async function conversationExists(
+  accountId: string,
+  conversationId: string
+) {
   const [row] = await db
     .select({ id: conversations.id })
     .from(conversations)
-    .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, accountId)
+      )
+    )
     .limit(1);
   return Boolean(row);
 }

@@ -48,6 +48,9 @@ import {
   SlidersHorizontal,
   Filter,
   X,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
 } from 'lucide-react';
 import { ContactForm } from '@/components/contacts/contact-form';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
@@ -58,6 +61,9 @@ import { GatedButton } from '@/components/ui/gated-button';
 import { useTranslations } from 'next-intl';
 
 const PAGE_SIZE = 25;
+
+type SortBy = 'name' | 'phone' | 'email' | 'company' | 'tags' | 'created_at';
+type SortDir = 'asc' | 'desc';
 
 interface ContactWithTags extends Contact {
   tags?: Tag[];
@@ -73,6 +79,8 @@ export default function ContactsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [sortBy, setSortBy] = useState<SortBy>('created_at');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   // Tag filter — contacts shown must have ANY of these tags (OR).
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
@@ -128,6 +136,8 @@ export default function ContactsPage() {
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
       offset: String(from),
+      sort_by: sortBy,
+      sort_dir: sortDir,
     });
     if (term) params.set('search', term);
     if (selectedTagIds.length > 0) {
@@ -149,7 +159,7 @@ export default function ContactsPage() {
     setTotalCount(Number(payload.count ?? 0));
     setContacts((payload.contacts as ContactWithTags[] | undefined) ?? []);
     setLoading(false);
-  }, [page, search, selectedTagIds, t]);
+  }, [page, search, selectedTagIds, sortBy, sortDir, t]);
   // Load-once-on-mount-ish data fetches. Each setter inside runs
   // inside an async promise completion (database await), not
   // synchronously in the effect body, so the cascade the lint rule
@@ -289,6 +299,41 @@ export default function ContactsPage() {
   function clearTagFilters() {
     setSelectedTagIds([]);
     setPage(0);
+  }
+
+  function toggleSort(nextSortBy: SortBy) {
+    setSortBy((current) => {
+      if (current === nextSortBy) {
+        setSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'));
+        return current;
+      }
+      setSortDir(nextSortBy === 'created_at' ? 'desc' : 'asc');
+      return nextSortBy;
+    });
+    setPage(0);
+  }
+
+  function renderSortableHead(
+    key: SortBy,
+    label: string,
+    className?: string,
+  ) {
+    const active = sortBy === key;
+    const Icon = active ? (sortDir === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
+    const ariaSort = active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none';
+
+    return (
+      <TableHead className={className} aria-sort={ariaSort}>
+        <button
+          type="button"
+          onClick={() => toggleSort(key)}
+          className="inline-flex min-w-0 items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <span className="truncate">{label}</span>
+          <Icon className="size-3.5 shrink-0" />
+        </button>
+      </TableHead>
+    );
   }
 
   return (
@@ -499,12 +544,12 @@ export default function ContactsPage() {
                   aria-label={t('selectAllOnPage')}
                 />
               </TableHead>
-              <TableHead className="text-muted-foreground">{t('tableColumns.name')}</TableHead>
-              <TableHead className="text-muted-foreground">{t('tableColumns.phone')}</TableHead>
-              <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.email')}</TableHead>
-              <TableHead className="text-muted-foreground hidden lg:table-cell">{t('tableColumns.company')}</TableHead>
-              <TableHead className="text-muted-foreground hidden md:table-cell">{t('tableColumns.tags')}</TableHead>
-              <TableHead className="text-muted-foreground hidden lg:table-cell">{t('tableColumns.createdAt')}</TableHead>
+              {renderSortableHead('name', t('tableColumns.name'))}
+              {renderSortableHead('phone', t('tableColumns.phone'))}
+              {renderSortableHead('email', t('tableColumns.email'), 'hidden md:table-cell')}
+              {renderSortableHead('company', t('tableColumns.company'), 'hidden lg:table-cell')}
+              {renderSortableHead('tags', t('tableColumns.tags'), 'hidden md:table-cell')}
+              {renderSortableHead('created_at', t('tableColumns.createdAt'), 'hidden lg:table-cell')}
               <TableHead className="text-muted-foreground w-12" />
             </TableRow>
           </TableHeader>

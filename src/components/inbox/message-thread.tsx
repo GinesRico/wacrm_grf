@@ -1744,12 +1744,21 @@ export function MessageThread({
             onClick={() => {
               onToggleContactPanel?.();
             }}
-            className="bg-muted text-foreground hover:ring-primary/30 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-medium transition-shadow hover:ring-2"
+            className="bg-muted text-foreground hover:ring-primary/30 flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full text-sm font-medium transition-shadow hover:ring-2"
             title={t('showContact')}
             aria-label={t('showContact')}
             aria-pressed={contactPanelOpen}
           >
-            {displayName.charAt(0).toUpperCase()}
+            {contact.avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={contact.avatar_url}
+                alt={displayName}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              displayName.charAt(0).toUpperCase()
+            )}
           </button>
           <button
             type="button"

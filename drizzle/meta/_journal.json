@@ -183,6 +183,13 @@
       "when": 1784822400000,
       "tag": "0025_whaticket_legacy_map",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784889600000,
+      "tag": "0026_message_delivery_timestamps",
+      "breakpoints": true
     }
   ]
 }

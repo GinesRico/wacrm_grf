@@ -149,6 +149,10 @@ function serializeMessageRow(row: typeof messages.$inferSelect) {
     template_name: row.templateName,
     message_id: row.messageId,
     status: row.status,
+    sent_at: isoOrNull(row.sentAt),
+    delivered_at: isoOrNull(row.deliveredAt),
+    read_at: isoOrNull(row.readAt),
+    failed_at: isoOrNull(row.failedAt),
     reply_to_message_id: row.replyToMessageId,
     interactive_reply_id: row.interactiveReplyId,
     interactive_payload: row.interactivePayload,
@@ -241,7 +245,10 @@ async function resolveSlotTimes(args: {
       .where(
         and(
           eq(appointmentAvailabilityMessages.accountId, args.accountId),
-          eq(appointmentAvailabilityMessages.conversationId, args.conversationId),
+          eq(
+            appointmentAvailabilityMessages.conversationId,
+            args.conversationId
+          ),
           eq(appointmentAvailabilityMessages.date, args.date)
         )
       )
@@ -287,10 +294,7 @@ async function buildAppointmentSlotSelection(
   let duration = 45;
   let timeZone = 'Europe/Madrid';
   try {
-    const connection = await getArveraAppointmentsConnection(
-      db,
-      accountId
-    );
+    const connection = await getArveraAppointmentsConnection(db, accountId);
     const config = normalizeAppointmentsConfig(connection?.config);
     duration = config.duracion;
     timeZone = config.timezone;
@@ -698,10 +702,28 @@ function isValidMessageStatusTransition(
   return ii > ci;
 }
 
+function messageStatusUpdate(
+  status: string,
+  timestamp: Date
+): Partial<typeof messages.$inferInsert> {
+  const update: Partial<typeof messages.$inferInsert> = { status };
+  if (status === 'sent') update.sentAt = timestamp;
+  if (status === 'delivered') update.deliveredAt = timestamp;
+  if (status === 'read') update.readAt = timestamp;
+  if (status === 'failed') update.failedAt = timestamp;
+  return update;
+}
+
 function isoString(value: unknown): string {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'string') return value;
   return new Date().toISOString();
+}
+
+function isoStringOrNull(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') return value;
+  return null;
 }
 
 function serializeRealtimeMessage(row: Record<string, unknown>) {
@@ -718,6 +740,10 @@ function serializeRealtimeMessage(row: Record<string, unknown>) {
       typeof row.template_name === 'string' ? row.template_name : null,
     message_id: typeof row.message_id === 'string' ? row.message_id : null,
     status: String(row.status),
+    sent_at: isoStringOrNull(row.sent_at),
+    delivered_at: isoStringOrNull(row.delivered_at),
+    read_at: isoStringOrNull(row.read_at),
+    failed_at: isoStringOrNull(row.failed_at),
     reply_to_message_id:
       typeof row.reply_to_message_id === 'string'
         ? row.reply_to_message_id
@@ -752,16 +778,15 @@ async function handleStatusUpdate(status: {
   timestamp: string;
   recipient_id: string;
 }) {
+  const tsDate = new Date(parseInt(status.timestamp) * 1000);
+
   // 1) Mirror onto messages (legacy behavior) - Meta's status values
   //    already match the CHECK constraint on messages.status. No
   //    single-row assumption: message_id is not unique across numbers.
   let existingMessages: ReturnType<typeof serializeMessageRow>[] = [];
   try {
     existingMessages = (
-      await db
-        .select()
-        .from(messages)
-        .where(eq(messages.messageId, status.id))
+      await db.select().from(messages).where(eq(messages.messageId, status.id))
     ).map(serializeMessageRow);
   } catch (error) {
     console.error('Error fetching message status:', error);
@@ -782,7 +807,7 @@ async function handleStatusUpdate(status: {
       updatedMessages = (
         await db
           .update(messages)
-          .set({ status: status.status })
+          .set(messageStatusUpdate(status.status, tsDate))
           .where(inArray(messages.id, messageIdsToUpdate))
           .returning()
       ).map(serializeMessageRow);
@@ -793,8 +818,6 @@ async function handleStatusUpdate(status: {
 
   // Webhook fan-out for this status change happens at the end of this
   // handler, so a slow subscriber cannot delay the broadcast mirror.
-  const tsDate = new Date(parseInt(status.timestamp) * 1000);
-
   let recipient: { id: string; status: string } | null = null;
   try {
     recipient =
@@ -862,16 +885,11 @@ async function handleStatusUpdate(status: {
     if (msgRow) {
       const accountId = msgRow.conversations.account_id;
       if (accountId) {
-        await dispatchWebhookEvent(
-          db,
-          accountId,
-          'message.status_updated',
-          {
-            whatsapp_message_id: status.id,
-            conversation_id: msgRow.conversation_id,
-            status: status.status,
-          }
-        );
+        await dispatchWebhookEvent(db, accountId, 'message.status_updated', {
+          whatsapp_message_id: status.id,
+          conversation_id: msgRow.conversation_id,
+          status: status.status,
+        });
       }
     }
   }
@@ -1214,9 +1232,9 @@ async function processMessage(
     ? message.type
     : message.type === 'button'
       ? 'interactive'
-    : message.type === 'sticker'
-      ? 'image' // stickers are images
-      : 'text'; // reaction, unknown → text fallback
+      : message.type === 'sticker'
+        ? 'image' // stickers are images
+        : 'text'; // reaction, unknown → text fallback
 
   if (message.type === 'sticker') {
     contentType = 'sticker';
@@ -1263,7 +1281,7 @@ async function processMessage(
             replyToMessageId: replyToInternalId,
             isForwarded: Boolean(
               message.context?.forwarded ||
-                message.context?.frequently_forwarded
+              message.context?.frequently_forwarded
             ),
             // Only populated for content_type='interactive'. Migration 010 added
             // the column; null for every other content_type so existing inserts
@@ -1687,11 +1705,7 @@ async function findOrCreateContact(
   // strict `phonesMatch` in JS on the small candidate set. The same
   // helper backs the manual contact form and CSV import, so all three
   // paths agree on what "same number" means (issue #212).
-  const existingContact = await findExistingContact(
-    db,
-    accountId,
-    phone
-  );
+  const existingContact = await findExistingContact(db, accountId, phone);
 
   if (existingContact) {
     // Update name if it changed
@@ -1722,9 +1736,7 @@ async function findOrCreateContact(
           .returning()
       )[0] ?? null;
 
-    return row
-      ? { contact: serializeContactRow(row), wasCreated: true }
-      : null;
+    return row ? { contact: serializeContactRow(row), wasCreated: true } : null;
   } catch (createError) {
     // Lost a race: a concurrent inbound delivery (or another path)
     // created this contact between our lookup and insert, and the

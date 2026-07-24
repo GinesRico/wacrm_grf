@@ -98,7 +98,10 @@ function text(value) {
 function whaticketSystemMessageText(value) {
   const raw = text(value);
   if (!raw) return null;
-  const cleaned = raw.replace(/^[_*]+|[_*]+$/g, '').trim();
+  const cleaned = raw
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/^[\s_*~\-\u2013\u2014]+|[\s_*~\-\u2013\u2014]+$/g, '')
+    .trim();
   if (isWhaticketSystemText(cleaned)) {
     return cleaned;
   }
