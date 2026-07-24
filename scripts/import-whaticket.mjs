@@ -138,6 +138,14 @@ function normalizePhone(value) {
   return String(value ?? '').replace(/\D/g, '');
 }
 
+function hasUsefulContactName(name, phone) {
+  const normalizedName = normalizePhone(name);
+  const normalizedPhone = normalizePhone(phone);
+  const trimmedName = text(name);
+  if (!trimmedName) return false;
+  return !normalizedPhone || normalizedName !== normalizedPhone;
+}
+
 function normalizeColor(value) {
   return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
     ? value
@@ -658,6 +666,60 @@ async function copyContactAvatar(ctx, row, mediaMode, warnings) {
   );
 }
 
+async function findExistingContactForImport(client, accountId, phoneNormalized) {
+  if (!phoneNormalized) return null;
+  return queryOne(
+    client,
+    `
+    select id, phone, phone_normalized, name, email, avatar_url
+    from contacts
+    where account_id = $1
+      and (
+        phone_normalized = $2
+        or regexp_replace(coalesce(phone, ''), '\\D', '', 'g') = $2
+        or regexp_replace(coalesce(phone_normalized, ''), '\\D', '', 'g') = $2
+      )
+    order by
+      case
+        when phone_normalized = $2 then 0
+        when regexp_replace(coalesce(phone, ''), '\\D', '', 'g') = $2 then 1
+        else 2
+      end,
+      case
+        when nullif(trim(coalesce(name, '')), '') is not null
+         and regexp_replace(coalesce(name, ''), '\\D', '', 'g') <> $2
+        then 0
+        else 1
+      end,
+      created_at asc
+    limit 1
+    `,
+    [accountId, phoneNormalized]
+  );
+}
+
+async function repairExistingContactBasics(client, contact, row, phoneNormalized) {
+  const phone = text(row.number) ?? text(row.lid);
+  const nextName =
+    hasUsefulContactName(row.name, phone) && !hasUsefulContactName(contact.name, contact.phone)
+      ? text(row.name)
+      : contact.name;
+  const nextEmail = contact.email ?? text(row.email);
+
+  await exec(
+    client,
+    `
+    update contacts
+       set phone_normalized = coalesce(nullif(phone_normalized, ''), $2),
+           name = $3,
+           email = $4,
+           updated_at = now()
+     where id = $1
+    `,
+    [contact.id, phoneNormalized || null, nextName, nextEmail]
+  );
+}
+
 async function ensureContact(client, ctx, row, mediaMode, warnings) {
   const legacyId = legacy(row.legacyId);
   const mapped = await getMap(
@@ -676,13 +738,11 @@ async function ensureContact(client, ctx, row, mediaMode, warnings) {
 
   const phone = text(row.number) ?? text(row.lid) ?? `legacy-${legacyId}`;
   const phoneNormalized = normalizePhone(phone);
-  const existing = phoneNormalized
-    ? await queryOne(
-        client,
-        'select id from contacts where account_id = $1 and phone_normalized = $2',
-        [ctx.accountId, phoneNormalized]
-      )
-    : null;
+  const existing = await findExistingContactForImport(
+    client,
+    ctx.accountId,
+    phoneNormalized
+  );
   const contactId = existing?.id ?? crypto.randomUUID();
   const avatarUrl = await copyContactAvatar(ctx, row, mediaMode, warnings);
   if (!existing) {
@@ -704,8 +764,11 @@ async function ensureContact(client, ctx, row, mediaMode, warnings) {
         dateOrNow(row.updatedAt),
       ]
     );
-  } else if (ctx.repairMedia) {
-    await repairContactAvatar(client, ctx, contactId, row, mediaMode, warnings);
+  } else {
+    await repairExistingContactBasics(client, existing, row, phoneNormalized);
+    if (ctx.repairMedia) {
+      await repairContactAvatar(client, ctx, contactId, row, mediaMode, warnings);
+    }
   }
   await setMap(
     client,
