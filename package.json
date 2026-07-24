@@ -42,6 +42,7 @@
                     "import:whaticket":  "node scripts/import-whaticket.mjs",
                     "migrate:whaticket":  "node scripts/migrate-whaticket-progressive.mjs",
                     "verify:whaticket-bridge":  "node scripts/verify-whaticket-bridge.mjs",
+                    "dedupe:contacts":  "node scripts/dedupe-contacts.mjs",
                     "format":  "prettier --write .",
                     "format:check":  "prettier --check .",
                     "test":  "vitest run",

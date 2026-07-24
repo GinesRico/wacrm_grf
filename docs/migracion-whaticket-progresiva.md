@@ -133,6 +133,26 @@ si `profilePicUrl` apunta a un fichero/cache existente en el snapshot `public`,
 se copia al paquete y se sube/copia durante el import. Si no existe el fichero,
 WACRM deja `contacts.avatar_url` vacio para no mantener enlaces rotos.
 
+## Deduplicar Contactos
+
+Si WhaTicket trae varios contactos legacy con el mismo numero y nombres
+distintos, puedes fusionarlos por `phone_normalized`. Primero revisa en
+dry-run:
+
+```bash
+pnpm dedupe:contacts --account=4441e304-18b7-487f-98c3-57a101728091
+```
+
+Si el resumen es correcto, aplica:
+
+```bash
+pnpm dedupe:contacts --account=4441e304-18b7-487f-98c3-57a101728091 --apply
+```
+
+El script conserva el contacto con mejor informacion, mueve conversaciones y
+referencias al contacto canonico, actualiza `whaticket_legacy_map` y elimina los
+duplicados.
+
 ## Incrementalidad
 
 Las fases de backup/restauracion/exportacion son de refresco completo:
