@@ -1678,6 +1678,16 @@ function PreviewMessageBubble({
   templateFallbackPayload?: InteractiveMessagePayload | null;
 }) {
   const tBubble = useTranslations('Inbox.bubble');
+  if (message.content_type === 'system') {
+    return (
+      <div className="flex justify-center py-1">
+        <div className="bg-background/85 text-muted-foreground max-w-[80%] rounded-full px-4 py-2 text-center text-xs italic shadow-sm">
+          <WhatsAppText text={message.content_text || ''} />
+        </div>
+      </div>
+    );
+  }
+
   const isAgent =
     message.sender_type === 'agent' || message.sender_type === 'bot';
   const templatePayload = mergePreviewTemplatePayload(
