@@ -228,6 +228,40 @@ export const platformAccountInvites = pgTable(
   (table) => [index('idx_platform_account_invites_pending').on(table.expiresAt)]
 );
 
+export const platformAccountRequests = pgTable(
+  'platform_account_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountName: text('account_name').notNull(),
+    ownerName: text('owner_name').notNull(),
+    ownerEmail: text('owner_email').notNull(),
+    phone: text('phone'),
+    notes: text('notes'),
+    status: text('status').notNull().default('pending'),
+    reviewedByUserId: text('reviewed_by_user_id').references(() => authUser.id, {
+      onDelete: 'set null',
+    }),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('idx_platform_account_requests_status_created').on(
+      table.status,
+      table.createdAt
+    ),
+    check(
+      'platform_account_requests_status_check',
+      sql`${table.status} in ('pending', 'approved', 'rejected')`
+    ),
+  ]
+);
+
 export const contacts = pgTable(
   'contacts',
   {

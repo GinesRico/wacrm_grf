@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -130,6 +131,7 @@ export function StartConversationButton({
   const [selectedContactId, setSelectedContactId] = useState<string | null>(
     null
   );
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const selectedContact = useMemo(
     () => contacts.find((c) => c.id === selectedContactId) ?? null,
@@ -198,6 +200,17 @@ export function StartConversationButton({
   useEffect(() => {
     if (open) void loadData();
   }, [open, loadData]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -340,6 +353,7 @@ export function StartConversationButton({
               <div className="relative">
                 <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
                 <Input
+                  ref={searchInputRef}
                   value={query}
                   onChange={(event) => {
                     setQuery(event.target.value);
@@ -402,15 +416,20 @@ export function StartConversationButton({
             ) : null}
           </div>
 
-          <DialogFooter className="border-border bg-background border-t px-5 py-3">
+          <DialogFooter className="border-border bg-background mt-0 flex-row justify-end gap-2 border-t px-5 py-3">
             <Button
               variant="outline"
               onClick={() => setOpen(false)}
               disabled={submitting}
+              className="min-w-24"
             >
               {t('cancel')}
             </Button>
-            <Button onClick={handleSubmit} disabled={!canSubmit || submitting}>
+            <Button
+              onClick={handleSubmit}
+              disabled={!canSubmit || submitting}
+              className="min-w-20"
+            >
               {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
               {t('submit')}
             </Button>
