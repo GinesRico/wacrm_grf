@@ -15,6 +15,7 @@ import {
 } from '@/lib/flows/meta-send';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getWhatsAppConfigForConversation } from '@/lib/whatsapp/config';
+import { maybeSendTypingIndicatorForConversation } from '@/lib/whatsapp/typing-indicator';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -213,6 +214,13 @@ async function sendViaMeta(
   // Same phone-variant retry as /api/whatsapp/send — Meta sandbox and
   // numbers registered with/without a trunk 0 both require this to
   // reliably land a message.
+  await maybeSendTypingIndicatorForConversation({
+    accountId: input.accountId,
+    conversationId: input.conversationId,
+    config,
+    accessToken,
+  });
+
   const variants = phoneVariants(sanitized);
   let workingPhone = sanitized;
   let waMessageId = '';

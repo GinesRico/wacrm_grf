@@ -50,6 +50,7 @@ interface AccountSummary {
   allow_ai: boolean;
   allow_api: boolean;
   allow_broadcasts: boolean;
+  send_typing_indicators: boolean;
   trial_ends_at: string | null;
   default_currency: string;
 }

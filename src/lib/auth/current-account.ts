@@ -30,6 +30,7 @@ export interface DbAccountContext {
     allow_ai: boolean;
     allow_api: boolean;
     allow_broadcasts: boolean;
+    send_typing_indicators: boolean;
     trial_ends_at: string | null;
     default_currency: string;
   };
@@ -72,6 +73,7 @@ export async function getCurrentDbAccount(): Promise<DbAccountContext> {
       allowAi: crmAccounts.allowAi,
       allowApi: crmAccounts.allowApi,
       allowBroadcasts: crmAccounts.allowBroadcasts,
+      sendTypingIndicators: crmAccounts.sendTypingIndicators,
       trialEndsAt: crmAccounts.trialEndsAt,
       defaultCurrency: crmAccounts.defaultCurrency,
     })
@@ -109,6 +111,7 @@ export async function getCurrentDbAccount(): Promise<DbAccountContext> {
       allow_ai: row.allowAi,
       allow_api: row.allowApi,
       allow_broadcasts: row.allowBroadcasts,
+      send_typing_indicators: row.sendTypingIndicators,
       trial_ends_at: row.trialEndsAt?.toISOString() ?? null,
       default_currency: row.defaultCurrency,
     },

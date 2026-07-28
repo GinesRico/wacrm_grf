@@ -215,6 +215,43 @@ export async function getSubscribedApps(
 // Sending
 // ============================================================
 
+export interface SendTypingIndicatorArgs {
+  phoneNumberId: string
+  accessToken: string
+  /** Meta's wamid of the inbound customer message we are about to answer. */
+  messageId: string
+}
+
+/**
+ * Mark an inbound message as read and show WhatsApp's text typing
+ * indicator to the customer.
+ *
+ * Meta ties typing indicators to read receipts: disabling this feature
+ * in account settings avoids both the indicator and the read receipt.
+ */
+export async function sendTypingIndicator(
+  args: SendTypingIndicatorArgs,
+): Promise<void> {
+  const { phoneNumberId, accessToken, messageId } = args
+  const url = `${META_API_BASE}/${phoneNumberId}/messages`
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    }),
+  })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta API error: ${response.status}`)
+  }
+}
+
 export interface SendTextMessageArgs {
   phoneNumberId: string
   accessToken: string

@@ -53,29 +53,52 @@ export async function PATCH(request: Request) {
     if (!limit.success) return rateLimitResponse(limit);
 
     const body = (await request.json().catch(() => null)) as
-      | { name?: unknown }
+      | { name?: unknown; send_typing_indicators?: unknown }
       | null;
-    const rawName = body?.name;
-
-    if (typeof rawName !== "string") {
+    if (!body || typeof body !== "object") {
       return NextResponse.json(
-        { error: "'name' must be a string" },
+        { error: "Invalid request body" },
         { status: 400 },
       );
     }
 
-    const name = rawName.trim();
-    if (name.length === 0) {
-      return NextResponse.json(
-        { error: "Account name cannot be empty" },
-        { status: 400 },
-      );
+    const patch: Partial<typeof crmAccounts.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+
+    if ("name" in body) {
+      const rawName = body.name;
+      if (typeof rawName !== "string") {
+        return NextResponse.json(
+          { error: "'name' must be a string" },
+          { status: 400 },
+        );
+      }
+
+      const name = rawName.trim();
+      if (name.length === 0) {
+        return NextResponse.json(
+          { error: "Account name cannot be empty" },
+          { status: 400 },
+        );
+      }
+      if (name.length > MAX_NAME_LEN) {
+        return NextResponse.json(
+          { error: `Account name must be ${MAX_NAME_LEN} characters or fewer` },
+          { status: 400 },
+        );
+      }
+      patch.name = name;
     }
-    if (name.length > MAX_NAME_LEN) {
-      return NextResponse.json(
-        { error: `Account name must be ${MAX_NAME_LEN} characters or fewer` },
-        { status: 400 },
-      );
+
+    if ("send_typing_indicators" in body) {
+      if (typeof body.send_typing_indicators !== "boolean") {
+        return NextResponse.json(
+          { error: "'send_typing_indicators' must be a boolean" },
+          { status: 400 },
+        );
+      }
+      patch.sendTypingIndicators = body.send_typing_indicators;
     }
 
     // RLS allows this UPDATE because accounts_update requires
@@ -83,9 +106,13 @@ export async function PATCH(request: Request) {
     // guaranteed the caller is admin+.
     const [account] = await db
       .update(crmAccounts)
-      .set({ name, updatedAt: new Date() })
+      .set(patch)
       .where(eq(crmAccounts.id, ctx.accountId))
-      .returning({ id: crmAccounts.id, name: crmAccounts.name });
+      .returning({
+        id: crmAccounts.id,
+        name: crmAccounts.name,
+        send_typing_indicators: crmAccounts.sendTypingIndicators,
+      });
 
     return NextResponse.json({ account });
   } catch (err) {

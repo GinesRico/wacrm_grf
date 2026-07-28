@@ -14,6 +14,7 @@ import { contacts, conversations, messages } from '@/db/schema';
 import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getWhatsAppConfigForConversation } from '@/lib/whatsapp/config';
+import { maybeSendTypingIndicatorForConversation } from '@/lib/whatsapp/typing-indicator';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -108,6 +109,13 @@ export async function engineSendText(
     });
     return r.messageId;
   };
+
+  await maybeSendTypingIndicatorForConversation({
+    accountId: args.accountId,
+    conversationId: args.conversationId,
+    config,
+    accessToken,
+  });
 
   const variants = phoneVariants(sanitized);
   let workingPhone = sanitized;
@@ -230,6 +238,13 @@ export async function engineSendMedia(
     });
     return r.messageId;
   };
+
+  await maybeSendTypingIndicatorForConversation({
+    accountId: args.accountId,
+    conversationId: args.conversationId,
+    config,
+    accessToken,
+  });
 
   const variants = phoneVariants(sanitized);
   let workingPhone = sanitized;
@@ -408,6 +423,13 @@ async function sendInteractiveViaMeta(
   // Same phone-variant retry as automations/meta-send.ts. Numbers
   // registered with/without a trunk 0 + Meta's sandbox quirks all
   // need this to reliably land a message.
+  await maybeSendTypingIndicatorForConversation({
+    accountId: input.accountId,
+    conversationId: input.conversationId,
+    config,
+    accessToken,
+  });
+
   const variants = phoneVariants(sanitized);
   let workingPhone = sanitized;
   let waMessageId = '';

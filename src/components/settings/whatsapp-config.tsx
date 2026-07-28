@@ -21,6 +21,7 @@ import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { SettingsPanelHead } from './settings-panel-head';
@@ -58,12 +59,22 @@ export function WhatsAppConfig() {
   // context and key every read off it — so a teammate who just
   // joined an account sees the inviter's saved config without
   // having to re-enter anything.
-  const { user, accountId, loading: authLoading, profileLoading } = useAuth();
+  const {
+    user,
+    account,
+    accountId,
+    canEditSettings,
+    refreshProfile,
+    loading: authLoading,
+    profileLoading,
+  } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [savingTypingSetting, setSavingTypingSetting] = useState(false);
+  const [sendTypingIndicators, setSendTypingIndicators] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [config, setConfig] = useState<WhatsAppConfigType | null>(null);
   const [configs, setConfigs] = useState<WhatsAppConfigType[]>([]);
@@ -115,6 +126,10 @@ export function WhatsAppConfig() {
     typeof window !== 'undefined'
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
+
+  useEffect(() => {
+    setSendTypingIndicators(Boolean(account?.send_typing_indicators));
+  }, [account?.send_typing_indicators]);
 
   function hydrateForm(row: WhatsAppConfigType | null) {
     setConfig(row);
@@ -441,6 +456,31 @@ export function WhatsAppConfig() {
     }
   }
 
+  async function handleTypingIndicatorChange(checked: boolean) {
+    const previous = sendTypingIndicators;
+    setSendTypingIndicators(checked);
+    setSavingTypingSetting(true);
+    try {
+      const res = await fetch('/api/account', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ send_typing_indicators: checked }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error ?? t('typingSettingSaveFailed'));
+      await refreshProfile();
+      toast.success(
+        checked ? t('typingSettingEnabled') : t('typingSettingDisabled'),
+      );
+    } catch (error) {
+      console.error('Typing indicator setting failed:', error);
+      setSendTypingIndicators(previous);
+      toast.error(t('typingSettingSaveFailed'));
+    } finally {
+      setSavingTypingSetting(false);
+    }
+  }
+
   function handleNewLine() {
     hydrateForm(null);
     setConnectionStatus('disconnected');
@@ -735,6 +775,35 @@ export function WhatsAppConfig() {
             )}
           </Alert>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-foreground">
+              {t('privacyPresenceTitle')}
+            </CardTitle>
+            <CardDescription className="text-muted-foreground">
+              {t('privacyPresenceDesc')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  {t('typingIndicators')}
+                </p>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {t('typingIndicatorsDesc')}
+                </p>
+              </div>
+              <Switch
+                checked={sendTypingIndicators}
+                onCheckedChange={handleTypingIndicatorChange}
+                disabled={!canEditSettings || savingTypingSetting}
+                aria-label={t('typingIndicators')}
+              />
+            </div>
+          </CardContent>
+        </Card>
 
         {/* API Credentials */}
         <Card>

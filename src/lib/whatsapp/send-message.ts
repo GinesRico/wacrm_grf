@@ -30,6 +30,7 @@ import {
   sanitizePhoneForMeta,
 } from '@/lib/whatsapp/phone-utils';
 import { getWhatsAppConfigForConversation } from '@/lib/whatsapp/config';
+import { maybeSendTypingIndicatorForConversation } from '@/lib/whatsapp/typing-indicator';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { getInboxConversationById } from '@/lib/inbox/conversations';
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
@@ -501,6 +502,12 @@ export async function sendMessageToConversation(
 
   let waMessageId = '';
   let workingPhone = sanitizedPhone;
+  await maybeSendTypingIndicatorForConversation({
+    accountId,
+    conversationId,
+    config,
+    accessToken,
+  });
   try {
     let lastError: unknown = null;
     for (const variant of phoneVariants(sanitizedPhone)) {

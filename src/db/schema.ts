@@ -125,6 +125,9 @@ export const crmAccounts = pgTable(
     allowAi: boolean('allow_ai').notNull().default(false),
     allowApi: boolean('allow_api').notNull().default(false),
     allowBroadcasts: boolean('allow_broadcasts').notNull().default(true),
+    sendTypingIndicators: boolean('send_typing_indicators')
+      .notNull()
+      .default(false),
     trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
     defaultCurrency: text('default_currency').notNull().default('USD'),
     createdAt: timestamp('created_at', { withTimezone: true })

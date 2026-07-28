@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERACTIVE_LIMITS,
+  sendTypingIndicator,
   sendInteractiveButtons,
   sendInteractiveList,
 } from "./meta-api";
@@ -20,6 +21,43 @@ const BASE_ARGS = {
   to: "1234567890",
   bodyText: "Body text",
 } as const;
+
+describe("sendTypingIndicator", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("marks the inbound message as read and requests a text typing indicator", async () => {
+    let captured: { url: string; body: unknown; method: string } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        captured = {
+          url,
+          method: init.method ?? "GET",
+          body: JSON.parse(String(init.body)),
+        };
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }),
+    );
+
+    await sendTypingIndicator({
+      phoneNumberId: "test-phone",
+      accessToken: "test-token",
+      messageId: "wamid.INBOUND",
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured!.method).toBe("POST");
+    expect(captured!.url).toContain("test-phone/messages");
+    expect(captured!.body).toMatchObject({
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: "wamid.INBOUND",
+      typing_indicator: { type: "text" },
+    });
+  });
+});
 
 describe("sendInteractiveButtons — validation", () => {
   beforeEach(() => {
