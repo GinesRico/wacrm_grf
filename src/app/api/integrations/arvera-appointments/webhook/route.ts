@@ -15,6 +15,7 @@ import {
   type ArveraAppointmentRecord,
   type ArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments';
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
 
 export async function POST(request: Request) {
   const token = new URL(request.url).searchParams.get('token') ?? '';
@@ -72,7 +73,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Webhook event not saved' }, { status: 500 });
   }
 
-  const contactId = await findContactId(connection.account_id, appointment);
+  const deliveryTarget = await resolveDeliveryTarget(connection.account_id, appointment);
+  const contactId = deliveryTarget.contactId;
   const [record] = await db
     .insert(appointmentRecords)
     .values({
@@ -123,6 +125,7 @@ export async function POST(request: Request) {
       triggerType,
       contactId,
       context: {
+        conversation_id: deliveryTarget.conversationId,
         vars: {
           event_type: eventType,
           event_timestamp: String(eventTimestamp),
@@ -161,6 +164,33 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ ok: true, appointment_record: record });
+}
+
+async function resolveDeliveryTarget(
+  accountId: string,
+  appointment: ArveraAppointmentRecord,
+): Promise<{ contactId: string | null; conversationId?: string }> {
+  const phone = typeof appointment.Telefono === 'string' ? appointment.Telefono.trim() : '';
+  if (phone) {
+    try {
+      const resolved = await resolveConversationByPhone(
+        null,
+        accountId,
+        phone,
+        appointment.Nombre ?? null,
+      );
+      return {
+        contactId: resolved.contactId,
+        conversationId: resolved.conversationId,
+      };
+    } catch (error) {
+      console.warn('[arvera appointments webhook] could not resolve WhatsApp conversation:', error);
+    }
+  }
+
+  return {
+    contactId: await findContactId(accountId, appointment),
+  };
 }
 
 function serializeConnection(

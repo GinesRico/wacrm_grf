@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { asc, eq } from 'drizzle-orm'
+import { asc, desc, eq } from 'drizzle-orm'
 
 import { db } from '@/db/client'
 import {
@@ -8,6 +8,7 @@ import {
   pipelineStages,
   pipelines,
   tags,
+  whatsappConfig,
 } from '@/db/schema'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
@@ -15,7 +16,7 @@ export async function GET() {
   try {
     const { accountId } = await getCurrentAccount()
 
-    const [tagRows, templateRows, fieldRows, pipelineRows, stageRows] =
+    const [tagRows, templateRows, fieldRows, pipelineRows, stageRows, whatsappRows] =
       await Promise.all([
         db
           .select()
@@ -48,6 +49,21 @@ export async function GET() {
           .innerJoin(pipelines, eq(pipelineStages.pipelineId, pipelines.id))
           .where(eq(pipelines.accountId, accountId))
           .orderBy(asc(pipelineStages.position)),
+        db
+          .select({
+            id: whatsappConfig.id,
+            label: whatsappConfig.label,
+            phoneNumberId: whatsappConfig.phoneNumberId,
+            status: whatsappConfig.status,
+            isDefault: whatsappConfig.isDefault,
+          })
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.accountId, accountId))
+          .orderBy(
+            desc(whatsappConfig.isDefault),
+            asc(whatsappConfig.label),
+            asc(whatsappConfig.createdAt),
+          ),
       ])
 
     return NextResponse.json({
@@ -100,6 +116,13 @@ export async function GET() {
         name: row.name,
         pipeline_id: row.pipelineId,
         position: row.position,
+      })),
+      whatsappLines: whatsappRows.map((row) => ({
+        id: row.id,
+        label: row.label,
+        phone_number_id: row.phoneNumberId,
+        status: row.status,
+        is_default: row.isDefault,
       })),
     })
   } catch (err) {

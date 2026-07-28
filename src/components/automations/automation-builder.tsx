@@ -195,6 +195,16 @@ const APPOINTMENT_WEBHOOK_VARIABLES = [
   "{{ vars.Estado }}",
 ]
 
+function renderTemplatePreviewText(
+  text: string,
+  values: Record<string, string>,
+): string {
+  return text.replace(/\{\{(\d+)\}\}/g, (_, raw: string) => {
+    const value = values[raw]
+    return value && value.trim().length > 0 ? value : `{{${raw}}}`
+  })
+}
+
 function cid(): string {
   return (
     "c_" +
@@ -281,6 +291,7 @@ interface AutomationResources {
   customFields: CustomField[]
   pipelines: PipelineOption[]
   stages: PipelineStageOption[]
+  whatsappLines: WhatsAppLineOption[]
   paymentsEnabled: boolean
   appointmentsEnabled: boolean
 }
@@ -297,6 +308,14 @@ interface PipelineStageOption {
   position: number
 }
 
+interface WhatsAppLineOption {
+  id: string
+  label: string | null
+  phone_number_id: string
+  status: string
+  is_default: boolean
+}
+
 const ResourcesContext = createContext<AutomationResources>({
   tags: [],
   members: [],
@@ -304,6 +323,7 @@ const ResourcesContext = createContext<AutomationResources>({
   customFields: [],
   pipelines: [],
   stages: [],
+  whatsappLines: [],
   paymentsEnabled: false,
   appointmentsEnabled: false,
 })
@@ -319,6 +339,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   const [customFields, setCustomFields] = useState<CustomField[]>([])
   const [pipelines, setPipelines] = useState<PipelineOption[]>([])
   const [stages, setStages] = useState<PipelineStageOption[]>([])
+  const [whatsappLines, setWhatsappLines] = useState<WhatsAppLineOption[]>([])
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false)
 
@@ -334,6 +355,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
       setCustomFields((data.customFields as CustomField[] | undefined) ?? [])
       setPipelines((data.pipelines as PipelineOption[] | undefined) ?? [])
       setStages((data.stages as PipelineStageOption[] | undefined) ?? [])
+      setWhatsappLines((data.whatsappLines as WhatsAppLineOption[] | undefined) ?? [])
     })()
 
     void (async () => {
@@ -387,6 +409,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
         customFields,
         pipelines,
         stages,
+        whatsappLines,
         paymentsEnabled,
         appointmentsEnabled,
       }}
@@ -638,6 +661,7 @@ function DealPipelineFields({
 function SendTemplateFields({
   templateName,
   language,
+  whatsappConfigId,
   variables,
   headerText,
   buttonParams,
@@ -646,13 +670,14 @@ function SendTemplateFields({
 }: {
   templateName: string
   language: string
+  whatsappConfigId: string
   variables: Record<string, string>
   headerText: string
   buttonParams: Record<string, string>
   onChange: (patch: Record<string, unknown>) => void
   t: ReturnType<typeof useTranslations>
 }) {
-  const { templates } = useResources()
+  const { templates, whatsappLines } = useResources()
   const variableListId = useId()
   const variableSuggestions = [
     ...APPOINTMENT_WEBHOOK_VARIABLES,
@@ -782,11 +807,77 @@ function SendTemplateFields({
         </select>
       </FieldBlock>
 
+      {whatsappLines.length > 0 && (
+        <FieldBlock label={t("templates.lineLabel")}>
+          <select
+            value={whatsappConfigId}
+            onChange={(e) => onChange({ whatsapp_config_id: e.target.value })}
+            className={SELECT_CLASS}
+          >
+            <option value="">{t("templates.defaultLine")}</option>
+            {whatsappLines.map((line) => (
+              <option
+                key={line.id}
+                value={line.id}
+                disabled={line.status !== "connected"}
+              >
+                {line.label || line.phone_number_id}
+                {line.is_default ? ` (${t("templates.defaultLineBadge")})` : ""}
+                {line.status !== "connected" ? ` - ${line.status}` : ""}
+              </option>
+            ))}
+          </select>
+        </FieldBlock>
+      )}
+
       <datalist id={variableListId}>
         {variableSuggestions.map((value) => (
           <option key={value} value={value} />
         ))}
       </datalist>
+
+      {selectedTemplate && (
+        <div className="rounded-md border border-border bg-background/50 p-3">
+          <p className="mb-1 text-xs font-medium text-muted-foreground">
+            {t("templates.previewLabel")}
+          </p>
+          {selectedTemplate.header_type === "text" && selectedTemplate.header_content && (
+            <p className="mb-2 text-xs font-semibold text-foreground">
+              {renderTemplatePreviewText(selectedTemplate.header_content, {
+                "1": headerText,
+              })}
+            </p>
+          )}
+          <p className="whitespace-pre-wrap text-sm text-foreground">
+            {renderTemplatePreviewText(selectedTemplate.body_text, variables)}
+          </p>
+          {selectedTemplate.footer_text && (
+            <p className="mt-2 text-xs italic text-muted-foreground">
+              {selectedTemplate.footer_text}
+            </p>
+          )}
+          {selectedTemplate.buttons && selectedTemplate.buttons.length > 0 && (
+            <div className="mt-3 flex flex-col gap-1.5">
+              {selectedTemplate.buttons.map((button, index) => {
+                const text =
+                  button.type === "URL"
+                    ? `${button.text}: ${renderTemplatePreviewText(button.url, {
+                        "1": buttonParams[String(index)] ?? "",
+                      })}`
+                    : button.text
+                return (
+                  <div
+                    key={`${button.type}-${index}`}
+                    className="rounded-md border border-border bg-muted px-2 py-1.5 text-center text-xs font-medium text-primary"
+                  >
+                    {text}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {needsHeaderText && (
         <FieldBlock label={t("templates.headerVariableLabel")}>
@@ -1597,6 +1688,7 @@ function StepEditor({
         <SendTemplateFields
           templateName={(cfg.template_name as string) ?? ""}
           language={(cfg.language as string) ?? ""}
+          whatsappConfigId={(cfg.whatsapp_config_id as string) ?? ""}
           variables={(cfg.variables as Record<string, string> | undefined) ?? {}}
           headerText={(cfg.header_text as string) ?? ""}
           buttonParams={(cfg.button_params as Record<string, string> | undefined) ?? {}}

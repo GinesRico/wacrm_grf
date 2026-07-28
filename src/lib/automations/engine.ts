@@ -61,6 +61,7 @@ import {
   renderAppointmentsMessage,
   requireActiveArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 
 function serializeAutomationStep(row: typeof automationSteps.$inferSelect): AutomationStep {
   return {
@@ -455,7 +456,7 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       const cfg = step.step_config as SendTemplateStepConfig
       if (!args.contactId) throw new Error('send_template needs a contact')
       if (!cfg.template_name) throw new Error('send_template needs template_name')
-      const conversationId = await resolveConversationId(args)
+      const conversationId = await resolveConversationId(args, cfg.whatsapp_config_id)
       // Meta templates use positional {{1}}, {{2}}, … placeholders, so
       // we MUST emit params in strict numeric order. Lexicographic sort
       // of "1", "2", …, "10" yields "1", "10", "2", … which silently
@@ -955,7 +956,33 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
  * manual engine POSTs. Throws if none exists — send steps have
  * no meaningful target without a conversation.
  */
-async function resolveConversationId(args: ExecuteArgs): Promise<string> {
+async function resolveConversationId(
+  args: ExecuteArgs,
+  whatsappConfigId?: string | null,
+): Promise<string> {
+  if (whatsappConfigId) {
+    if (!args.contactId) throw new Error('cannot resolve conversation: no contact')
+    const [contact] = await db
+      .select({ phone: contacts.phone, name: contacts.name })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.id, args.contactId),
+          eq(contacts.accountId, args.automation.account_id),
+        ),
+      )
+      .limit(1)
+    if (!contact?.phone) throw new Error('cannot resolve conversation: contact has no phone')
+    const resolved = await resolveConversationByPhone(
+      null,
+      args.automation.account_id,
+      contact.phone,
+      contact.name,
+      whatsappConfigId,
+    )
+    return resolved.conversationId
+  }
+
   const fromCtx = args.context.conversation_id
   if (fromCtx) return fromCtx
   if (!args.contactId) throw new Error('cannot resolve conversation: no contact')

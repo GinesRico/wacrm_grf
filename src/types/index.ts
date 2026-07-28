@@ -556,6 +556,7 @@ export type SendListStepConfig = InteractiveMessagePayload;
 export interface SendTemplateStepConfig {
   template_name: string;
   language?: string;
+  whatsapp_config_id?: string;
   variables?: Record<string, string>;
   header_text?: string;
   button_params?: Record<string, string>;
