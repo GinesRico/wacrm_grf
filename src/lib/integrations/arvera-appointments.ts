@@ -86,10 +86,13 @@ export interface ArveraAppointmentRecord {
   Servicio?: string;
   startTime?: string;
   endTime?: string;
+  fecha?: string;
+  hora?: string;
   Matricula?: string | null;
   Modelo?: string | null;
   Notas?: string | null;
   Estado?: string;
+  CancelToken?: string | null;
   Url_Cancelacion?: string | null;
   url_cancelacion_corta?: string | null;
   [key: string]: unknown;

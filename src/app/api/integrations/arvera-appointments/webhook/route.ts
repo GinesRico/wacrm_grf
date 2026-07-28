@@ -120,6 +120,7 @@ export async function POST(request: Request) {
   const triggerType = eventToTrigger(eventType);
   if (triggerType) {
     const cancelUrl = appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? '';
+    const appointmentParts = formatAppointmentParts(appointment);
     void runAutomationsForTrigger({
       accountId: connection.account_id,
       triggerType,
@@ -137,6 +138,8 @@ export async function POST(request: Request) {
           appointment_status: appointment.Estado ?? '',
           appointment_start: appointment.startTime ?? '',
           appointment_end: appointment.endTime ?? '',
+          appointment_date: appointmentParts.date,
+          appointment_time: appointmentParts.time,
           appointment_service: appointment.Servicio ?? '',
           appointment_plate: appointment.Matricula ?? '',
           appointment_model: appointment.Modelo ?? '',
@@ -152,6 +155,8 @@ export async function POST(request: Request) {
           Servicio: appointment.Servicio ?? '',
           startTime: appointment.startTime ?? '',
           endTime: appointment.endTime ?? '',
+          Fecha: appointmentParts.date,
+          Hora: appointmentParts.time,
           Matricula: appointment.Matricula ?? '',
           Modelo: appointment.Modelo ?? '',
           Notas: appointment.Notas ?? '',
@@ -166,11 +171,40 @@ export async function POST(request: Request) {
   return NextResponse.json({ ok: true, appointment_record: record });
 }
 
+function formatAppointmentParts(appointment: ArveraAppointmentRecord): {
+  date: string;
+  time: string;
+} {
+  const explicitDate = typeof appointment.fecha === 'string' ? appointment.fecha.trim() : '';
+  const explicitTime = typeof appointment.hora === 'string' ? appointment.hora.trim() : '';
+  if (explicitDate || explicitTime) {
+    return { date: explicitDate, time: explicitTime };
+  }
+
+  if (!appointment.startTime) return { date: '', time: '' };
+  const date = new Date(appointment.startTime);
+  if (Number.isNaN(date.getTime())) return { date: '', time: '' };
+  return {
+    date: new Intl.DateTimeFormat('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      timeZone: 'Europe/Madrid',
+    }).format(date),
+    time: new Intl.DateTimeFormat('es-ES', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Europe/Madrid',
+    }).format(date),
+  };
+}
+
 async function resolveDeliveryTarget(
   accountId: string,
   appointment: ArveraAppointmentRecord,
 ): Promise<{ contactId: string | null; conversationId?: string }> {
-  const phone = typeof appointment.Telefono === 'string' ? appointment.Telefono.trim() : '';
+  const phone = normalizeAppointmentPhone(appointment.Telefono);
   if (phone) {
     try {
       const resolved = await resolveConversationByPhone(
@@ -193,6 +227,13 @@ async function resolveDeliveryTarget(
   };
 }
 
+function normalizeAppointmentPhone(phone: unknown): string {
+  if (typeof phone !== 'string') return '';
+  const digits = phone.replace(/\D/g, '');
+  if (/^[6789]\d{8}$/.test(digits)) return `34${digits}`;
+  return digits;
+}
+
 function serializeConnection(
   row: typeof integrationConnections.$inferSelect,
 ): ArveraAppointmentsConnection {
@@ -212,7 +253,7 @@ async function findContactId(
   accountId: string,
   appointment: ArveraAppointmentRecord,
 ): Promise<string | null> {
-  const phone = typeof appointment.Telefono === 'string' ? appointment.Telefono.trim() : '';
+  const phone = normalizeAppointmentPhone(appointment.Telefono);
   const email = typeof appointment.Email === 'string' ? appointment.Email.trim() : '';
 
   if (phone) {

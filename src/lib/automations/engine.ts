@@ -473,7 +473,13 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
               if (bNum) return 1
               return a.localeCompare(b)
             })
-            .map((k) => interpolate(String(cfg.variables![k]), args))
+            .map((k) => {
+              const value = interpolate(String(cfg.variables![k]), args)
+              if (!value.trim()) {
+                throw new Error(`send_template variable ${k} resolved empty`)
+              }
+              return value
+            })
         : []
       const buttonParams = cfg.button_params
         ? Object.fromEntries(
