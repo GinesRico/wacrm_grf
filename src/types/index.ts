@@ -557,6 +557,8 @@ export interface SendTemplateStepConfig {
   template_name: string;
   language?: string;
   variables?: Record<string, string>;
+  header_text?: string;
+  button_params?: Record<string, string>;
 }
 
 export interface TagStepConfig {

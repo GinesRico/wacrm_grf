@@ -117,20 +117,44 @@ export async function POST(request: Request) {
 
   const triggerType = eventToTrigger(eventType);
   if (triggerType) {
+    const cancelUrl = appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? '';
     void runAutomationsForTrigger({
       accountId: connection.account_id,
       triggerType,
       contactId,
       context: {
         vars: {
+          event_type: eventType,
+          event_timestamp: String(eventTimestamp),
           appointment_record_id: record.id,
           appointment_id: externalId,
-          appointment_status: appointment.Estado,
-          appointment_start: appointment.startTime,
-          appointment_end: appointment.endTime,
-          appointment_service: appointment.Servicio,
-          appointment_cancel_url:
-            appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? '',
+          appointment_customer_name: appointment.Nombre ?? '',
+          appointment_phone: appointment.Telefono ?? '',
+          appointment_email: appointment.Email ?? '',
+          appointment_status: appointment.Estado ?? '',
+          appointment_start: appointment.startTime ?? '',
+          appointment_end: appointment.endTime ?? '',
+          appointment_service: appointment.Servicio ?? '',
+          appointment_plate: appointment.Matricula ?? '',
+          appointment_model: appointment.Modelo ?? '',
+          appointment_notes: appointment.Notas ?? '',
+          appointment_cancel_url: cancelUrl,
+          appointment_cancel_token: appointment.CancelToken ?? '',
+          appointment_created_at: appointment.fecha_creacion ?? '',
+          appointment_updated_at: appointment.fecha_modificacion ?? '',
+          appointment_deleted_at: appointment.fecha_eliminacion ?? '',
+          Nombre: appointment.Nombre ?? '',
+          Telefono: appointment.Telefono ?? '',
+          Email: appointment.Email ?? '',
+          Servicio: appointment.Servicio ?? '',
+          startTime: appointment.startTime ?? '',
+          endTime: appointment.endTime ?? '',
+          Matricula: appointment.Matricula ?? '',
+          Modelo: appointment.Modelo ?? '',
+          Notas: appointment.Notas ?? '',
+          Estado: appointment.Estado ?? '',
+          Url_Cancelacion: appointment.Url_Cancelacion ?? '',
+          url_cancelacion_corta: appointment.url_cancelacion_corta ?? '',
         },
       },
     });

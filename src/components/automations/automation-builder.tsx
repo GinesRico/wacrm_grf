@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useId,
   useState,
   type ReactNode,
 } from "react"
@@ -64,6 +65,7 @@ import {
   blankListPayload,
 } from "@/components/interactive/interactive-builder"
 import { interactivePayloadPreviewText } from "@/lib/whatsapp/interactive"
+import { extractVariableIndices } from "@/lib/whatsapp/template-validators"
 import { cn } from "@/lib/utils"
 
 // ------------------------------------------------------------
@@ -169,6 +171,28 @@ const APPOINTMENT_SLOT_VARIABLES = [
   "{{ vars.contact_phone }}",
   "{{ vars.contact_email }}",
   "{{ vars.reply_id }}",
+]
+
+const APPOINTMENT_WEBHOOK_VARIABLES = [
+  "{{ vars.appointment_customer_name }}",
+  "{{ vars.appointment_phone }}",
+  "{{ vars.appointment_email }}",
+  "{{ vars.appointment_service }}",
+  "{{ vars.appointment_start }}",
+  "{{ vars.appointment_end }}",
+  "{{ vars.appointment_status }}",
+  "{{ vars.appointment_plate }}",
+  "{{ vars.appointment_model }}",
+  "{{ vars.appointment_notes }}",
+  "{{ vars.appointment_cancel_url }}",
+  "{{ vars.Nombre }}",
+  "{{ vars.Telefono }}",
+  "{{ vars.Email }}",
+  "{{ vars.Servicio }}",
+  "{{ vars.Matricula }}",
+  "{{ vars.Modelo }}",
+  "{{ vars.Notas }}",
+  "{{ vars.Estado }}",
 ]
 
 function cid(): string {
@@ -614,15 +638,51 @@ function DealPipelineFields({
 function SendTemplateFields({
   templateName,
   language,
+  variables,
+  headerText,
+  buttonParams,
   onChange,
   t,
 }: {
   templateName: string
   language: string
-  onChange: (patch: { template_name: string; language: string }) => void
+  variables: Record<string, string>
+  headerText: string
+  buttonParams: Record<string, string>
+  onChange: (patch: Record<string, unknown>) => void
   t: ReturnType<typeof useTranslations>
 }) {
   const { templates } = useResources()
+  const variableListId = useId()
+  const variableSuggestions = [
+    ...APPOINTMENT_WEBHOOK_VARIABLES,
+    ...APPOINTMENT_SLOT_VARIABLES,
+    "{{ message.text }}",
+  ]
+
+  function selectedTemplateFor(name: string, lang: string) {
+    return templates.find(
+      (tmpl) => tmpl.name === name && (tmpl.language ?? "en_US") === (lang || "en_US"),
+    )
+  }
+
+  function patchVariable(index: number, value: string) {
+    onChange({
+      variables: {
+        ...variables,
+        [String(index)]: value,
+      },
+    })
+  }
+
+  function patchButtonParam(index: number, value: string) {
+    onChange({
+      button_params: {
+        ...buttonParams,
+        [String(index)]: value,
+      },
+    })
+  }
 
   if (templates.length === 0) {
     return (
@@ -656,33 +716,121 @@ function SendTemplateFields({
   const hasMatch = templates.some(
     (t) => toValue(t.name, t.language ?? "en_US") === current,
   )
+  const selectedTemplate = selectedTemplateFor(templateName, language)
+  const bodyVars = selectedTemplate
+    ? extractVariableIndices(selectedTemplate.body_text)
+    : []
+  const needsHeaderText =
+    selectedTemplate?.header_type === "text" &&
+    extractVariableIndices(selectedTemplate.header_content ?? "").length > 0
+  const buttonSlots =
+    selectedTemplate?.buttons
+      ?.map((button, index) => {
+        if (
+          button.type === "URL" &&
+          extractVariableIndices(button.url).length > 0
+        ) {
+          return { index, label: t("templates.urlButtonVariableLabel", { index: index + 1 }) }
+        }
+        if (button.type === "COPY_CODE") {
+          return { index, label: t("templates.copyCodeButtonVariableLabel", { index: index + 1 }) }
+        }
+        return null
+      })
+      .filter((slot): slot is { index: number; label: string } => Boolean(slot)) ?? []
 
   return (
-    <FieldBlock label={t("templates.templateLabel")}>
-      <select
-        value={current}
-        onChange={(e) => {
-          const [name, lang] = e.target.value.split("::")
-          onChange({ template_name: name ?? "", language: lang ?? "" })
-        }}
-        className={SELECT_CLASS}
-      >
-        <option value="">{t("templates.select")}</option>
-        {templates.map((tmpl) => {
-          const lang = tmpl.language ?? "en_US"
-          return (
-            <option key={tmpl.id} value={toValue(tmpl.name, lang)}>
-              {tmpl.name} ({lang})
+    <>
+      <FieldBlock label={t("templates.templateLabel")}>
+        <select
+          value={current}
+          onChange={(e) => {
+            const [name, lang] = e.target.value.split("::")
+            const nextTemplate = selectedTemplateFor(name ?? "", lang ?? "")
+            const nextBodyVars = nextTemplate
+              ? Object.fromEntries(
+                  extractVariableIndices(nextTemplate.body_text).map((index) => [
+                    String(index),
+                    variables[String(index)] ?? "",
+                  ]),
+                )
+              : {}
+            onChange({
+              template_name: name ?? "",
+              language: lang ?? "",
+              variables: nextBodyVars,
+              header_text: "",
+              button_params: {},
+            })
+          }}
+          className={SELECT_CLASS}
+        >
+          <option value="">{t("templates.select")}</option>
+          {templates.map((tmpl) => {
+            const lang = tmpl.language ?? "en_US"
+            return (
+              <option key={tmpl.id} value={toValue(tmpl.name, lang)}>
+                {tmpl.name} ({lang})
+              </option>
+            )
+          })}
+          {current && !hasMatch && (
+            <option value={current}>
+              {t("templates.unknown", { name: templateName, lang: language || t("templates.unknownLang") })}
             </option>
-          )
-        })}
-        {current && !hasMatch && (
-          <option value={current}>
-            {t("templates.unknown", { name: templateName, lang: language || t("templates.unknownLang") })}
-          </option>
-        )}
-      </select>
-    </FieldBlock>
+          )}
+        </select>
+      </FieldBlock>
+
+      <datalist id={variableListId}>
+        {variableSuggestions.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+
+      {needsHeaderText && (
+        <FieldBlock label={t("templates.headerVariableLabel")}>
+          <Input
+            list={variableListId}
+            value={headerText}
+            onChange={(e) => onChange({ header_text: e.target.value })}
+            placeholder="{{ vars.appointment_customer_name }}"
+            className="bg-muted text-foreground"
+          />
+        </FieldBlock>
+      )}
+
+      {bodyVars.map((index) => (
+        <FieldBlock
+          key={index}
+          label={t("templates.bodyVariableLabel", { index })}
+        >
+          <Input
+            list={variableListId}
+            value={variables[String(index)] ?? ""}
+            onChange={(e) => patchVariable(index, e.target.value)}
+            placeholder={
+              index === 1
+                ? "{{ vars.appointment_customer_name }}"
+                : "{{ vars.appointment_start }}"
+            }
+            className="bg-muted text-foreground"
+          />
+        </FieldBlock>
+      ))}
+
+      {buttonSlots.map((slot) => (
+        <FieldBlock key={slot.index} label={slot.label}>
+          <Input
+            list={variableListId}
+            value={buttonParams[String(slot.index)] ?? ""}
+            onChange={(e) => patchButtonParam(slot.index, e.target.value)}
+            placeholder="{{ vars.appointment_cancel_url }}"
+            className="bg-muted text-foreground"
+          />
+        </FieldBlock>
+      ))}
+    </>
   )
 }
 
@@ -1449,6 +1597,9 @@ function StepEditor({
         <SendTemplateFields
           templateName={(cfg.template_name as string) ?? ""}
           language={(cfg.language as string) ?? ""}
+          variables={(cfg.variables as Record<string, string> | undefined) ?? {}}
+          headerText={(cfg.header_text as string) ?? ""}
+          buttonParams={(cfg.button_params as Record<string, string> | undefined) ?? {}}
           onChange={(patch) => set(patch)}
           t={t}
         />

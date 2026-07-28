@@ -1355,7 +1355,11 @@
         "languageLabel": "Language",
         "select": "Select a template…",
         "unknown": "{name} ({lang}) — not in approved list",
-        "unknownLang": "unknown"
+        "unknownLang": "unknown",
+        "headerVariableLabel": "Header variable",
+        "bodyVariableLabel": "Body variable {index}",
+        "urlButtonVariableLabel": "URL button variable {index}",
+        "copyCodeButtonVariableLabel": "Button code {index}"
       },
       "branches": {
         "yes": "Yes",

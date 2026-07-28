@@ -472,8 +472,19 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
               if (bNum) return 1
               return a.localeCompare(b)
             })
-            .map((k) => String(cfg.variables![k]))
+            .map((k) => interpolate(String(cfg.variables![k]), args))
         : []
+      const buttonParams = cfg.button_params
+        ? Object.fromEntries(
+            Object.entries(cfg.button_params).map(([k, v]) => [
+              Number(k),
+              interpolate(String(v), args),
+            ]),
+          )
+        : undefined
+      const headerText = cfg.header_text
+        ? interpolate(String(cfg.header_text), args)
+        : undefined
       const { whatsapp_message_id } = await engineSendTemplate({
         accountId: args.automation.account_id,
         userId: args.automation.user_id,
@@ -482,6 +493,11 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         templateName: cfg.template_name,
         language: cfg.language,
         params,
+        messageParams: {
+          body: params,
+          headerText,
+          buttonParams,
+        },
       })
       return `template sent via Meta (${whatsapp_message_id})`
     }

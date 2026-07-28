@@ -1972,7 +1972,11 @@
         "languageLabel": "Idioma",
         "select": "Selecciona una plantilla?",
         "unknown": "{name} ({lang}) ? no esta en la lista aprobada",
-        "unknownLang": "desconocido"
+        "unknownLang": "desconocido",
+        "headerVariableLabel": "Variable de cabecera",
+        "bodyVariableLabel": "Variable {index} del cuerpo",
+        "urlButtonVariableLabel": "Variable del boton URL {index}",
+        "copyCodeButtonVariableLabel": "Codigo del boton {index}"
       },
       "branches": {
         "yes": "Se",
