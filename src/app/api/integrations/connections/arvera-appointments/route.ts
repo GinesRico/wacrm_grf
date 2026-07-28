@@ -354,7 +354,33 @@ export async function PUT(request: Request) {
   }
 }
 
+function getPublicOrigin(request: Request): string {
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const forwardedHost = request.headers
+    .get("x-forwarded-host")
+    ?.split(",")[0]
+    ?.trim();
+  const forwardedProto = request.headers
+    .get("x-forwarded-proto")
+    ?.split(",")[0]
+    ?.trim();
+
+  if (forwardedHost) {
+    return `${forwardedProto || "https"}://${forwardedHost}`;
+  }
+
+  const host = request.headers.get("host")?.trim();
+  if (host) {
+    const protocol = new URL(request.url).protocol.replace(":", "") || "http";
+    return `${protocol}://${host}`;
+  }
+
+  return "http://localhost:3000";
+}
+
 function buildWebhookUrl(request: Request, token: string): string {
-  const origin = new URL(request.url).origin;
+  const origin = getPublicOrigin(request);
   return `${origin}/api/integrations/arvera-appointments/webhook?token=${encodeURIComponent(token)}`;
 }
