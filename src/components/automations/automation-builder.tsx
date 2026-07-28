@@ -191,12 +191,31 @@ const APPOINTMENT_WEBHOOK_VARIABLES = [
   "{{ vars.Telefono }}",
   "{{ vars.Email }}",
   "{{ vars.Servicio }}",
+  "{{ vars.startTime }}",
+  "{{ vars.endTime }}",
   "{{ vars.Fecha }}",
   "{{ vars.Hora }}",
+  "{{ vars.fecha }}",
+  "{{ vars.hora }}",
   "{{ vars.Matricula }}",
   "{{ vars.Modelo }}",
   "{{ vars.Notas }}",
   "{{ vars.Estado }}",
+  "{{ vars.CancelToken }}",
+  "{{ vars.Url_Cancelacion }}",
+  "{{ vars.url_cancelacion_corta }}",
+  "{{ vars.Notificacion }}",
+  "{{ vars.Recordatorio }}",
+  "{{ vars.Recogida }}",
+  "{{ vars.creado_por_nombre }}",
+  "{{ vars.creado_por_email }}",
+  "{{ vars.modificado_por_nombre }}",
+  "{{ vars.modificado_por_email }}",
+  "{{ vars.eliminado_por_nombre }}",
+  "{{ vars.eliminado_por_email }}",
+  "{{ vars.fecha_creacion }}",
+  "{{ vars.fecha_modificacion }}",
+  "{{ vars.fecha_eliminacion }}",
 ]
 
 function renderTemplatePreviewText(
@@ -296,6 +315,8 @@ interface AutomationResources {
   pipelines: PipelineOption[]
   stages: PipelineStageOption[]
   whatsappLines: WhatsAppLineOption[]
+  webhookSamples: WebhookSampleOption[]
+  triggerType: AutomationTriggerType
   paymentsEnabled: boolean
   appointmentsEnabled: boolean
 }
@@ -320,6 +341,21 @@ interface WhatsAppLineOption {
   is_default: boolean
 }
 
+interface WebhookVariableOption {
+  path: string
+  variable: string
+  value: string
+}
+
+interface WebhookSampleOption {
+  id: string
+  source: string
+  event_type: string
+  trigger_type: string | null
+  variable_paths: WebhookVariableOption[]
+  received_at: string
+}
+
 const ResourcesContext = createContext<AutomationResources>({
   tags: [],
   members: [],
@@ -328,6 +364,8 @@ const ResourcesContext = createContext<AutomationResources>({
   pipelines: [],
   stages: [],
   whatsappLines: [],
+  webhookSamples: [],
+  triggerType: "new_message_received",
   paymentsEnabled: false,
   appointmentsEnabled: false,
 })
@@ -336,7 +374,13 @@ function useResources(): AutomationResources {
   return useContext(ResourcesContext)
 }
 
-function ResourcesProvider({ children }: { children: ReactNode }) {
+function ResourcesProvider({
+  children,
+  triggerType,
+}: {
+  children: ReactNode
+  triggerType: AutomationTriggerType
+}) {
   const [tags, setTags] = useState<TagRecord[]>([])
   const [members, setMembers] = useState<AccountMember[]>([])
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
@@ -344,6 +388,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
   const [pipelines, setPipelines] = useState<PipelineOption[]>([])
   const [stages, setStages] = useState<PipelineStageOption[]>([])
   const [whatsappLines, setWhatsappLines] = useState<WhatsAppLineOption[]>([])
+  const [webhookSamples, setWebhookSamples] = useState<WebhookSampleOption[]>([])
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false)
 
@@ -360,6 +405,7 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
       setPipelines((data.pipelines as PipelineOption[] | undefined) ?? [])
       setStages((data.stages as PipelineStageOption[] | undefined) ?? [])
       setWhatsappLines((data.whatsappLines as WhatsAppLineOption[] | undefined) ?? [])
+      setWebhookSamples((data.webhookSamples as WebhookSampleOption[] | undefined) ?? [])
     })()
 
     void (async () => {
@@ -414,6 +460,8 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
         pipelines,
         stages,
         whatsappLines,
+        webhookSamples,
+        triggerType,
         paymentsEnabled,
         appointmentsEnabled,
       }}
@@ -681,13 +729,18 @@ function SendTemplateFields({
   onChange: (patch: Record<string, unknown>) => void
   t: ReturnType<typeof useTranslations>
 }) {
-  const { templates, whatsappLines } = useResources()
+  const { templates, whatsappLines, webhookSamples, triggerType } = useResources()
   const variableListId = useId()
-  const variableSuggestions = [
+  const dynamicVariables = webhookSamples
+    .filter((sample) => !sample.trigger_type || sample.trigger_type === triggerType)
+    .flatMap((sample) => sample.variable_paths ?? [])
+  const dynamicVariableSuggestions = dynamicVariables.map((item) => item.variable)
+  const variableSuggestions = dedupeStrings([
+    ...dynamicVariableSuggestions,
     ...APPOINTMENT_WEBHOOK_VARIABLES,
     ...APPOINTMENT_SLOT_VARIABLES,
     "{{ message.text }}",
-  ]
+  ])
 
   function selectedTemplateFor(name: string, lang: string) {
     return templates.find(
@@ -883,6 +936,27 @@ function SendTemplateFields({
         </div>
       )}
 
+      {dynamicVariables.length > 0 && (
+        <div className="rounded-md border border-border bg-background/40 p-3">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">
+            {t("templates.detectedVariablesLabel")}
+          </p>
+          <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">
+            {dedupeWebhookVariables(dynamicVariables).slice(0, 40).map((item) => (
+              <button
+                key={item.variable}
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(item.variable)}
+                className="rounded border border-border bg-muted px-2 py-1 font-mono text-[11px] text-foreground hover:border-primary/50 hover:bg-primary/10"
+                title={item.value}
+              >
+                {item.variable}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {needsHeaderText && (
         <FieldBlock label={t("templates.headerVariableLabel")}>
           <Input
@@ -927,6 +1001,21 @@ function SendTemplateFields({
       ))}
     </>
   )
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function dedupeWebhookVariables(
+  values: WebhookVariableOption[],
+): WebhookVariableOption[] {
+  const seen = new Set<string>()
+  return values.filter((item) => {
+    if (!item.variable || seen.has(item.variable)) return false
+    seen.add(item.variable)
+    return true
+  })
 }
 
 // ------------------------------------------------------------
@@ -1061,7 +1150,7 @@ export function AutomationBuilder({ initial }: { initial: BuilderInitial }) {
       <div className="relative flex-1 overflow-y-auto">
         <div className="absolute inset-0 bg-[radial-gradient(circle,var(--border)_1px,transparent_1px)] [background-size:20px_20px] pointer-events-none" />
         <div className="relative mx-auto flex max-w-2xl flex-col items-center gap-0 px-4 py-10">
-          <ResourcesProvider>
+          <ResourcesProvider triggerType={state.trigger_type}>
             <TriggerCard
               type={state.trigger_type}
               config={state.trigger_config}

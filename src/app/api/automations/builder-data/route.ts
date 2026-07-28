@@ -8,6 +8,7 @@ import {
   pipelineStages,
   pipelines,
   tags,
+  webhookEventSamples,
   whatsappConfig,
 } from '@/db/schema'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
@@ -16,7 +17,15 @@ export async function GET() {
   try {
     const { accountId } = await getCurrentAccount()
 
-    const [tagRows, templateRows, fieldRows, pipelineRows, stageRows, whatsappRows] =
+    const [
+      tagRows,
+      templateRows,
+      fieldRows,
+      pipelineRows,
+      stageRows,
+      whatsappRows,
+      sampleRows,
+    ] =
       await Promise.all([
         db
           .select()
@@ -64,6 +73,18 @@ export async function GET() {
             asc(whatsappConfig.label),
             asc(whatsappConfig.createdAt),
           ),
+        db
+          .select({
+            id: webhookEventSamples.id,
+            source: webhookEventSamples.source,
+            eventType: webhookEventSamples.eventType,
+            triggerType: webhookEventSamples.triggerType,
+            variablePaths: webhookEventSamples.variablePaths,
+            receivedAt: webhookEventSamples.receivedAt,
+          })
+          .from(webhookEventSamples)
+          .where(eq(webhookEventSamples.accountId, accountId))
+          .orderBy(desc(webhookEventSamples.receivedAt)),
       ])
 
     return NextResponse.json({
@@ -123,6 +144,14 @@ export async function GET() {
         phone_number_id: row.phoneNumberId,
         status: row.status,
         is_default: row.isDefault,
+      })),
+      webhookSamples: sampleRows.map((row) => ({
+        id: row.id,
+        source: row.source,
+        event_type: row.eventType,
+        trigger_type: row.triggerType,
+        variable_paths: row.variablePaths,
+        received_at: row.receivedAt.toISOString(),
       })),
     })
   } catch (err) {

@@ -1356,6 +1356,7 @@
         "lineLabel": "WhatsApp line",
         "defaultLine": "Default line",
         "defaultLineBadge": "default",
+        "detectedVariablesLabel": "Variables detected from the latest webhook",
         "select": "Select a template…",
         "unknown": "{name} ({lang}) — not in approved list",
         "unknownLang": "unknown",

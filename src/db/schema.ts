@@ -1253,6 +1253,39 @@ export const integrationConnections = pgTable(
   ]
 );
 
+export const webhookEventSamples = pgTable(
+  'webhook_event_samples',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    eventType: text('event_type').notNull(),
+    triggerType: text('trigger_type'),
+    samplePayload: jsonb('sample_payload').notNull().default({}),
+    variablePaths: jsonb('variable_paths').notNull().default([]),
+    receivedAt: timestamp('received_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('webhook_event_samples_account_source_event_key').on(
+      table.accountId,
+      table.source,
+      table.eventType
+    ),
+    index('idx_webhook_event_samples_account_trigger').on(
+      table.accountId,
+      table.triggerType
+    ),
+  ]
+);
+
 export const paymentLinks = pgTable(
   'payment_links',
   {

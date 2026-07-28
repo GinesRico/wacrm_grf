@@ -1088,11 +1088,24 @@ function waitMs(cfg: WaitStepConfig): number {
 
 function interpolate(s: string, args: ExecuteArgs): string {
   return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, key) => {
-    const [ns, prop] = String(key).split('.')
-    if (ns === 'message' && prop === 'text') return String(args.context.message_text ?? '')
-    if (ns === 'vars' && prop) return String(args.context.vars?.[prop] ?? '')
+    const [ns, ...path] = String(key).split('.')
+    if (ns === 'message' && path.join('.') === 'text') {
+      return String(args.context.message_text ?? '')
+    }
+    if (ns === 'vars' && path.length > 0) {
+      return String(readPath(args.context.vars, path) ?? '')
+    }
     return ''
   })
+}
+
+function readPath(value: unknown, path: string[]): unknown {
+  let current = value
+  for (const part of path) {
+    if (!current || typeof current !== 'object') return undefined
+    current = (current as Record<string, unknown>)[part]
+  }
+  return current
 }
 
 function resolveAppointmentDate(

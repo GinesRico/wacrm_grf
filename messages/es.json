@@ -1973,6 +1973,7 @@
         "lineLabel": "Linea de WhatsApp",
         "defaultLine": "Linea por defecto",
         "defaultLineBadge": "por defecto",
+        "detectedVariablesLabel": "Variables detectadas del ultimo webhook",
         "select": "Selecciona una plantilla?",
         "unknown": "{name} ({lang}) ? no esta en la lista aprobada",
         "unknownLang": "desconocido",

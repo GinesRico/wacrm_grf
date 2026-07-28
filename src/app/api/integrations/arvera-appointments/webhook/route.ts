@@ -16,6 +16,7 @@ import {
   type ArveraAppointmentsConnection,
 } from '@/lib/integrations/arvera-appointments';
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
+import { recordWebhookEventSample } from '@/lib/webhooks/event-samples';
 
 export async function POST(request: Request) {
   const token = new URL(request.url).searchParams.get('token') ?? '';
@@ -118,6 +119,16 @@ export async function POST(request: Request) {
   }
 
   const triggerType = eventToTrigger(eventType);
+  void recordWebhookEventSample({
+    accountId: connection.account_id,
+    source: ARVERA_APPOINTMENTS_SLUG,
+    eventType,
+    triggerType,
+    payload,
+  }).catch((error) => {
+    console.warn('[arvera appointments webhook] sample save failed:', error);
+  });
+
   if (triggerType) {
     const cancelUrl = appointment.url_cancelacion_corta ?? appointment.Url_Cancelacion ?? '';
     const appointmentParts = formatAppointmentParts(appointment);
@@ -128,6 +139,8 @@ export async function POST(request: Request) {
       context: {
         conversation_id: deliveryTarget.conversationId,
         vars: {
+          ...payloadVars(payload),
+          ...appointmentVars(appointment),
           event_type: eventType,
           event_timestamp: String(eventTimestamp),
           appointment_record_id: record.id,
@@ -161,6 +174,9 @@ export async function POST(request: Request) {
           Modelo: appointment.Modelo ?? '',
           Notas: appointment.Notas ?? '',
           Estado: appointment.Estado ?? '',
+          CancelToken: appointment.CancelToken ?? '',
+          fecha: appointment.fecha ?? appointmentParts.date,
+          hora: appointment.hora ?? appointmentParts.time,
           Url_Cancelacion: appointment.Url_Cancelacion ?? '',
           url_cancelacion_corta: appointment.url_cancelacion_corta ?? '',
         },
@@ -169,6 +185,26 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ ok: true, appointment_record: record });
+}
+
+function payloadVars(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return {};
+  }
+  return payload as Record<string, unknown>;
+}
+
+function appointmentVars(appointment: ArveraAppointmentRecord): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(appointment).map(([key, value]) => {
+      if (value == null) return [key, ''];
+      if (typeof value === 'string') return [key, value];
+      if (typeof value === 'number' || typeof value === 'boolean') {
+        return [key, String(value)];
+      }
+      return [key, JSON.stringify(value)];
+    }),
+  );
 }
 
 function formatAppointmentParts(appointment: ArveraAppointmentRecord): {
