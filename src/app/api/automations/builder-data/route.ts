@@ -12,6 +12,7 @@ import {
   whatsappConfig,
 } from '@/db/schema'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { serializeMessageTemplate } from '@/lib/whatsapp/template-serializer'
 
 export async function GET() {
   try {
@@ -24,7 +25,6 @@ export async function GET() {
       pipelineRows,
       stageRows,
       whatsappRows,
-      sampleRows,
     ] =
       await Promise.all([
         db
@@ -73,19 +73,33 @@ export async function GET() {
             asc(whatsappConfig.label),
             asc(whatsappConfig.createdAt),
           ),
-        db
-          .select({
-            id: webhookEventSamples.id,
-            source: webhookEventSamples.source,
-            eventType: webhookEventSamples.eventType,
-            triggerType: webhookEventSamples.triggerType,
-            variablePaths: webhookEventSamples.variablePaths,
-            receivedAt: webhookEventSamples.receivedAt,
-          })
-          .from(webhookEventSamples)
-          .where(eq(webhookEventSamples.accountId, accountId))
-          .orderBy(desc(webhookEventSamples.receivedAt)),
       ])
+
+    let sampleRows: Array<{
+      id: string
+      source: string
+      eventType: string
+      triggerType: string | null
+      variablePaths: unknown
+      receivedAt: Date
+    }> = []
+
+    try {
+      sampleRows = await db
+        .select({
+          id: webhookEventSamples.id,
+          source: webhookEventSamples.source,
+          eventType: webhookEventSamples.eventType,
+          triggerType: webhookEventSamples.triggerType,
+          variablePaths: webhookEventSamples.variablePaths,
+          receivedAt: webhookEventSamples.receivedAt,
+        })
+        .from(webhookEventSamples)
+        .where(eq(webhookEventSamples.accountId, accountId))
+        .orderBy(desc(webhookEventSamples.receivedAt))
+    } catch (err) {
+      console.warn('[automations builder-data] webhook samples unavailable:', err)
+    }
 
     return NextResponse.json({
       tags: tagRows.map((row) => ({
@@ -98,30 +112,7 @@ export async function GET() {
       })),
       templates: templateRows
         .filter((row) => row.status === 'APPROVED')
-        .map((row) => ({
-          id: row.id,
-          user_id: row.userId,
-          account_id: row.accountId,
-          name: row.name,
-          category: row.category,
-          language: row.language,
-          header_type: row.headerType,
-          header_content: row.headerContent,
-          header_handle: row.headerHandle,
-          header_media_url: row.headerMediaUrl,
-          body_text: row.bodyText,
-          footer_text: row.footerText,
-          buttons: row.buttons,
-          sample_values: row.sampleValues,
-          status: row.status,
-          meta_template_id: row.metaTemplateId,
-          rejection_reason: row.rejectionReason,
-          quality_score: row.qualityScore,
-          submission_error: row.submissionError,
-          last_submitted_at: row.lastSubmittedAt?.toISOString() ?? null,
-          created_at: row.createdAt.toISOString(),
-          updated_at: row.updatedAt.toISOString(),
-        })),
+        .map(serializeMessageTemplate),
       customFields: fieldRows.map((row) => ({
         id: row.id,
         user_id: row.userId,
