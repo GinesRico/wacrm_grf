@@ -126,6 +126,54 @@ export async function engineSendInteractive(
 type SendInput =
   (SendTextArgs & { kind: 'text' }) | (SendTemplateArgs & { kind: 'template' });
 
+function renderTemplateBodyPreview(
+  template: MessageTemplate | null,
+  values?: string[]
+): string | null {
+  if (!template || !values) return null;
+  return template.body_text.replace(/\{\{(\d+)\}\}/g, (_, rawIndex) => {
+    const index = Number(rawIndex) - 1;
+    return values[index] ?? '';
+  });
+}
+
+function templateHeaderMediaUrl(
+  template: MessageTemplate | null,
+  params: SendTimeParams
+): string | null {
+  if (!['image', 'video', 'document'].includes(template?.header_type ?? '')) {
+    return null;
+  }
+  return params.headerMediaUrl ?? template?.header_media_url ?? null;
+}
+
+function templatePreviewPayload(
+  template: MessageTemplate | null,
+  body: string | null | undefined,
+  params: SendTimeParams = {}
+): InteractiveMessagePayload | null {
+  if (!template?.buttons?.length) return null;
+  return {
+    kind: 'buttons',
+    body: body ?? template.body_text ?? '',
+    footer: template.footer_text || undefined,
+    buttons: template.buttons.map((button, index) => ({
+      id: `template-${index}`,
+      title: button.text,
+      type: button.type,
+      url: button.type === 'URL' ? button.url : undefined,
+      example:
+        button.type === 'URL'
+          ? (params.buttonParams?.[index] ?? button.example)
+          : button.type === 'COPY_CODE'
+            ? (params.buttonParams?.[index] ?? button.example)
+            : undefined,
+      phone_number:
+        button.type === 'PHONE_NUMBER' ? button.phone_number : undefined,
+    })),
+  };
+}
+
 async function sendViaMeta(
   input: SendInput
 ): Promise<{ whatsapp_message_id: string }> {
@@ -250,7 +298,24 @@ async function sendViaMeta(
   // Meta message id. sender_type='bot' distinguishes automation sends
   // from manual agent sends.
   const content_type = input.kind === 'template' ? 'template' : 'text';
-  const content_text = input.kind === 'text' ? input.text : null;
+  const structuredTemplateParams =
+    input.kind === 'template' ? (input.messageParams ?? { body: input.params }) : {};
+  const renderedTemplateBody =
+    input.kind === 'template'
+      ? renderTemplateBodyPreview(
+          templateRow,
+          structuredTemplateParams.body ?? input.params
+        )
+      : null;
+  const templateButtonsPayload =
+    input.kind === 'template'
+      ? templatePreviewPayload(templateRow, renderedTemplateBody, structuredTemplateParams)
+      : null;
+  const templateMediaUrl =
+    input.kind === 'template'
+      ? templateHeaderMediaUrl(templateRow, structuredTemplateParams)
+      : null;
+  const content_text = input.kind === 'text' ? input.text : renderedTemplateBody;
   const template_name = input.kind === 'template' ? input.templateName : null;
 
   try {
@@ -259,7 +324,9 @@ async function sendViaMeta(
       senderType: 'bot',
       contentType: content_type,
       contentText: content_text,
+      mediaUrl: templateMediaUrl,
       templateName: template_name,
+      interactivePayload: templateButtonsPayload,
       messageId: waMessageId,
       status: 'sent',
       sentAt: new Date(),
@@ -277,7 +344,7 @@ async function sendViaMeta(
     .set({
       lastMessageText:
         input.kind === 'template'
-          ? `[template:${input.templateName}]`
+          ? (renderedTemplateBody ?? `[template:${input.templateName}]`)
           : input.text,
       lastMessageAt: new Date(),
       updatedAt: new Date(),
