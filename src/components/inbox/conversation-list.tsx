@@ -673,13 +673,13 @@ export function ConversationList({
         ? prev.filter((item) => item !== filter)
         : [...prev, filter]
     );
-    if (filter === 'pending') {
-      setTab('inbox');
-      setSubtab('pending');
-    } else if (filter === 'resolved') {
-      setTab('resolved');
-    } else {
-      setTab('search');
+    setTab('search');
+  }, []);
+
+  const switchTab = useCallback((nextTab: InboxTab) => {
+    setTab(nextTab);
+    if (nextTab !== 'search') {
+      setQuickFilters([]);
     }
   }, []);
 
@@ -797,19 +797,19 @@ export function ConversationList({
           <div className="grid min-w-0 flex-1 grid-cols-3">
             <TabButton
               active={tab === 'inbox'}
-              onClick={() => setTab('inbox')}
+              onClick={() => switchTab('inbox')}
               label={t('tabInbox')}
               icon={Inbox}
             />
             <TabButton
               active={tab === 'resolved'}
-              onClick={() => setTab('resolved')}
+              onClick={() => switchTab('resolved')}
               label={t('tabResolved')}
               icon={CircleCheckBig}
             />
             <TabButton
               active={tab === 'search'}
-              onClick={() => setTab('search')}
+              onClick={() => switchTab('search')}
               label={t('tabSearch')}
               icon={Search}
             />
@@ -891,56 +891,58 @@ export function ConversationList({
             </button>
           </div>
 
-          <div className="flex gap-1 overflow-x-auto pb-0.5">
-            <QuickFilterChip
-              active={quickFilters.length === 0}
-              label={t('quickAll')}
-              icon={Search}
-              onClick={() => setQuickFilters([])}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('unread')}
-              label={t('quickUnread')}
-              icon={Eye}
-              onClick={() => toggleQuickFilter('unread')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('pending')}
-              label={t('quickPending')}
-              icon={Inbox}
-              onClick={() => toggleQuickFilter('pending')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('resolved')}
-              label={t('quickResolved')}
-              icon={CircleCheckBig}
-              onClick={() => toggleQuickFilter('resolved')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('tagged')}
-              label={t('quickTagged')}
-              icon={TagIcon}
-              onClick={() => toggleQuickFilter('tagged')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('files')}
-              label={t('quickFiles')}
-              icon={Paperclip}
-              onClick={() => toggleQuickFilter('files')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('templates')}
-              label={t('quickTemplates')}
-              icon={LayoutTemplate}
-              onClick={() => toggleQuickFilter('templates')}
-            />
-            <QuickFilterChip
-              active={quickFilters.includes('customers')}
-              label={t('quickCustomers')}
-              icon={AtSign}
-              onClick={() => toggleQuickFilter('customers')}
-            />
-          </div>
+          {tab === 'search' && (
+            <div className="flex gap-1 overflow-x-auto pb-0.5">
+              <QuickFilterChip
+                active={quickFilters.length === 0}
+                label={t('quickAll')}
+                icon={Search}
+                onClick={() => setQuickFilters([])}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('unread')}
+                label={t('quickUnread')}
+                icon={Eye}
+                onClick={() => toggleQuickFilter('unread')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('pending')}
+                label={t('quickPending')}
+                icon={Inbox}
+                onClick={() => toggleQuickFilter('pending')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('resolved')}
+                label={t('quickResolved')}
+                icon={CircleCheckBig}
+                onClick={() => toggleQuickFilter('resolved')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('tagged')}
+                label={t('quickTagged')}
+                icon={TagIcon}
+                onClick={() => toggleQuickFilter('tagged')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('files')}
+                label={t('quickFiles')}
+                icon={Paperclip}
+                onClick={() => toggleQuickFilter('files')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('templates')}
+                label={t('quickTemplates')}
+                icon={LayoutTemplate}
+                onClick={() => toggleQuickFilter('templates')}
+              />
+              <QuickFilterChip
+                active={quickFilters.includes('customers')}
+                label={t('quickCustomers')}
+                icon={AtSign}
+                onClick={() => toggleQuickFilter('customers')}
+              />
+            </div>
+          )}
 
           {tab === 'inbox' && (
             <div className="grid min-w-0 grid-cols-2">
