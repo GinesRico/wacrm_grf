@@ -1,12 +1,17 @@
-import { and, eq, ilike, isNull, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import {
   conversations as conversationsTable,
+  contactCustomValues,
+  contactNotes,
+  contactTags,
+  customFields,
   departments,
   departmentMembers,
   messages,
   profiles,
+  tags,
   whatsappConfig,
 } from "@/db/schema";
 import type { Conversation, ConversationStatus } from "@/types";
@@ -40,6 +45,46 @@ export interface ListInboxParams {
   subtab: InboxSubtab;
   scope: InboxScope;
   search: string;
+  quickFilters: InboxQuickFilter[];
+}
+
+export type InboxQuickFilter =
+  | "unread"
+  | "pending"
+  | "resolved"
+  | "tagged"
+  | "files"
+  | "templates"
+  | "customers";
+
+type SearchField =
+  | "contact"
+  | "message"
+  | "tag"
+  | "note"
+  | "custom_field"
+  | "agent"
+  | "line"
+  | "status";
+
+interface SearchMatch {
+  field: SearchField;
+  label?: string;
+  snippet: string;
+  message_id?: string | null;
+  score: number;
+}
+
+interface ParsedInboxSearch {
+  text: string;
+  terms: string[];
+  filters: {
+    from?: string;
+    tag?: string;
+    line?: string;
+    status?: string;
+    matricula?: string;
+  };
 }
 
 export class InboxWorkflowError extends Error {
@@ -152,12 +197,117 @@ function normalizeScope(value: string | null): InboxScope {
   return value === "all" ? "all" : "mine";
 }
 
+const QUICK_FILTERS = new Set<InboxQuickFilter>([
+  "unread",
+  "pending",
+  "resolved",
+  "tagged",
+  "files",
+  "templates",
+  "customers",
+]);
+
+function normalizeQuickFilters(value: string | null): InboxQuickFilter[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item): item is InboxQuickFilter =>
+      QUICK_FILTERS.has(item as InboxQuickFilter),
+    );
+}
+
 export function parseInboxSearchParams(searchParams: URLSearchParams) {
   return {
     tab: normalizeTab(searchParams.get("tab")),
     subtab: normalizeSubtab(searchParams.get("subtab")),
     scope: normalizeScope(searchParams.get("scope")),
     search: searchParams.get("search")?.trim() ?? "",
+    quickFilters: normalizeQuickFilters(searchParams.get("quick")),
+  };
+}
+
+function normalizeText(value: string | null | undefined) {
+  return (value ?? "").toLocaleLowerCase();
+}
+
+function parseInboxSearch(raw: string): ParsedInboxSearch {
+  const filters: ParsedInboxSearch["filters"] = {};
+  const terms: string[] = [];
+  const tokenRe = /(?:[^\s"]+|"[^"]*")+/g;
+  const tokens = raw.match(tokenRe) ?? [];
+
+  for (const token of tokens) {
+    const cleaned = token.replace(/^"|"$/g, "").trim();
+    if (!cleaned) continue;
+    const match = cleaned.match(/^([a-zA-Z_]+):(.*)$/);
+    if (match) {
+      const key = match[1].toLocaleLowerCase();
+      const value = match[2].trim();
+      if (!value) continue;
+      if (key === "from") filters.from = value;
+      else if (key === "tag") filters.tag = value;
+      else if (key === "linea" || key === "line") filters.line = value;
+      else if (key === "estado" || key === "status") filters.status = value;
+      else if (key === "matricula") filters.matricula = value;
+      else terms.push(cleaned);
+      continue;
+    }
+    terms.push(cleaned);
+  }
+
+  return { text: terms.join(" "), terms, filters };
+}
+
+function statusMatches(status: ConversationStatus, value: string) {
+  const normalized = normalizeText(value);
+  if (["open", "abierta", "abierto", "atendiendo"].includes(normalized)) {
+    return status === "open";
+  }
+  if (["pending", "pendiente", "espera", "cola"].includes(normalized)) {
+    return status === "pending";
+  }
+  if (["closed", "cerrada", "cerrado", "resuelta", "resuelto"].includes(normalized)) {
+    return status === "closed";
+  }
+  return normalizeText(status).includes(normalized);
+}
+
+function makeSnippet(value: string, query: string, maxLength = 96) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!query.trim()) return compact.slice(0, maxLength);
+  const lower = compact.toLocaleLowerCase();
+  const needle = query.toLocaleLowerCase();
+  const index = lower.indexOf(needle);
+  if (index < 0) return compact.slice(0, maxLength);
+  const start = Math.max(0, index - 32);
+  const end = Math.min(compact.length, index + query.length + 48);
+  return `${start > 0 ? "..." : ""}${compact.slice(start, end)}${end < compact.length ? "..." : ""}`;
+}
+
+function includesAnyTerm(value: string | null | undefined, terms: string[]) {
+  if (terms.length === 0) return false;
+  const haystack = normalizeText(value);
+  return terms.some((term) => haystack.includes(normalizeText(term)));
+}
+
+function bestFieldMatch(
+  current: SearchMatch | null,
+  field: SearchField,
+  label: string | undefined,
+  text: string | null | undefined,
+  query: string,
+  score: number,
+): SearchMatch | null {
+  if (!text || !query || !normalizeText(text).includes(normalizeText(query))) {
+    return current;
+  }
+  if (current && current.score >= score) return current;
+  return {
+    field,
+    label,
+    snippet: makeSnippet(text, query),
+    score,
   };
 }
 
@@ -179,23 +329,6 @@ function matchesTab(
   if (tab === "resolved") return conversation.status === "closed";
   if (tab === "search") return true;
   return conversation.status === subtab;
-}
-
-function matchesTextSearch(
-  conversation: Conversation,
-  search: string,
-  matchingMessageConversationIds: Set<string>,
-): boolean {
-  if (!search) return true;
-  if (matchingMessageConversationIds.has(conversation.id)) return true;
-
-  const q = search.toLowerCase();
-  const contact = conversation.contact;
-  return (
-    (contact?.name ?? "").toLowerCase().includes(q) ||
-    (contact?.phone ?? "").toLowerCase().includes(q) ||
-    (conversation.last_message_text ?? "").toLowerCase().includes(q)
-  );
 }
 
 export async function listInboxConversations(
@@ -300,29 +433,308 @@ export async function listInboxConversations(
     resolved: scoped.filter((c) => c.status === "closed").length,
   };
 
-  let matchingMessageConversationIds = new Set<string>();
-  if (params.search) {
+  const parsedSearch = parseInboxSearch(params.search);
+  const primaryQuery = parsedSearch.text || parsedSearch.filters.matricula || "";
+  const hasSearch =
+    Boolean(primaryQuery) || Object.keys(parsedSearch.filters).length > 0;
+  const scopedConversationIds = scoped.map((conversation) => conversation.id);
+  const scopedContactIds = scoped
+    .map((conversation) => conversation.contact_id)
+    .filter(Boolean);
+
+  const messageMatches = new Map<string, SearchMatch>();
+  const fileConversationIds = new Set<string>();
+  const templateConversationIds = new Set<string>();
+  const customerConversationIds = new Set<string>();
+
+  if (
+    scopedConversationIds.length > 0 &&
+    (primaryQuery ||
+      params.quickFilters.includes("files") ||
+      params.quickFilters.includes("templates") ||
+      params.quickFilters.includes("customers"))
+  ) {
     const messageRows = await db
-      .select({ conversation_id: messages.conversationId })
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        senderType: messages.senderType,
+        contentType: messages.contentType,
+        contentText: messages.contentText,
+        templateName: messages.templateName,
+        createdAt: messages.createdAt,
+      })
       .from(messages)
-      .where(ilike(messages.contentText, `%${params.search}%`))
-      .limit(500);
-    matchingMessageConversationIds = new Set(
-      messageRows
-        .map((row) => (row as { conversation_id?: string }).conversation_id)
-        .filter((id): id is string => Boolean(id)),
-    );
+      .where(inArray(messages.conversationId, scopedConversationIds))
+      .orderBy(sql`${messages.createdAt} desc`)
+      .limit(2500);
+
+    for (const row of messageRows) {
+      if (["image", "audio", "video", "document", "sticker"].includes(row.contentType)) {
+        fileConversationIds.add(row.conversationId);
+      }
+      if (row.contentType === "template" || row.templateName) {
+        templateConversationIds.add(row.conversationId);
+      }
+      if (row.senderType === "customer") {
+        customerConversationIds.add(row.conversationId);
+      }
+      if (!primaryQuery) continue;
+      const text = row.contentText || row.templateName || "";
+      if (!normalizeText(text).includes(normalizeText(primaryQuery))) continue;
+      const existing = messageMatches.get(row.conversationId);
+      if (!existing || existing.score < 80) {
+        messageMatches.set(row.conversationId, {
+          field: "message",
+          snippet: makeSnippet(text, primaryQuery),
+          message_id: row.id,
+          score: 80,
+        });
+      }
+    }
   }
 
-  const rows = scoped.filter(
-    (conversation) =>
-      matchesTab(conversation, params.tab, params.subtab) &&
-      matchesTextSearch(
-        conversation,
-        params.search,
-        matchingMessageConversationIds,
-      ),
-  );
+  const noteMatches = new Map<string, SearchMatch>();
+  const customMatches = new Map<string, SearchMatch>();
+  const matchingTagContactIds = new Set<string>();
+
+  if (primaryQuery && scopedContactIds.length > 0) {
+    const [noteRows, customRows, tagRows] = await Promise.all([
+      db
+        .select({
+          contactId: contactNotes.contactId,
+          noteText: contactNotes.noteText,
+        })
+        .from(contactNotes)
+        .where(
+          and(
+            eq(contactNotes.accountId, params.accountId),
+            inArray(contactNotes.contactId, scopedContactIds),
+            ilike(contactNotes.noteText, `%${primaryQuery}%`),
+          ),
+        )
+        .limit(500),
+      db
+        .select({
+          contactId: contactCustomValues.contactId,
+          fieldName: customFields.fieldName,
+          value: contactCustomValues.value,
+        })
+        .from(contactCustomValues)
+        .innerJoin(customFields, eq(customFields.id, contactCustomValues.customFieldId))
+        .where(
+          and(
+            eq(customFields.accountId, params.accountId),
+            inArray(contactCustomValues.contactId, scopedContactIds),
+            ilike(contactCustomValues.value, `%${primaryQuery}%`),
+          ),
+        )
+        .limit(500),
+      db
+        .select({
+          contactId: contactTags.contactId,
+          name: tags.name,
+        })
+        .from(contactTags)
+        .innerJoin(tags, eq(tags.id, contactTags.tagId))
+        .where(
+          and(
+            eq(tags.accountId, params.accountId),
+            inArray(contactTags.contactId, scopedContactIds),
+            ilike(tags.name, `%${primaryQuery}%`),
+          ),
+        )
+        .limit(500),
+    ]);
+
+    for (const row of noteRows) {
+      const conversation = scoped.find((item) => item.contact_id === row.contactId);
+      if (!conversation) continue;
+      noteMatches.set(conversation.id, {
+        field: "note",
+        snippet: makeSnippet(row.noteText, primaryQuery),
+        score: 55,
+      });
+    }
+    for (const row of customRows) {
+      const conversation = scoped.find((item) => item.contact_id === row.contactId);
+      if (!conversation || !row.value) continue;
+      customMatches.set(conversation.id, {
+        field: "custom_field",
+        label: row.fieldName,
+        snippet: makeSnippet(row.value, primaryQuery),
+        score: row.fieldName.toLocaleLowerCase() === "matricula" ? 95 : 60,
+      });
+    }
+    for (const row of tagRows) {
+      matchingTagContactIds.add(row.contactId);
+    }
+  }
+
+  function quickFiltersMatch(conversation: Conversation) {
+    return params.quickFilters.every((filter) => {
+      switch (filter) {
+        case "unread":
+          return conversation.unread_count > 0;
+        case "pending":
+          return conversation.status === "pending";
+        case "resolved":
+          return conversation.status === "closed";
+        case "tagged":
+          return (conversation.contact?.tags?.length ?? 0) > 0;
+        case "files":
+          return fileConversationIds.has(conversation.id);
+        case "templates":
+          return templateConversationIds.has(conversation.id);
+        case "customers":
+          return customerConversationIds.has(conversation.id);
+      }
+    });
+  }
+
+  function passesAdvancedFilters(conversation: Conversation) {
+    const { filters } = parsedSearch;
+    if (filters.status && !statusMatches(conversation.status, filters.status)) {
+      return false;
+    }
+    if (filters.tag) {
+      const tagNeedle = normalizeText(filters.tag);
+      if (
+        !(conversation.contact?.tags ?? []).some((tag) =>
+          normalizeText(tag.name).includes(tagNeedle),
+        )
+      ) {
+        return false;
+      }
+    }
+    if (filters.line) {
+      const lineNeedle = normalizeText(filters.line);
+      const lineText = `${conversation.whatsapp_config?.label ?? ""} ${
+        conversation.whatsapp_config?.phone_number_id ?? ""
+      }`;
+      if (!normalizeText(lineText).includes(lineNeedle)) return false;
+    }
+    if (filters.from) {
+      const fromNeedle = normalizeText(filters.from);
+      const agentText = `${conversation.assigned_agent?.full_name ?? ""} ${
+        conversation.assigned_agent?.email ?? ""
+      }`;
+      const contactText = `${conversation.contact?.name ?? ""} ${
+        conversation.contact?.phone ?? ""
+      } ${conversation.contact?.email ?? ""}`;
+      if (
+        !normalizeText(agentText).includes(fromNeedle) &&
+        !normalizeText(contactText).includes(fromNeedle)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function searchMatchFor(conversation: Conversation): SearchMatch | null {
+    let match: SearchMatch | null = null;
+    if (!primaryQuery) {
+      if (parsedSearch.filters.status) {
+        return {
+          field: "status",
+          snippet: conversation.status,
+          score: 30,
+        };
+      }
+      return null;
+    }
+
+    const contact = conversation.contact;
+    match = bestFieldMatch(match, "contact", undefined, contact?.name, primaryQuery, 100);
+    match = bestFieldMatch(match, "contact", undefined, contact?.phone, primaryQuery, 98);
+    match = bestFieldMatch(match, "contact", undefined, contact?.email, primaryQuery, 90);
+    match = bestFieldMatch(match, "contact", undefined, contact?.company, primaryQuery, 85);
+    match = bestFieldMatch(
+      match,
+      "line",
+      undefined,
+      `${conversation.whatsapp_config?.label ?? ""} ${
+        conversation.whatsapp_config?.phone_number_id ?? ""
+      }`,
+      primaryQuery,
+      84,
+    );
+    match = bestFieldMatch(
+      match,
+      "agent",
+      undefined,
+      `${conversation.assigned_agent?.full_name ?? ""} ${
+        conversation.assigned_agent?.email ?? ""
+      }`,
+      primaryQuery,
+      82,
+    );
+    match = bestFieldMatch(
+      match,
+      "message",
+      undefined,
+      conversation.last_message_text,
+      primaryQuery,
+      75,
+    );
+
+    const tagMatch = (contact?.tags ?? []).find((tag) =>
+      normalizeText(tag.name).includes(normalizeText(primaryQuery)),
+    );
+    if (tagMatch && (!match || match.score < 70)) {
+      match = {
+        field: "tag",
+        snippet: tagMatch.name,
+        score: 70,
+      };
+    }
+
+    for (const candidate of [
+      messageMatches.get(conversation.id),
+      customMatches.get(conversation.id),
+      noteMatches.get(conversation.id),
+    ]) {
+      if (candidate && (!match || candidate.score > match.score)) {
+        match = candidate;
+      }
+    }
+
+    return match;
+  }
+
+  let rows = scoped
+    .filter(
+      (conversation) =>
+        matchesTab(conversation, params.tab, params.subtab) &&
+        quickFiltersMatch(conversation) &&
+        passesAdvancedFilters(conversation),
+    )
+    .map((conversation) => ({
+      ...conversation,
+      search_match: searchMatchFor(conversation),
+    }));
+
+  if (hasSearch) {
+    rows = rows.filter((conversation) => {
+      if (conversation.search_match) return true;
+      if (parsedSearch.filters.matricula) return false;
+      if (primaryQuery) {
+        return (
+          matchingTagContactIds.has(conversation.contact_id) ||
+          includesAnyTerm(conversation.last_message_text, parsedSearch.terms)
+        );
+      }
+      return true;
+    });
+    rows.sort((a, b) => {
+      const scoreDelta = (b.search_match?.score ?? 0) - (a.search_match?.score ?? 0);
+      if (scoreDelta !== 0) return scoreDelta;
+      return (b.last_message_at ?? b.updated_at ?? "").localeCompare(
+        a.last_message_at ?? a.updated_at ?? "",
+      );
+    });
+  }
 
   return { conversations: rows, counts };
 }

@@ -192,6 +192,21 @@ export interface Conversation {
     Profile,
     'user_id' | 'full_name' | 'email' | 'avatar_url'
   > | null;
+  search_match?: {
+    field:
+      | 'contact'
+      | 'message'
+      | 'tag'
+      | 'note'
+      | 'custom_field'
+      | 'agent'
+      | 'line'
+      | 'status';
+    label?: string;
+    snippet: string;
+    message_id?: string | null;
+    score: number;
+  } | null;
   /**
    * AI auto-reply state for this thread (migration 029 + 033):
    *  - `ai_autoreply_disabled` — the bot is paused here (a human took

@@ -35,6 +35,9 @@ import {
   MessageSquare,
   ExternalLink,
   UserRound,
+  AtSign,
+  TagIcon,
+  Paperclip,
 } from 'lucide-react';
 import { format, type Locale } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -59,7 +62,10 @@ import {
 
 interface ConversationListProps {
   activeConversationId: string | null;
-  onSelect: (conversation: Conversation) => void;
+  onSelect: (
+    conversation: Conversation,
+    options?: { jumpToMessageId?: string | null }
+  ) => void;
   onClearSelection?: () => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
@@ -88,7 +94,17 @@ interface InboxPreferences {
   selectedDepartmentIds: string[];
   selectedTagIds: string[];
   selectedCompany: string | null;
+  quickFilters: InboxQuickFilter[];
 }
+
+type InboxQuickFilter =
+  | 'unread'
+  | 'pending'
+  | 'resolved'
+  | 'tagged'
+  | 'files'
+  | 'templates'
+  | 'customers';
 
 function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -116,6 +132,18 @@ function readInboxPreferences(): Partial<InboxPreferences> | null {
         typeof parsed.selectedCompany === 'string'
           ? parsed.selectedCompany
           : null,
+      quickFilters: readStringArray(parsed.quickFilters).filter(
+        (item): item is InboxQuickFilter =>
+          [
+            'unread',
+            'pending',
+            'resolved',
+            'tagged',
+            'files',
+            'templates',
+            'customers',
+          ].includes(item)
+      ),
     };
   } catch {
     return null;
@@ -242,13 +270,15 @@ function MediaPreviewIcon({ kind }: { kind: MediaPreviewKind }) {
 function ConversationPreviewText({
   text,
   t,
+  searchQuery,
 }: {
   text: string;
   t: ReturnType<typeof useTranslations>;
+  searchQuery?: string;
 }) {
   const kind = parseMediaPreviewToken(text);
   if (!kind) {
-    return <WhatsAppText text={text} />;
+    return <WhatsAppText text={text} searchQuery={searchQuery} />;
   }
 
   return (
@@ -304,6 +334,7 @@ export function ConversationList({
   );
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  const [quickFilters, setQuickFilters] = useState<InboxQuickFilter[]>([]);
   const effectiveScope: InboxScope = tab === 'inbox' ? scope : 'all';
 
   // Keep the latest callback in a ref so the fetch effect below can
@@ -335,6 +366,7 @@ export function ConversationList({
       if (stored && 'selectedCompany' in stored) {
         setSelectedCompany(stored.selectedCompany ?? null);
       }
+      if (stored?.quickFilters) setQuickFilters(stored.quickFilters);
       preferencesHydratedRef.current = true;
     });
   }, []);
@@ -348,6 +380,7 @@ export function ConversationList({
       selectedDepartmentIds,
       selectedTagIds,
       selectedCompany,
+      quickFilters,
     });
   }, [
     tab,
@@ -356,6 +389,7 @@ export function ConversationList({
     selectedDepartmentIds,
     selectedTagIds,
     selectedCompany,
+    quickFilters,
   ]);
 
   useEffect(() => {
@@ -369,7 +403,13 @@ export function ConversationList({
     const fetchSeq = ++fetchSeqRef.current;
 
     (async () => {
-      const fetchKey = [tab, subtab, effectiveScope, debouncedSearch].join('|');
+      const fetchKey = [
+        tab,
+        subtab,
+        effectiveScope,
+        debouncedSearch,
+        quickFilters.join(','),
+      ].join('|');
       const shouldShowLoading =
         fetchKey !== fetchKeyRef.current || conversationsCountRef.current === 0;
       fetchKeyRef.current = fetchKey;
@@ -381,6 +421,7 @@ export function ConversationList({
           scope: effectiveScope,
         });
         if (debouncedSearch) params.set('search', debouncedSearch);
+        if (quickFilters.length > 0) params.set('quick', quickFilters.join(','));
 
         const res = await fetch(
           `/api/inbox/conversations?${params.toString()}`,
@@ -417,7 +458,7 @@ export function ConversationList({
       cancelled = true;
       controller.abort();
     };
-  }, [tab, subtab, effectiveScope, debouncedSearch, resyncToken]);
+  }, [tab, subtab, effectiveScope, debouncedSearch, quickFilters, resyncToken]);
 
   // Tag and department definitions for the filter pickers; loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
@@ -626,6 +667,22 @@ export function ConversationList({
   const hasContactFilters =
     selectedTagIds.length > 0 || selectedCompany !== null;
 
+  const toggleQuickFilter = useCallback((filter: InboxQuickFilter) => {
+    setQuickFilters((prev) =>
+      prev.includes(filter)
+        ? prev.filter((item) => item !== filter)
+        : [...prev, filter]
+    );
+    if (filter === 'pending') {
+      setTab('inbox');
+      setSubtab('pending');
+    } else if (filter === 'resolved') {
+      setTab('resolved');
+    } else {
+      setTab('search');
+    }
+  }, []);
+
   const handleSearchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setSearch(e.target.value);
@@ -636,7 +693,7 @@ export function ConversationList({
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
-      onSelect(conv);
+      onSelect(conv, { jumpToMessageId: conv.search_match?.message_id ?? null });
     },
     [onSelect]
   );
@@ -834,6 +891,57 @@ export function ConversationList({
             </button>
           </div>
 
+          <div className="flex gap-1 overflow-x-auto pb-0.5">
+            <QuickFilterChip
+              active={quickFilters.length === 0}
+              label={t('quickAll')}
+              icon={Search}
+              onClick={() => setQuickFilters([])}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('unread')}
+              label={t('quickUnread')}
+              icon={Eye}
+              onClick={() => toggleQuickFilter('unread')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('pending')}
+              label={t('quickPending')}
+              icon={Inbox}
+              onClick={() => toggleQuickFilter('pending')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('resolved')}
+              label={t('quickResolved')}
+              icon={CircleCheckBig}
+              onClick={() => toggleQuickFilter('resolved')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('tagged')}
+              label={t('quickTagged')}
+              icon={TagIcon}
+              onClick={() => toggleQuickFilter('tagged')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('files')}
+              label={t('quickFiles')}
+              icon={Paperclip}
+              onClick={() => toggleQuickFilter('files')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('templates')}
+              label={t('quickTemplates')}
+              icon={LayoutTemplate}
+              onClick={() => toggleQuickFilter('templates')}
+            />
+            <QuickFilterChip
+              active={quickFilters.includes('customers')}
+              label={t('quickCustomers')}
+              icon={AtSign}
+              onClick={() => toggleQuickFilter('customers')}
+            />
+          </div>
+
           {tab === 'inbox' && (
             <div className="grid min-w-0 grid-cols-2">
               <SubtabButton
@@ -1013,6 +1121,7 @@ export function ConversationList({
                 accepting={acceptingId === conv.id}
                 dateLocale={dateLocale}
                 t={t}
+                searchQuery={debouncedSearch}
               />
             ))}
           </div>
@@ -1102,6 +1211,35 @@ function SubtabButton({
   );
 }
 
+function QuickFilterChip({
+  active,
+  label,
+  icon: Icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: typeof Search;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      className={cn(
+        'inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2 text-[11px] font-medium transition-colors',
+        active
+          ? 'border-primary/30 bg-primary/10 text-primary'
+          : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
 interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
@@ -1111,6 +1249,7 @@ interface ConversationItemProps {
   accepting: boolean;
   dateLocale?: Locale;
   t: ReturnType<typeof useTranslations>;
+  searchQuery: string;
 }
 
 function ConversationItem({
@@ -1122,6 +1261,7 @@ function ConversationItem({
   accepting,
   dateLocale,
   t,
+  searchQuery,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || t('unknown');
@@ -1216,8 +1356,22 @@ function ConversationItem({
                 <ConversationPreviewText
                   text={conversation.last_message_text || t('noMessagesYet')}
                   t={t}
+                  searchQuery={searchQuery}
                 />
               </p>
+              {conversation.search_match?.snippet && (
+                <p className="text-foreground mt-1 truncate text-xs">
+                  <span className="text-muted-foreground">
+                    {conversation.search_match.label ||
+                      t(`searchMatch.${conversation.search_match.field}`)}
+                    :{' '}
+                  </span>
+                  <WhatsAppText
+                    text={conversation.search_match.snippet}
+                    searchQuery={searchQuery}
+                  />
+                </p>
+              )}
             </div>
           </div>
           <div className="flex w-8 shrink-0 flex-col items-center gap-1">

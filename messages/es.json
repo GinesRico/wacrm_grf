@@ -264,7 +264,25 @@
       "mediaTemplate": "Plantilla",
       "mediaInteractive": "Mensaje interactivo",
       "mediaSticker": "Sticker",
-      "mediaUnsupported": "Mensaje no compatible"
+      "mediaUnsupported": "Mensaje no compatible",
+      "quickAll": "Todos",
+      "quickUnread": "No leidos",
+      "quickPending": "Pendientes",
+      "quickResolved": "Resueltos",
+      "quickTagged": "Con etiquetas",
+      "quickFiles": "Con archivos",
+      "quickTemplates": "Plantillas",
+      "quickCustomers": "Clientes",
+      "searchMatch": {
+        "contact": "Contacto",
+        "message": "Mensaje",
+        "tag": "Etiqueta",
+        "note": "Nota",
+        "custom_field": "Campo",
+        "agent": "Agente",
+        "line": "Linea",
+        "status": "Estado"
+      }
     },
     "messageThread": {
       "backToConversations": "Volver a conversaciones",

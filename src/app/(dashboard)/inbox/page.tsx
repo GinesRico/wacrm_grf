@@ -539,15 +539,24 @@ export default function InboxPage() {
   );
 
   const handleSelectConversation = useCallback(
-    (conv: Conversation) => {
+    (
+      conv: Conversation,
+      options?: { jumpToMessageId?: string | null },
+    ) => {
       // Re-clicking the already-active conversation would clear the
       // messages array, but the fetch effect in MessageThread only re-runs
       // when conversationId changes — so messages would stay empty until
       // the user navigated away and back. Bail out early instead.
-      if (activeConversation?.id === conv.id) return;
+      if (activeConversation?.id === conv.id) {
+        if (options?.jumpToMessageId) {
+          setJumpToMessageId(options.jumpToMessageId);
+        }
+        return;
+      }
       setActiveConversation(conv);
       setActiveContact(conv.contact ?? null);
       setMessages([]);
+      setJumpToMessageId(options?.jumpToMessageId ?? null);
       setContactPanelOpen(false);
       // Optimistically clear the unread badge for this conv. The
       // server-side reset is fired by the unread-reset effect inside

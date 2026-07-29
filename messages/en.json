@@ -329,7 +329,25 @@
       "mediaTemplate": "Template",
       "mediaInteractive": "Interactive message",
       "mediaSticker": "Sticker",
-      "mediaUnsupported": "Unsupported message"
+      "mediaUnsupported": "Unsupported message",
+      "quickAll": "All",
+      "quickUnread": "Unread",
+      "quickPending": "Pending",
+      "quickResolved": "Resolved",
+      "quickTagged": "Tagged",
+      "quickFiles": "Files",
+      "quickTemplates": "Templates",
+      "quickCustomers": "Customers",
+      "searchMatch": {
+        "contact": "Contact",
+        "message": "Message",
+        "tag": "Tag",
+        "note": "Note",
+        "custom_field": "Field",
+        "agent": "Agent",
+        "line": "Line",
+        "status": "Status"
+      }
     },
     "messageThread": {
       "backToConversations": "Back to conversations",
