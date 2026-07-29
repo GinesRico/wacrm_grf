@@ -412,6 +412,8 @@
       "deleteFailed": "Could not delete ticket",
       "messageDeleteFailed": "Could not delete message",
       "messageStarFailed": "Could not star message",
+      "internalSendFailed": "Could not save internal note",
+      "internalForwardBlocked": "Internal notes cannot be forwarded",
       "selectedMessages": "{count} selected",
       "cancelSelection": "Cancel selection",
       "deleteSelectedConfirm": "Delete {count} selected messages?",
@@ -490,7 +492,11 @@
       "recordingTooLong": "Recording is too long (over 16 MB).",
       "voiceUnsupported": "Voice recording isn't supported in this browser.",
       "microphoneDenied": "Microphone access denied or unavailable.",
-      "lockedPlaceholder": "Accept or reopen the chat to reply"
+      "lockedPlaceholder": "Accept or reopen the chat to reply",
+      "internal": "Internal",
+      "internalNote": "Internal note",
+      "internalHint": "Only your team will see this. It is not sent to the customer.",
+      "internalPlaceholder": "Write an internal note for your team..."
     },
     "bubble": {
       "photo": "Photo",
@@ -542,7 +548,10 @@
       "typeLocation": "Location",
       "typeTemplate": "Template",
       "typeInteractive": "Interactive",
-      "typeSystem": "System"
+      "typeSystem": "System",
+      "typeInternal": "Internal",
+      "internalNote": "Internal note",
+      "internalAgent": "Agent"
     },
     "actions": {
       "reply": "Reply",

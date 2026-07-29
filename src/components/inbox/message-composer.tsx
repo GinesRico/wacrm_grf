@@ -209,6 +209,7 @@ interface MessageComposerProps {
   locked?: boolean;
   lockedReason?: string;
   onSend: (text: string, replyToId?: string) => void;
+  onSendInternal: (text: string, replyToId?: string) => void;
   onSendMedia: (payload: SendMediaPayload) => void;
   onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
   onOpenTemplates: () => void;
@@ -226,6 +227,7 @@ export function MessageComposer({
   locked = false,
   lockedReason,
   onSend,
+  onSendInternal,
   onSendMedia,
   onSendInteractive,
   onOpenTemplates,
@@ -241,6 +243,7 @@ export function MessageComposer({
 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [internalMode, setInternalMode] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -304,7 +307,10 @@ export function MessageComposer({
   const canSend = useCan("send-messages");
   const readOnly = !canSend;
   // Media (like free-form text) is only allowed inside the 24h window.
-  const inputsDisabled = readOnly || sessionExpired || locked;
+  const customerInputsDisabled = readOnly || sessionExpired || locked;
+  const inputsDisabled = internalMode ? readOnly : customerInputsDisabled;
+  const sendDisabled =
+    !text.trim() || sending || readOnly || (!internalMode && (sessionExpired || locked));
 
   useEffect(() => {
     if (inputsDisabled || draft) return;
@@ -331,11 +337,15 @@ export function MessageComposer({
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired || locked) return;
+    if (!trimmed || sendDisabled) return;
 
     setSending(true);
     try {
-      onSend(trimmed, replyTo?.id);
+      if (internalMode) {
+        onSendInternal(trimmed, replyTo?.id);
+      } else {
+        onSend(trimmed, replyTo?.id);
+      }
       setText("");
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -343,7 +353,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, locked, onSend, replyTo?.id]);
+  }, [text, sendDisabled, internalMode, onSendInternal, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -383,7 +393,8 @@ export function MessageComposer({
   );
 
   const slashQuery = text.startsWith("/") ? text.slice(1).trim().toLowerCase() : "";
-  const slashPickerOpen = text.startsWith("/") && !inputsDisabled && !draft;
+  const slashPickerOpen =
+    text.startsWith("/") && !inputsDisabled && !draft && !internalMode;
   const visibleSlashQuickReplies = slashQuickReplies.filter((qr) => {
     if (!slashQuery) return true;
     const haystack = `${qr.title} ${qr.content_text ?? ""}`.toLowerCase();
@@ -839,7 +850,7 @@ export function MessageComposer({
 
   const handlePaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
-      if (inputsDisabled || busy || draft) return;
+      if (inputsDisabled || busy || draft || internalMode) return;
       const file =
         Array.from(e.clipboardData.files)[0] ??
         Array.from(e.clipboardData.items)
@@ -850,7 +861,7 @@ export function MessageComposer({
       e.preventDefault();
       void stageUpload(mediaKindFromFile(file), file);
     },
-    [busy, draft, inputsDisabled, stageUpload],
+    [busy, draft, inputsDisabled, internalMode, stageUpload],
   );
 
   // ---- Draft send / discard -----------------------------------------
@@ -896,7 +907,7 @@ export function MessageComposer({
           />
         </div>
       )}
-      {sessionExpired && (
+      {sessionExpired && !internalMode && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-400">
             {t("sessionExpiredHint")}
@@ -981,7 +992,7 @@ export function MessageComposer({
           {/* + menu groups media, templates, interactive messages and snippets. */}
           <DropdownMenu>
             <DropdownMenuTrigger
-              disabled={inputsDisabled || busy}
+              disabled={inputsDisabled || busy || internalMode}
               title={
                 readOnly
                   ? t("readOnlyTitle")
@@ -1041,6 +1052,23 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <button
+            type="button"
+            disabled={readOnly}
+            onClick={() => setInternalMode((value) => !value)}
+            title={t("internalNote")}
+            aria-pressed={internalMode}
+            className={cn(
+              "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+              internalMode
+                ? "border-amber-400/50 bg-amber-400/15 text-amber-600"
+                : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <MessageSquareDashed className="h-4 w-4" />
+            <span className="hidden sm:inline">{t("internal")}</span>
+          </button>
+
           <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
             <PopoverTrigger
               disabled={inputsDisabled}
@@ -1079,31 +1107,48 @@ export function MessageComposer({
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
-                : locked
+                : internalMode
+                  ? t("internalPlaceholder")
+                  : locked
                   ? (lockedReason ?? t("lockedPlaceholder"))
                   : sessionExpired
                   ? t("sessionExpiredPlaceholder")
                   : t("typeMessagePlaceholder")
             }
-            disabled={sessionExpired || readOnly || locked}
+            disabled={inputsDisabled}
             rows={1}
             // Textarea keeps its own inline title — the GatedButton
             // wrapping pattern doesn't apply to non-button inputs.
             // The placeholder text also surfaces the read-only state.
-            title={locked ? lockedReason : readOnly ? t("readOnlyTitle") : undefined}
+            title={
+              internalMode
+                ? t("internalHint")
+                : locked
+                  ? lockedReason
+                  : readOnly
+                    ? t("readOnlyTitle")
+                    : undefined
+            }
             className={cn(
               "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly || locked) && "cursor-not-allowed opacity-50"
+              internalMode &&
+                "border-amber-400/40 bg-amber-400/10 focus:border-amber-400/70",
+              inputsDisabled && "cursor-not-allowed opacity-50"
             )}
           />
 
           <GatedButton
             size="sm"
-            canAct={!readOnly && !locked}
+            canAct={!readOnly && (internalMode || !locked)}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || locked || sending}
+            disabled={sendDisabled}
             onClick={handleSend}
-            className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
+            className={cn(
+              "h-9 w-9 shrink-0 p-0 disabled:opacity-40",
+              internalMode
+                ? "bg-amber-500 text-white hover:bg-amber-600"
+                : "bg-primary hover:bg-primary/90",
+            )}
           >
             <Send className="h-4 w-4" />
           </GatedButton>

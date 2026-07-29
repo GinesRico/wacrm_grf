@@ -235,6 +235,7 @@ export default function InboxPage() {
       const newMsg = event.new;
 
       if (event.eventType === "INSERT") {
+        const isInternalMessage = newMsg.content_type === "internal";
         // Add to messages if it belongs to active conversation
         if (
           activeConversation &&
@@ -244,6 +245,8 @@ export default function InboxPage() {
             return mergeRealtimeMessage(prev, newMsg);
           });
         }
+
+        if (isInternalMessage) return;
 
         // Update conversation list preview. We need to know *synchronously*
         // whether the conv is already in state to decide between patching

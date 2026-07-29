@@ -1,5 +1,10 @@
 import { Fragment } from "react";
 import type { ReactNode } from "react";
+import {
+  extractTyreMeasureKeys,
+  findNormalizedSearchIndex,
+  normalizeSearchText,
+} from "@/lib/search/normalize";
 
 const BOLD_SEGMENT_RE = /\*([^*\n]+)\*/g;
 const URL_SEGMENT_RE = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
@@ -14,17 +19,28 @@ function renderHighlightedText(
   if (!query) return text;
 
   const nodes: ReactNode[] = [];
-  const lowerText = text.toLocaleLowerCase();
-  const lowerQuery = query.toLocaleLowerCase();
+  const lowerText = normalizeSearchText(text);
+  const lowerQuery = normalizeSearchText(query);
   let cursor = 0;
-  let matchIndex = lowerText.indexOf(lowerQuery);
+  const queryTyres = extractTyreMeasureKeys(query);
+  let matchIndex = findNormalizedSearchIndex(text, query);
 
   while (matchIndex !== -1) {
     if (matchIndex > cursor) {
       nodes.push(text.slice(cursor, matchIndex));
     }
 
-    const end = matchIndex + query.length;
+    let end = matchIndex + query.length;
+    if (queryTyres.length > 0) {
+      const tail = lowerText.slice(matchIndex);
+      const tyreMatch =
+        tail.match(/^(\d{3})\s*[/\-\s]?\s*(\d{2})\s*r\s*(\d{2})\b/i) ??
+        tail.match(/^(\d{3})\s*[/\-\s]\s*(\d{2})\s*[/\-\s]\s*(\d{2})\b/i) ??
+        tail.match(/^(\d{3})(\d{2})(\d{2})\b/i);
+      if (tyreMatch) {
+        end = matchIndex + tyreMatch[0].length;
+      }
+    }
     nodes.push(
       <mark
         key={`${keyPrefix}-search-${matchIndex}`}
@@ -35,7 +51,13 @@ function renderHighlightedText(
     );
 
     cursor = end;
-    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+    matchIndex =
+      queryTyres.length > 0
+        ? findNormalizedSearchIndex(text.slice(cursor), query)
+        : lowerText.indexOf(lowerQuery, cursor);
+    if (matchIndex >= 0 && queryTyres.length > 0) {
+      matchIndex += cursor;
+    }
   }
 
   if (cursor < text.length) {

@@ -71,6 +71,7 @@ import { toast } from 'sonner';
 import { useAppConfirm } from '@/hooks/use-app-dialog';
 import { toInteractiveTemplateButton } from '@/lib/inbox/template-buttons';
 import { ContactDetailView } from '@/components/contacts/contact-detail-view';
+import { normalizedSearchIncludes } from '@/lib/search/normalize';
 
 interface ReplyDraft {
   id: string;
@@ -476,10 +477,9 @@ export function MessageThread({
   const chatSearchMatchIds = useMemo(() => {
     if (!normalizedChatSearchQuery) return [];
 
-    const needle = normalizedChatSearchQuery.toLocaleLowerCase();
     return messages
       .filter((message) =>
-        (message.content_text ?? '').toLocaleLowerCase().includes(needle)
+        normalizedSearchIncludes(message.content_text ?? '', normalizedChatSearchQuery)
       )
       .map((message) => message.id);
   }, [messages, normalizedChatSearchQuery]);
@@ -1009,6 +1009,72 @@ export function MessageThread({
     ]
   );
 
+  const handleSendInternal = useCallback(
+    async (text: string, replyToId?: string) => {
+      if (!conversation) return;
+
+      const tempId = `temp-internal-${Date.now()}`;
+      const safeReplyToId = resolveReplyToId(replyToId);
+      const optimisticMsg: Message = {
+        id: tempId,
+        conversation_id: conversation.id,
+        sender_type: 'agent',
+        sender_id: user?.id,
+        content_type: 'internal',
+        content_text: text,
+        status: 'sending',
+        created_at: new Date().toISOString(),
+        reply_to_message_id: safeReplyToId,
+        sender_profile: user
+          ? {
+              user_id: user.id,
+              full_name: profile?.full_name ?? user.name ?? user.email ?? '',
+              email: profile?.email ?? user.email ?? '',
+              avatar_url: profile?.avatar_url ?? user.image ?? null,
+            }
+          : null,
+      };
+      onNewMessage(optimisticMsg);
+      setReplyTo(null);
+
+      try {
+        const res = await fetch('/api/inbox/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversation_id: conversation.id,
+            content_text: text,
+            reply_to_message_id: safeReplyToId,
+          }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload.message) {
+          const reason = payload?.error || `HTTP ${res.status}`;
+          console.error('Failed to send internal message:', reason);
+          toast.error(t('internalSendFailed'));
+          onUpdateMessage(tempId, { status: 'failed' });
+          return;
+        }
+        onUpdateMessage(tempId, payload.message as Partial<Message>);
+      } catch (err) {
+        console.error('Failed to send internal message:', err);
+        toast.error(t('internalSendFailed'));
+        onUpdateMessage(tempId, { status: 'failed' });
+      }
+    },
+    [
+      conversation,
+      onNewMessage,
+      onUpdateMessage,
+      profile?.avatar_url,
+      profile?.email,
+      profile?.full_name,
+      resolveReplyToId,
+      t,
+      user,
+    ]
+  );
+
   const handleSendMedia = useCallback(
     async (payload: SendMediaPayload) => {
       if (!conversation) return;
@@ -1525,13 +1591,23 @@ export function MessageThread({
 
   const openForwardDialog = useCallback(() => {
     if (selectedMessageIds.size === 0) return;
+    if (selectedMessages.some((message) => message.content_type === 'internal')) {
+      toast.error(t('internalForwardBlocked'));
+      return;
+    }
     setForwardContactId('');
     setForwardLineId(
       (current) =>
         current || conversation?.whatsapp_config_id || lines[0]?.id || ''
     );
     setForwardDialogOpen(true);
-  }, [conversation?.whatsapp_config_id, lines, selectedMessageIds.size]);
+  }, [
+    conversation?.whatsapp_config_id,
+    lines,
+    selectedMessageIds.size,
+    selectedMessages,
+    t,
+  ]);
 
   const openForwardDialogForMessage = useCallback(
     (messageId: string) => {
@@ -1575,6 +1651,10 @@ export function MessageThread({
   const handleForwardSelectedMessages = useCallback(async () => {
     if (!forwardContactId || !forwardLineId || selectedMessages.length === 0)
       return;
+    if (selectedMessages.some((message) => message.content_type === 'internal')) {
+      toast.error(t('internalForwardBlocked'));
+      return;
+    }
     const forwardableMessages = selectedMessages.filter(
       (message) => !message.deleted_at
     );
@@ -2363,6 +2443,7 @@ export function MessageThread({
         locked={composerLocked}
         lockedReason={composerLockedReason}
         onSend={handleSend}
+        onSendInternal={handleSendInternal}
         onSendMedia={handleSendMedia}
         onSendInteractive={handleSendInteractive}
         onOpenTemplates={handleOpenTemplates}

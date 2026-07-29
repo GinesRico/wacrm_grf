@@ -347,6 +347,8 @@
       "deleteFailed": "No se pudo borrar el ticket",
       "messageDeleteFailed": "No se pudo eliminar el mensaje",
       "messageStarFailed": "No se pudo destacar el mensaje",
+      "internalSendFailed": "No se pudo guardar la nota interna",
+      "internalForwardBlocked": "Las notas internas no se pueden reenviar",
       "selectedMessages": "{count} seleccionados",
       "cancelSelection": "Cancelar seleccion",
       "deleteSelectedConfirm": "Eliminar {count} mensajes seleccionados?",
@@ -425,7 +427,11 @@
       "recordingTooLong": "La grabacion es demasiado larga (mas de 16 MB).",
       "voiceUnsupported": "La grabacion de voz no es compatible con este navegador.",
       "microphoneDenied": "Acceso al microfono denegado o no disponible.",
-      "lockedPlaceholder": "Acepta o reabre el chat para responder"
+      "lockedPlaceholder": "Acepta o reabre el chat para responder",
+      "internal": "Interno",
+      "internalNote": "Nota interna",
+      "internalHint": "Solo lo vera tu equipo. No se envia al cliente.",
+      "internalPlaceholder": "Escribe una nota interna para tu equipo..."
     },
     "bubble": {
       "photo": "Foto",
@@ -477,7 +483,10 @@
       "typeLocation": "Ubicacion",
       "typeTemplate": "Plantilla",
       "typeInteractive": "Interactivo",
-      "typeSystem": "Sistema"
+      "typeSystem": "Sistema",
+      "typeInternal": "Interno",
+      "internalNote": "Nota interna",
+      "internalAgent": "Agente"
     },
     "actions": {
       "reply": "Responder",

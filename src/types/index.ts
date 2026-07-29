@@ -254,6 +254,7 @@ export type ContentType =
   | 'location'
   | 'template'
   | 'system'
+  | 'internal'
   /** Customer tapped a reply button or list row on a message we sent. */
   | 'interactive';
 export type MessageStatus =
@@ -302,6 +303,12 @@ export interface Message {
    */
   is_starred?: boolean;
   ai_generated?: boolean;
+  sender_profile?: {
+    user_id: string;
+    full_name: string;
+    email: string;
+    avatar_url?: string | null;
+  } | null;
 }
 
 export type ReactionActor = 'customer' | 'agent';

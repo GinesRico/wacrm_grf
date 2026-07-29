@@ -1,4 +1,4 @@
-import { and, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db/client";
 import {
@@ -21,6 +21,11 @@ import {
   normalizeConversations,
 } from "@/lib/inbox/conversations";
 import { createRealtimeNotification } from "@/lib/notifications/create-notification";
+import {
+  findNormalizedSearchIndex,
+  normalizedSearchIncludes,
+  normalizeSearchText,
+} from "@/lib/search/normalize";
 
 export type InboxTab = "inbox" | "resolved" | "search";
 export type InboxSubtab = "open" | "pending";
@@ -228,7 +233,7 @@ export function parseInboxSearchParams(searchParams: URLSearchParams) {
 }
 
 function normalizeText(value: string | null | undefined) {
-  return (value ?? "").toLocaleLowerCase();
+  return normalizeSearchText(value);
 }
 
 function parseInboxSearch(raw: string): ParsedInboxSearch {
@@ -276,19 +281,16 @@ function statusMatches(status: ConversationStatus, value: string) {
 function makeSnippet(value: string, query: string, maxLength = 96) {
   const compact = value.replace(/\s+/g, " ").trim();
   if (!query.trim()) return compact.slice(0, maxLength);
-  const lower = compact.toLocaleLowerCase();
-  const needle = query.toLocaleLowerCase();
-  const index = lower.indexOf(needle);
+  const index = findNormalizedSearchIndex(compact, query);
   if (index < 0) return compact.slice(0, maxLength);
   const start = Math.max(0, index - 32);
-  const end = Math.min(compact.length, index + query.length + 48);
+  const end = Math.min(compact.length, index + Math.max(query.length, 7) + 48);
   return `${start > 0 ? "..." : ""}${compact.slice(start, end)}${end < compact.length ? "..." : ""}`;
 }
 
 function includesAnyTerm(value: string | null | undefined, terms: string[]) {
   if (terms.length === 0) return false;
-  const haystack = normalizeText(value);
-  return terms.some((term) => haystack.includes(normalizeText(term)));
+  return terms.some((term) => normalizedSearchIncludes(value, term));
 }
 
 function bestFieldMatch(
@@ -299,7 +301,7 @@ function bestFieldMatch(
   query: string,
   score: number,
 ): SearchMatch | null {
-  if (!text || !query || !normalizeText(text).includes(normalizeText(query))) {
+  if (!text || !query || !normalizedSearchIncludes(text, query)) {
     return current;
   }
   if (current && current.score >= score) return current;
@@ -481,7 +483,7 @@ export async function listInboxConversations(
       }
       if (!primaryQuery) continue;
       const text = row.contentText || row.templateName || "";
-      if (!normalizeText(text).includes(normalizeText(primaryQuery))) continue;
+      if (!normalizedSearchIncludes(text, primaryQuery)) continue;
       const existing = messageMatches.get(row.conversationId);
       if (!existing || existing.score < 80) {
         messageMatches.set(row.conversationId, {
@@ -510,7 +512,6 @@ export async function listInboxConversations(
           and(
             eq(contactNotes.accountId, params.accountId),
             inArray(contactNotes.contactId, scopedContactIds),
-            ilike(contactNotes.noteText, `%${primaryQuery}%`),
           ),
         )
         .limit(500),
@@ -526,7 +527,6 @@ export async function listInboxConversations(
           and(
             eq(customFields.accountId, params.accountId),
             inArray(contactCustomValues.contactId, scopedContactIds),
-            ilike(contactCustomValues.value, `%${primaryQuery}%`),
           ),
         )
         .limit(500),
@@ -541,13 +541,13 @@ export async function listInboxConversations(
           and(
             eq(tags.accountId, params.accountId),
             inArray(contactTags.contactId, scopedContactIds),
-            ilike(tags.name, `%${primaryQuery}%`),
           ),
         )
         .limit(500),
     ]);
 
     for (const row of noteRows) {
+      if (!normalizedSearchIncludes(row.noteText, primaryQuery)) continue;
       const conversation = scoped.find((item) => item.contact_id === row.contactId);
       if (!conversation) continue;
       noteMatches.set(conversation.id, {
@@ -557,6 +557,7 @@ export async function listInboxConversations(
       });
     }
     for (const row of customRows) {
+      if (!normalizedSearchIncludes(row.value, primaryQuery)) continue;
       const conversation = scoped.find((item) => item.contact_id === row.contactId);
       if (!conversation || !row.value) continue;
       customMatches.set(conversation.id, {
@@ -567,6 +568,7 @@ export async function listInboxConversations(
       });
     }
     for (const row of tagRows) {
+      if (!normalizedSearchIncludes(row.name, primaryQuery)) continue;
       matchingTagContactIds.add(row.contactId);
     }
   }
@@ -598,24 +600,21 @@ export async function listInboxConversations(
       return false;
     }
     if (filters.tag) {
-      const tagNeedle = normalizeText(filters.tag);
       if (
         !(conversation.contact?.tags ?? []).some((tag) =>
-          normalizeText(tag.name).includes(tagNeedle),
+          normalizedSearchIncludes(tag.name, filters.tag),
         )
       ) {
         return false;
       }
     }
     if (filters.line) {
-      const lineNeedle = normalizeText(filters.line);
       const lineText = `${conversation.whatsapp_config?.label ?? ""} ${
         conversation.whatsapp_config?.phone_number_id ?? ""
       }`;
-      if (!normalizeText(lineText).includes(lineNeedle)) return false;
+      if (!normalizedSearchIncludes(lineText, filters.line)) return false;
     }
     if (filters.from) {
-      const fromNeedle = normalizeText(filters.from);
       const agentText = `${conversation.assigned_agent?.full_name ?? ""} ${
         conversation.assigned_agent?.email ?? ""
       }`;
@@ -623,8 +622,8 @@ export async function listInboxConversations(
         conversation.contact?.phone ?? ""
       } ${conversation.contact?.email ?? ""}`;
       if (
-        !normalizeText(agentText).includes(fromNeedle) &&
-        !normalizeText(contactText).includes(fromNeedle)
+        !normalizedSearchIncludes(agentText, filters.from) &&
+        !normalizedSearchIncludes(contactText, filters.from)
       ) {
         return false;
       }
@@ -680,7 +679,7 @@ export async function listInboxConversations(
     );
 
     const tagMatch = (contact?.tags ?? []).find((tag) =>
-      normalizeText(tag.name).includes(normalizeText(primaryQuery)),
+      normalizedSearchIncludes(tag.name, primaryQuery),
     );
     if (tagMatch && (!match || match.score < 70)) {
       match = {

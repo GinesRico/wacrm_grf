@@ -70,6 +70,7 @@ export function MessageActions({
 
   const isAgent =
     message.sender_type === "agent" || message.sender_type === "bot";
+  const isInternal = message.content_type === "internal";
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -135,6 +136,7 @@ export function MessageActions({
   };
 
   const handlePickEmoji = (emoji: string) => {
+    if (isInternal) return;
     onReact(emoji);
     setMenuOpen(false);
   };
@@ -145,11 +147,13 @@ export function MessageActions({
   };
 
   const handleForward = () => {
+    if (isInternal) return;
     onForward();
     setMenuOpen(false);
   };
 
   const handleAiReply = () => {
+    if (isInternal) return;
     onAiReply();
     setMenuOpen(false);
   };

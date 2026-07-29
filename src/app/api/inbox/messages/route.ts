@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { db } from '@/db/client';
-import { conversations, messageReactions, messages } from '@/db/schema';
+import { conversations, messageReactions, messages, profiles } from '@/db/schema';
 import { getCurrentDbAccount, requireDbRole } from '@/lib/auth/current-account';
 import { toErrorResponse } from '@/lib/auth/errors';
 import { getInboxConversationById } from '@/lib/inbox/conversations';
@@ -16,7 +16,18 @@ function asStringArray(value: unknown): string[] {
   );
 }
 
-function toMessageRow(row: typeof messages.$inferSelect) {
+type MessageSenderProfile = Pick<
+  typeof profiles.$inferSelect,
+  'userId' | 'fullName' | 'email' | 'avatarUrl'
+>;
+
+function toMessageRow(
+  row: typeof messages.$inferSelect,
+  senderProfiles?: Map<string, MessageSenderProfile>
+) {
+  const senderProfile = row.senderId
+    ? senderProfiles?.get(row.senderId)
+    : undefined;
   return {
     id: row.id,
     conversation_id: row.conversationId,
@@ -41,6 +52,14 @@ function toMessageRow(row: typeof messages.$inferSelect) {
     deleted_by_user_id: row.deletedByUserId,
     is_starred: row.isStarred,
     ai_generated: row.aiGenerated,
+    sender_profile: senderProfile
+      ? {
+          user_id: senderProfile.userId,
+          full_name: senderProfile.fullName,
+          email: senderProfile.email,
+          avatar_url: senderProfile.avatarUrl,
+        }
+      : null,
     created_at: row.createdAt.toISOString(),
   };
 }
@@ -110,10 +129,131 @@ export async function GET(request: Request) {
         .where(eq(messageReactions.conversationId, conversationId)),
     ]);
 
+    const senderIds = Array.from(
+      new Set(
+        messageRows
+          .map((message) => message.senderId)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+    const senderRows =
+      senderIds.length > 0
+        ? await db
+            .select({
+              userId: profiles.userId,
+              fullName: profiles.fullName,
+              email: profiles.email,
+              avatarUrl: profiles.avatarUrl,
+            })
+            .from(profiles)
+            .where(
+              and(
+                eq(profiles.accountId, ctx.accountId),
+                inArray(profiles.userId, senderIds)
+              )
+            )
+        : [];
+    const senderProfiles = new Map(
+      senderRows.map((profile) => [profile.userId, profile])
+    );
+
     return NextResponse.json({
-      messages: messageRows.map(toMessageRow),
+      messages: messageRows.map((message) =>
+        toMessageRow(message, senderProfiles)
+      ),
       reactions: reactionRows.map(toReactionRow),
     });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const ctx = await requireDbRole('agent');
+    const body = await request.json().catch(() => ({}));
+    const conversationId =
+      typeof body?.conversation_id === 'string' ? body.conversation_id : '';
+    const contentText =
+      typeof body?.content_text === 'string' ? body.content_text.trim() : '';
+    const replyToMessageId =
+      typeof body?.reply_to_message_id === 'string'
+        ? body.reply_to_message_id
+        : null;
+
+    if (!conversationId) {
+      return NextResponse.json(
+        { error: 'conversation_id is required.' },
+        { status: 400 }
+      );
+    }
+    if (!contentText) {
+      return NextResponse.json(
+        { error: 'content_text is required.' },
+        { status: 400 }
+      );
+    }
+
+    const allowed = await assertConversationAccess(
+      ctx.accountId,
+      conversationId
+    );
+    if (!allowed) {
+      return NextResponse.json(
+        { error: 'Conversation not found.' },
+        { status: 404 }
+      );
+    }
+
+    const safeReplyToId = replyToMessageId
+      ? await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.id, replyToMessageId),
+              eq(messages.conversationId, conversationId)
+            )
+          )
+          .limit(1)
+          .then((rows) => rows[0]?.id ?? null)
+      : null;
+
+    const [inserted] = await db
+      .insert(messages)
+      .values({
+        conversationId,
+        senderType: 'agent',
+        senderId: ctx.userId,
+        contentType: 'internal',
+        contentText,
+        status: 'sent',
+        replyToMessageId: safeReplyToId,
+      })
+      .returning();
+
+    const senderProfiles = new Map<string, MessageSenderProfile>([
+      [
+        ctx.userId,
+        {
+          userId: ctx.userId,
+          fullName: ctx.profile.full_name,
+          email: ctx.profile.email,
+          avatarUrl: ctx.profile.avatar_url,
+        },
+      ],
+    ]);
+    const message = toMessageRow(inserted, senderProfiles);
+
+    await publishRealtimeEvent('message.created', {
+      accountId: ctx.accountId,
+      conversationId,
+      payload: { message },
+    }).catch((error) => {
+      console.warn('[realtime] failed to publish internal message:', error);
+    });
+
+    return NextResponse.json({ message });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -182,7 +322,9 @@ export async function PATCH(request: Request) {
         )
       );
 
-      return NextResponse.json({ messages: updatedRows.map(toMessageRow) });
+      return NextResponse.json({
+        messages: updatedRows.map((message) => toMessageRow(message)),
+      });
     }
 
     const deletedAt = new Date();
@@ -211,7 +353,8 @@ export async function PATCH(request: Request) {
           .where(
             and(
               eq(messages.conversationId, conversationId),
-              isNull(messages.deletedAt)
+              isNull(messages.deletedAt),
+              sql`${messages.contentType} <> 'internal'`
             )
           )
           .orderBy(sql`${messages.createdAt} desc`)
@@ -263,7 +406,9 @@ export async function PATCH(request: Request) {
       )
     );
 
-    return NextResponse.json({ messages: updatedRows.map(toMessageRow) });
+    return NextResponse.json({
+      messages: updatedRows.map((message) => toMessageRow(message)),
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

@@ -123,6 +123,8 @@ function contentTypeLabel(
       return t('typeInteractive');
     case 'system':
       return t('typeSystem');
+    case 'internal':
+      return t('typeInternal');
     default:
       return type;
   }
@@ -1043,6 +1045,70 @@ export function MessageBubble({
             </dl>
           </PopoverContent>
         </Popover>
+      </div>
+    );
+  }
+
+  if (message.content_type === 'internal') {
+    const createdAt =
+      formatMessageInfoDate(message.created_at) ?? t('missingTime');
+    const time = format(new Date(message.created_at), 'HH:mm');
+    const senderName =
+      message.sender_profile?.full_name?.trim() ||
+      message.sender_profile?.email?.trim() ||
+      t('internalAgent');
+
+    return (
+      <div className="flex justify-center py-1">
+        <div className="max-w-[min(88%,42rem)] rounded-xl border border-amber-300/60 bg-amber-300/15 px-3 py-2 text-amber-950 shadow-sm dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-100">
+          {reply && (
+            <ReplyQuote
+              authorLabel={reply.authorLabel}
+              preview={reply.preview}
+              onPrimary={false}
+              onClick={
+                reply.messageId && onJumpToMessage
+                  ? () => onJumpToMessage(reply.messageId!)
+                  : undefined
+              }
+            />
+          )}
+          <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+            <span>{t('internalNote')}</span>
+            <span className="normal-case tracking-normal text-amber-800/80 dark:text-amber-200/80">
+              {senderName}
+            </span>
+          </div>
+          <p className="text-sm break-words whitespace-pre-wrap">
+            <WhatsAppText
+              text={message.content_text || ''}
+              searchQuery={searchQuery}
+            />
+          </p>
+          <Popover>
+            <PopoverTrigger
+              type="button"
+              title={t('messageInfo')}
+              className="mt-1 block border-0 bg-transparent p-0 text-[10px] text-amber-800/70 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none dark:text-amber-200/70"
+            >
+              {time}
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="center"
+              className="w-72 gap-2 p-3 text-xs"
+            >
+              <div className="text-foreground font-medium">
+                {t('messageInfo')}
+              </div>
+              <dl className="space-y-1.5">
+                <MessageInfoRow label={t('status')} value={statusLabel(message.status, t)} />
+                <MessageInfoRow label={t('type')} value={contentTypeLabel(message.content_type, t)} />
+                <MessageInfoRow label={t('createdAt')} value={createdAt} />
+              </dl>
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
     );
   }
