@@ -35,6 +35,9 @@ import {
   Copy,
   CornerUpLeft,
   UserRound,
+  Search,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { format, isToday, isYesterday, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -436,6 +439,10 @@ export function MessageThread({
   const [highlightMessageId, setHighlightMessageId] = useState<string | null>(
     null
   );
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState('');
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
+  const chatSearchInputRef = useRef<HTMLInputElement>(null);
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   const [lines, setLines] = useState<TransferLine[]>([]);
   const [templateFallbackPayloads, setTemplateFallbackPayloads] = useState<
@@ -465,6 +472,18 @@ export function MessageThread({
   const agentSignatureName =
     profile?.full_name?.trim() || profile?.email?.trim() || user?.email || '';
 
+  const normalizedChatSearchQuery = chatSearchQuery.trim();
+  const chatSearchMatchIds = useMemo(() => {
+    if (!normalizedChatSearchQuery) return [];
+
+    const needle = normalizedChatSearchQuery.toLocaleLowerCase();
+    return messages
+      .filter((message) =>
+        (message.content_text ?? '').toLocaleLowerCase().includes(needle)
+      )
+      .map((message) => message.id);
+  }, [messages, normalizedChatSearchQuery]);
+
   const signMessageText = useCallback(
     (value: string) => {
       if (!signatureEnabled || !agentSignatureName) return value;
@@ -490,6 +509,57 @@ export function MessageThread({
 
     return true;
   }, []);
+
+  const activeSearchMessageId =
+    activeSearchIndex >= 0 ? chatSearchMatchIds[activeSearchIndex] : null;
+
+  useEffect(() => {
+    setChatSearchOpen(false);
+    setChatSearchQuery('');
+    setActiveSearchIndex(-1);
+  }, [conversation?.id]);
+
+  useEffect(() => {
+    if (chatSearchOpen) {
+      chatSearchInputRef.current?.focus();
+    }
+  }, [chatSearchOpen]);
+
+  useEffect(() => {
+    if (!normalizedChatSearchQuery || chatSearchMatchIds.length === 0) {
+      setActiveSearchIndex(-1);
+      return;
+    }
+
+    setActiveSearchIndex(chatSearchMatchIds.length - 1);
+  }, [chatSearchMatchIds.length, normalizedChatSearchQuery]);
+
+  useEffect(() => {
+    if (!chatSearchOpen || !activeSearchMessageId) return;
+    jumpToMessage(activeSearchMessageId);
+  }, [activeSearchMessageId, chatSearchOpen, jumpToMessage]);
+
+  const closeChatSearch = useCallback(() => {
+    setChatSearchOpen(false);
+    setChatSearchQuery('');
+    setActiveSearchIndex(-1);
+  }, []);
+
+  const moveSearchResult = useCallback(
+    (direction: -1 | 1) => {
+      if (chatSearchMatchIds.length === 0) return;
+      setActiveSearchIndex((current) => {
+        if (current < 0) {
+          return direction > 0 ? 0 : chatSearchMatchIds.length - 1;
+        }
+        return (
+          (current + direction + chatSearchMatchIds.length) %
+          chatSearchMatchIds.length
+        );
+      });
+    },
+    [chatSearchMatchIds.length]
+  );
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [editingContactOpen, setEditingContactOpen] = useState(false);
@@ -1795,6 +1865,18 @@ export function MessageThread({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <button
+            type="button"
+            onClick={() => setChatSearchOpen((open) => !open)}
+            aria-label={t('searchInConversation')}
+            title={t('searchInConversation')}
+            className={cn(
+              'hover:bg-muted inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors',
+              chatSearchOpen ? 'text-primary' : 'text-muted-foreground'
+            )}
+          >
+            <Search className="h-4 w-4" />
+          </button>
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
@@ -1944,6 +2026,70 @@ export function MessageThread({
         ) : null}
       </div>
 
+      {chatSearchOpen && (
+        <div className="border-border bg-card/95 flex shrink-0 items-center gap-2 border-b px-3 py-2 shadow-sm sm:px-4">
+          <div className="relative min-w-0 flex-1">
+            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
+            <input
+              ref={chatSearchInputRef}
+              value={chatSearchQuery}
+              onChange={(event) => setChatSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  closeChatSearch();
+                  return;
+                }
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  moveSearchResult(event.shiftKey ? -1 : 1);
+                }
+              }}
+              placeholder={t('searchPlaceholder')}
+              className="border-border bg-background text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-primary/20 h-9 w-full rounded-md border pr-3 pl-9 text-sm outline-none focus:ring-2"
+            />
+          </div>
+          <span className="text-muted-foreground w-20 shrink-0 text-center text-xs tabular-nums">
+            {normalizedChatSearchQuery
+              ? chatSearchMatchIds.length > 0
+                ? t('searchResults', {
+                    current: activeSearchIndex + 1,
+                    count: chatSearchMatchIds.length,
+                  })
+                : t('noSearchResults')
+              : ''}
+          </span>
+          <button
+            type="button"
+            onClick={() => moveSearchResult(-1)}
+            disabled={chatSearchMatchIds.length === 0}
+            aria-label={t('previousSearchResult')}
+            title={t('previousSearchResult')}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-8 w-8 shrink-0 items-center justify-center rounded-md disabled:opacity-40"
+          >
+            <ChevronUp className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => moveSearchResult(1)}
+            disabled={chatSearchMatchIds.length === 0}
+            aria-label={t('nextSearchResult')}
+            title={t('nextSearchResult')}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-8 w-8 shrink-0 items-center justify-center rounded-md disabled:opacity-40"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={closeChatSearch}
+            aria-label={t('closeSearch')}
+            title={t('closeSearch')}
+            className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <TransferDialog
         open={transferOpen}
         onOpenChange={setTransferOpen}
@@ -2071,7 +2217,10 @@ export function MessageThread({
                     if (msg.content_type === 'system') {
                       return (
                         <div key={msg.id} data-message-id={msg.id}>
-                          <MessageBubble message={msg} />
+                          <MessageBubble
+                            message={msg}
+                            searchQuery={normalizedChatSearchQuery}
+                          />
                         </div>
                       );
                     }
@@ -2112,6 +2261,7 @@ export function MessageThread({
                                 : null
                             }
                             onJumpToMessage={jumpToMessage}
+                            searchQuery={normalizedChatSearchQuery}
                           />
                         </MessageActions>
                       </div>

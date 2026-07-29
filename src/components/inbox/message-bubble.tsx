@@ -48,6 +48,7 @@ interface MessageBubbleProps {
   onToggleReaction?: (emoji: string) => void;
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onJumpToMessage?: (messageId: string) => void;
+  searchQuery?: string | null;
 }
 
 function StatusIcon({ status }: { status: Message['status'] }) {
@@ -696,11 +697,13 @@ function MessageContent({
   t,
   templateFallbackPayload,
   onPrimary,
+  searchQuery,
 }: {
   message: Message;
   t: ReturnType<typeof useTranslations>;
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onPrimary: boolean;
+  searchQuery?: string | null;
 }) {
   const text = message.content_text ?? '';
   const isUnsupportedText =
@@ -738,7 +741,7 @@ function MessageContent({
           {t('deletedTitle')}
         </span>
         <p className="text-sm break-words whitespace-pre-wrap opacity-80">
-          <WhatsAppText text={deletedPreview} />
+          <WhatsAppText text={deletedPreview} searchQuery={searchQuery} />
         </p>
       </div>
     );
@@ -756,7 +759,10 @@ function MessageContent({
       return (
         <div>
           <p className="text-sm break-words whitespace-pre-wrap">
-            <WhatsAppText text={message.content_text} />
+            <WhatsAppText
+              text={message.content_text}
+              searchQuery={searchQuery}
+            />
           </p>
           {templateFallbackPayload ? (
             <TemplateActions
@@ -792,7 +798,10 @@ function MessageContent({
           )}
           {message.content_text && (
             <p className="mt-1 text-sm break-words whitespace-pre-wrap">
-              <WhatsAppText text={message.content_text} />
+              <WhatsAppText
+                text={message.content_text}
+                searchQuery={searchQuery}
+              />
             </p>
           )}
           {message.interactive_payload ? (
@@ -818,7 +827,10 @@ function MessageContent({
           )}
           {message.content_text && (
             <p className="mt-1 text-sm break-words whitespace-pre-wrap">
-              <WhatsAppText text={message.content_text} />
+              <WhatsAppText
+                text={message.content_text}
+                searchQuery={searchQuery}
+              />
             </p>
           )}
           {message.interactive_payload ? (
@@ -884,7 +896,7 @@ function MessageContent({
             </a>
             {caption ? (
               <p className="mt-2 text-sm break-words whitespace-pre-wrap">
-                <WhatsAppText text={caption} />
+                <WhatsAppText text={caption} searchQuery={searchQuery} />
               </p>
             ) : null}
           </div>
@@ -909,7 +921,10 @@ function MessageContent({
           ) : null}
           {message.content_text && (
             <p className="text-sm break-words whitespace-pre-wrap">
-              <WhatsAppText text={message.content_text} />
+              <WhatsAppText
+                text={message.content_text}
+                searchQuery={searchQuery}
+              />
             </p>
           )}
           {templatePayload ? (
@@ -924,7 +939,10 @@ function MessageContent({
         <div className="flex items-center gap-2 text-sm">
           <MapPin className="text-muted-foreground h-4 w-4 shrink-0" />
           <span>
-            <WhatsAppText text={message.content_text || t('locationShared')} />
+            <WhatsAppText
+              text={message.content_text || t('locationShared')}
+              searchQuery={searchQuery}
+            />
           </span>
         </div>
       );
@@ -958,6 +976,7 @@ function MessageContent({
             <p className="text-sm break-words whitespace-pre-wrap">
               <WhatsAppText
                 text={message.content_text || t('interactiveReply')}
+                searchQuery={searchQuery}
               />
             </p>
           </div>
@@ -965,7 +984,10 @@ function MessageContent({
       }
       return (
         <p className="text-sm break-words whitespace-pre-wrap">
-          <WhatsAppText text={message.content_text || t('interactiveReply')} />
+          <WhatsAppText
+            text={message.content_text || t('interactiveReply')}
+            searchQuery={searchQuery}
+          />
         </p>
       );
     }
@@ -973,7 +995,10 @@ function MessageContent({
     default:
       return (
         <p className="text-sm break-words whitespace-pre-wrap">
-          <WhatsAppText text={message.content_text || t('unsupported')} />
+          <WhatsAppText
+            text={message.content_text || t('unsupported')}
+            searchQuery={searchQuery}
+          />
         </p>
       );
   }
@@ -987,6 +1012,7 @@ export function MessageBubble({
   onToggleReaction,
   templateFallbackPayload,
   onJumpToMessage,
+  searchQuery,
 }: MessageBubbleProps) {
   const t = useTranslations('Inbox.bubble');
 
@@ -1002,7 +1028,10 @@ export function MessageBubble({
             title={t('messageInfo')}
             className="bg-background/85 text-muted-foreground focus-visible:ring-primary/40 max-w-[80%] rounded-full px-4 py-2 text-center text-xs italic underline-offset-2 shadow-sm hover:underline focus-visible:ring-2 focus-visible:outline-none"
           >
-            <WhatsAppText text={message.content_text || ''} />
+            <WhatsAppText
+              text={message.content_text || ''}
+              searchQuery={searchQuery}
+            />
           </PopoverTrigger>
           <PopoverContent
             side="top"
@@ -1106,6 +1135,7 @@ export function MessageBubble({
           t={t}
           templateFallbackPayload={templateFallbackPayload}
           onPrimary={false}
+          searchQuery={searchQuery}
         />
         <div
           className={cn(

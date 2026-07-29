@@ -5,28 +5,92 @@ const BOLD_SEGMENT_RE = /\*([^*\n]+)\*/g;
 const URL_SEGMENT_RE = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
 const TRAILING_URL_PUNCTUATION_RE = /[.,;:!?)]$/;
 
-function renderBoldText(text: string, keyPrefix: string) {
+function renderHighlightedText(
+  text: string,
+  keyPrefix: string,
+  searchQuery?: string | null,
+) {
+  const query = searchQuery?.trim();
+  if (!query) return text;
+
+  const nodes: ReactNode[] = [];
+  const lowerText = text.toLocaleLowerCase();
+  const lowerQuery = query.toLocaleLowerCase();
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery);
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      nodes.push(text.slice(cursor, matchIndex));
+    }
+
+    const end = matchIndex + query.length;
+    nodes.push(
+      <mark
+        key={`${keyPrefix}-search-${matchIndex}`}
+        className="rounded-sm bg-yellow-300 px-0.5 text-yellow-950"
+      >
+        {text.slice(matchIndex, end)}
+      </mark>,
+    );
+
+    cursor = end;
+    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+
+  return nodes;
+}
+
+function renderBoldText(
+  text: string,
+  keyPrefix: string,
+  searchQuery?: string | null,
+) {
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
 
   for (const match of text.matchAll(BOLD_SEGMENT_RE)) {
     const start = match.index ?? 0;
     if (start > lastIndex) {
-      nodes.push(text.slice(lastIndex, start));
+      nodes.push(
+        ...asNodeArray(
+          renderHighlightedText(
+            text.slice(lastIndex, start),
+            `${keyPrefix}-plain-${lastIndex}`,
+            searchQuery,
+          ),
+        ),
+      );
     }
     nodes.push(
       <strong key={`${keyPrefix}-bold-${start}-${match[1]}`} className="font-semibold">
-        {match[1]}
+        {renderHighlightedText(match[1], `${keyPrefix}-bold-${start}`, searchQuery)}
       </strong>,
     );
     lastIndex = start + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
+    nodes.push(
+      ...asNodeArray(
+        renderHighlightedText(
+          text.slice(lastIndex),
+          `${keyPrefix}-plain-${lastIndex}`,
+          searchQuery,
+        ),
+      ),
+    );
   }
 
   return nodes;
+}
+
+function asNodeArray(node: ReactNode | ReactNode[]) {
+  return Array.isArray(node) ? node : [node];
 }
 
 function splitUrlTrailingPunctuation(rawUrl: string) {
@@ -41,7 +105,13 @@ function splitUrlTrailingPunctuation(rawUrl: string) {
   return { url, trailing };
 }
 
-export function WhatsAppText({ text }: { text?: string | null }) {
+export function WhatsAppText({
+  text,
+  searchQuery,
+}: {
+  text?: string | null;
+  searchQuery?: string | null;
+}) {
   if (!text) return null;
 
   const nodes: ReactNode[] = [];
@@ -50,7 +120,13 @@ export function WhatsAppText({ text }: { text?: string | null }) {
   for (const match of text.matchAll(URL_SEGMENT_RE)) {
     const start = match.index ?? 0;
     if (start > lastIndex) {
-      nodes.push(...renderBoldText(text.slice(lastIndex, start), `text-${start}`));
+      nodes.push(
+        ...renderBoldText(
+          text.slice(lastIndex, start),
+          `text-${start}`,
+          searchQuery,
+        ),
+      );
     }
 
     const rawUrl = match[0];
@@ -65,15 +141,23 @@ export function WhatsAppText({ text }: { text?: string | null }) {
         onClick={(event) => event.stopPropagation()}
         className="font-medium underline underline-offset-2"
       >
-        {url}
+        {renderHighlightedText(url, `url-${start}`, searchQuery)}
       </a>,
     );
-    if (trailing) nodes.push(trailing);
+    if (trailing) {
+      nodes.push(
+        ...asNodeArray(
+          renderHighlightedText(trailing, `url-trailing-${start}`, searchQuery),
+        ),
+      );
+    }
     lastIndex = start + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    nodes.push(...renderBoldText(text.slice(lastIndex), `text-${lastIndex}`));
+    nodes.push(
+      ...renderBoldText(text.slice(lastIndex), `text-${lastIndex}`, searchQuery),
+    );
   }
 
   return (
