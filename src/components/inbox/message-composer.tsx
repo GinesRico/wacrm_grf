@@ -40,6 +40,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Dialog,
   DialogContent,
   DialogFooter,
@@ -1052,22 +1057,33 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={() => setInternalMode((value) => !value)}
-            title={t("internalNote")}
-            aria-pressed={internalMode}
-            className={cn(
-              "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
-              internalMode
-                ? "border-amber-400/50 bg-amber-400/15 text-amber-600"
-                : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <MessageSquareDashed className="h-4 w-4" />
-            <span className="hidden sm:inline">{t("internal")}</span>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  disabled={readOnly}
+                  onClick={() => setInternalMode((value) => !value)}
+                  title={internalMode ? t("internalActive") : t("internalNote")}
+                  aria-label={
+                    internalMode ? t("internalActive") : t("internalNote")
+                  }
+                  aria-pressed={internalMode}
+                  className={cn(
+                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                    internalMode
+                      ? "border-amber-400/45 bg-amber-400/12 text-amber-600 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12)]"
+                      : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                />
+              }
+            >
+              <MessageSquareDashed className="h-4 w-4" />
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {internalMode ? t("internalActive") : t("internalHint")}
+            </TooltipContent>
+          </Tooltip>
 
           <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
             <PopoverTrigger

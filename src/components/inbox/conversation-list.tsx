@@ -38,6 +38,7 @@ import {
   AtSign,
   TagIcon,
   Paperclip,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { format, type Locale } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -309,6 +310,10 @@ export function ConversationList({
 
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [contactSearch, setContactSearch] = useState('');
+  const [messageSearch, setMessageSearch] = useState('');
+  const [debouncedContactSearch, setDebouncedContactSearch] = useState('');
+  const [debouncedMessageSearch, setDebouncedMessageSearch] = useState('');
   const [tab, setTab] = useState<InboxTab>('inbox');
   const [subtab, setSubtab] = useState<InboxSubtab>('open');
   const [scope, setScope] = useState<InboxScope>('mine');
@@ -398,6 +403,14 @@ export function ConversationList({
   }, [search]);
 
   useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedContactSearch(contactSearch.trim());
+      setDebouncedMessageSearch(messageSearch.trim());
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [contactSearch, messageSearch]);
+
+  useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
     const fetchSeq = ++fetchSeqRef.current;
@@ -408,6 +421,8 @@ export function ConversationList({
         subtab,
         effectiveScope,
         debouncedSearch,
+        debouncedContactSearch,
+        debouncedMessageSearch,
         quickFilters.join(','),
       ].join('|');
       const shouldShowLoading =
@@ -421,6 +436,12 @@ export function ConversationList({
           scope: effectiveScope,
         });
         if (debouncedSearch) params.set('search', debouncedSearch);
+        if (tab === 'search' && debouncedContactSearch) {
+          params.set('contact_search', debouncedContactSearch);
+        }
+        if (tab === 'search' && debouncedMessageSearch) {
+          params.set('message_search', debouncedMessageSearch);
+        }
         if (quickFilters.length > 0) params.set('quick', quickFilters.join(','));
 
         const res = await fetch(
@@ -458,7 +479,16 @@ export function ConversationList({
       cancelled = true;
       controller.abort();
     };
-  }, [tab, subtab, effectiveScope, debouncedSearch, quickFilters, resyncToken]);
+  }, [
+    tab,
+    subtab,
+    effectiveScope,
+    debouncedSearch,
+    debouncedContactSearch,
+    debouncedMessageSearch,
+    quickFilters,
+    resyncToken,
+  ]);
 
   // Tag and department definitions for the filter pickers; loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
@@ -666,6 +696,8 @@ export function ConversationList({
 
   const hasContactFilters =
     selectedTagIds.length > 0 || selectedCompany !== null;
+  const activeHighlightQuery =
+    debouncedMessageSearch || debouncedContactSearch || debouncedSearch;
 
   const toggleQuickFilter = useCallback((filter: InboxQuickFilter) => {
     setQuickFilters((prev) =>
@@ -680,6 +712,8 @@ export function ConversationList({
     setTab(nextTab);
     if (nextTab !== 'search') {
       setQuickFilters([]);
+      setContactSearch('');
+      setMessageSearch('');
     }
   }, []);
 
@@ -865,84 +899,149 @@ export function ConversationList({
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <button
-              type="button"
-              disabled={tab !== 'inbox'}
-              onClick={() =>
-                setScope((value) => (value === 'mine' ? 'all' : 'mine'))
-              }
-              title={effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')}
-              aria-label={
-                effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')
-              }
-              className={cn(
-                'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors',
-                effectiveScope === 'mine'
-                  ? 'border-primary/30 bg-primary/10 text-primary'
-                  : 'border-border bg-background text-muted-foreground hover:text-foreground',
-                tab !== 'inbox' && 'cursor-default opacity-80'
-              )}
-            >
-              {effectiveScope === 'mine' ? (
-                <User className="h-4 w-4" />
-              ) : (
-                <Users className="h-4 w-4" />
-              )}
-            </button>
+            {tab === 'search' ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  title={t('filters')}
+                  aria-label={t('filters')}
+                  className={cn(
+                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors',
+                    contactSearch || messageSearch || quickFilters.length > 0
+                      ? 'border-primary/30 bg-primary/10 text-primary'
+                      : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72 p-3">
+                  <div
+                    className="space-y-3"
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <div className="space-y-1.5">
+                      <p className="text-muted-foreground text-xs font-medium">
+                        {t('contactSearch')}
+                      </p>
+                      <Input
+                        value={contactSearch}
+                        onChange={(event) => {
+                          setContactSearch(event.target.value);
+                          setTab('search');
+                        }}
+                        placeholder={t('contactSearchPlaceholder')}
+                        className="h-9 text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-muted-foreground text-xs font-medium">
+                        {t('messageSearch')}
+                      </p>
+                      <Input
+                        value={messageSearch}
+                        onChange={(event) => {
+                          setMessageSearch(event.target.value);
+                          setTab('search');
+                        }}
+                        placeholder={t('messageSearchPlaceholder')}
+                        className="h-9 text-sm"
+                      />
+                    </div>
+                    <div className="border-border space-y-2 border-t pt-3">
+                      <p className="text-muted-foreground text-xs font-medium">
+                        {t('quickFilters')}
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        <QuickFilterChip
+                          active={quickFilters.length === 0}
+                          label={t('quickAll')}
+                          icon={Search}
+                          onClick={() => setQuickFilters([])}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('unread')}
+                          label={t('quickUnread')}
+                          icon={Eye}
+                          onClick={() => toggleQuickFilter('unread')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('pending')}
+                          label={t('quickPending')}
+                          icon={Inbox}
+                          onClick={() => toggleQuickFilter('pending')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('resolved')}
+                          label={t('quickResolved')}
+                          icon={CircleCheckBig}
+                          onClick={() => toggleQuickFilter('resolved')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('tagged')}
+                          label={t('quickTagged')}
+                          icon={TagIcon}
+                          onClick={() => toggleQuickFilter('tagged')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('files')}
+                          label={t('quickFiles')}
+                          icon={Paperclip}
+                          onClick={() => toggleQuickFilter('files')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('templates')}
+                          label={t('quickTemplates')}
+                          icon={LayoutTemplate}
+                          onClick={() => toggleQuickFilter('templates')}
+                        />
+                        <QuickFilterChip
+                          active={quickFilters.includes('customers')}
+                          label={t('quickCustomers')}
+                          icon={AtSign}
+                          onClick={() => toggleQuickFilter('customers')}
+                        />
+                      </div>
+                    </div>
+                    {(contactSearch || messageSearch || quickFilters.length > 0) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setContactSearch('');
+                          setMessageSearch('');
+                          setQuickFilters([]);
+                        }}
+                        className="text-muted-foreground hover:text-foreground text-xs font-medium"
+                      >
+                        {t('clearAll')}
+                      </button>
+                    )}
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  setScope((value) => (value === 'mine' ? 'all' : 'mine'))
+                }
+                title={effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')}
+                aria-label={
+                  effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')
+                }
+                className={cn(
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors',
+                  effectiveScope === 'mine'
+                    ? 'border-primary/30 bg-primary/10 text-primary'
+                    : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {effectiveScope === 'mine' ? (
+                  <User className="h-4 w-4" />
+                ) : (
+                  <Users className="h-4 w-4" />
+                )}
+              </button>
+            )}
           </div>
-
-          {tab === 'search' && (
-            <div className="flex gap-1 overflow-x-auto pb-0.5">
-              <QuickFilterChip
-                active={quickFilters.length === 0}
-                label={t('quickAll')}
-                icon={Search}
-                onClick={() => setQuickFilters([])}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('unread')}
-                label={t('quickUnread')}
-                icon={Eye}
-                onClick={() => toggleQuickFilter('unread')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('pending')}
-                label={t('quickPending')}
-                icon={Inbox}
-                onClick={() => toggleQuickFilter('pending')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('resolved')}
-                label={t('quickResolved')}
-                icon={CircleCheckBig}
-                onClick={() => toggleQuickFilter('resolved')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('tagged')}
-                label={t('quickTagged')}
-                icon={TagIcon}
-                onClick={() => toggleQuickFilter('tagged')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('files')}
-                label={t('quickFiles')}
-                icon={Paperclip}
-                onClick={() => toggleQuickFilter('files')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('templates')}
-                label={t('quickTemplates')}
-                icon={LayoutTemplate}
-                onClick={() => toggleQuickFilter('templates')}
-              />
-              <QuickFilterChip
-                active={quickFilters.includes('customers')}
-                label={t('quickCustomers')}
-                icon={AtSign}
-                onClick={() => toggleQuickFilter('customers')}
-              />
-            </div>
-          )}
 
           {tab === 'inbox' && (
             <div className="grid min-w-0 grid-cols-2">
@@ -1123,7 +1222,7 @@ export function ConversationList({
                 accepting={acceptingId === conv.id}
                 dateLocale={dateLocale}
                 t={t}
-                searchQuery={debouncedSearch}
+                searchQuery={activeHighlightQuery}
               />
             ))}
           </div>

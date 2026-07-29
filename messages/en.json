@@ -338,6 +338,12 @@
       "quickFiles": "Files",
       "quickTemplates": "Templates",
       "quickCustomers": "Customers",
+      "filters": "Filters",
+      "contactSearch": "Contact",
+      "contactSearchPlaceholder": "Name, phone, email or company",
+      "messageSearch": "Chat text",
+      "messageSearchPlaceholder": "Word or phrase in messages",
+      "quickFilters": "Quick filters",
       "searchMatch": {
         "contact": "Contact",
         "message": "Message",
@@ -495,6 +501,7 @@
       "lockedPlaceholder": "Accept or reopen the chat to reply",
       "internal": "Internal",
       "internalNote": "Internal note",
+      "internalActive": "Internal messaging active",
       "internalHint": "Only your team will see this. It is not sent to the customer.",
       "internalPlaceholder": "Write an internal note for your team..."
     },

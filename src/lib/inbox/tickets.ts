@@ -50,6 +50,8 @@ export interface ListInboxParams {
   subtab: InboxSubtab;
   scope: InboxScope;
   search: string;
+  contactSearch: string;
+  messageSearch: string;
   quickFilters: InboxQuickFilter[];
 }
 
@@ -228,6 +230,8 @@ export function parseInboxSearchParams(searchParams: URLSearchParams) {
     subtab: normalizeSubtab(searchParams.get("subtab")),
     scope: normalizeScope(searchParams.get("scope")),
     search: searchParams.get("search")?.trim() ?? "",
+    contactSearch: searchParams.get("contact_search")?.trim() ?? "",
+    messageSearch: searchParams.get("message_search")?.trim() ?? "",
     quickFilters: normalizeQuickFilters(searchParams.get("quick")),
   };
 }
@@ -436,7 +440,14 @@ export async function listInboxConversations(
   };
 
   const parsedSearch = parseInboxSearch(params.search);
-  const primaryQuery = parsedSearch.text || parsedSearch.filters.matricula || "";
+  const parsedContactSearch = parseInboxSearch(params.contactSearch);
+  const parsedMessageSearch = parseInboxSearch(params.messageSearch);
+  const generalQuery = parsedSearch.text || parsedSearch.filters.matricula || "";
+  const contactQuery = parsedContactSearch.text;
+  const messageQuery = parsedMessageSearch.text;
+  const contentQuery = messageQuery || generalQuery;
+  const metadataQuery = contactQuery || generalQuery;
+  const primaryQuery = messageQuery || contactQuery || generalQuery;
   const hasSearch =
     Boolean(primaryQuery) || Object.keys(parsedSearch.filters).length > 0;
   const scopedConversationIds = scoped.map((conversation) => conversation.id);
@@ -451,7 +462,7 @@ export async function listInboxConversations(
 
   if (
     scopedConversationIds.length > 0 &&
-    (primaryQuery ||
+    (contentQuery ||
       params.quickFilters.includes("files") ||
       params.quickFilters.includes("templates") ||
       params.quickFilters.includes("customers"))
@@ -481,14 +492,14 @@ export async function listInboxConversations(
       if (row.senderType === "customer") {
         customerConversationIds.add(row.conversationId);
       }
-      if (!primaryQuery) continue;
+      if (!contentQuery) continue;
       const text = row.contentText || row.templateName || "";
-      if (!normalizedSearchIncludes(text, primaryQuery)) continue;
+      if (!normalizedSearchIncludes(text, contentQuery)) continue;
       const existing = messageMatches.get(row.conversationId);
       if (!existing || existing.score < 80) {
         messageMatches.set(row.conversationId, {
           field: "message",
-          snippet: makeSnippet(text, primaryQuery),
+          snippet: makeSnippet(text, contentQuery),
           message_id: row.id,
           score: 80,
         });
@@ -500,7 +511,7 @@ export async function listInboxConversations(
   const customMatches = new Map<string, SearchMatch>();
   const matchingTagContactIds = new Set<string>();
 
-  if (primaryQuery && scopedContactIds.length > 0) {
+  if ((metadataQuery || contentQuery) && scopedContactIds.length > 0) {
     const [noteRows, customRows, tagRows] = await Promise.all([
       db
         .select({
@@ -546,29 +557,30 @@ export async function listInboxConversations(
         .limit(500),
     ]);
 
+    const noteQuery = messageQuery || generalQuery;
     for (const row of noteRows) {
-      if (!normalizedSearchIncludes(row.noteText, primaryQuery)) continue;
+      if (!noteQuery || !normalizedSearchIncludes(row.noteText, noteQuery)) continue;
       const conversation = scoped.find((item) => item.contact_id === row.contactId);
       if (!conversation) continue;
       noteMatches.set(conversation.id, {
         field: "note",
-        snippet: makeSnippet(row.noteText, primaryQuery),
+        snippet: makeSnippet(row.noteText, noteQuery),
         score: 55,
       });
     }
     for (const row of customRows) {
-      if (!normalizedSearchIncludes(row.value, primaryQuery)) continue;
+      if (!metadataQuery || !normalizedSearchIncludes(row.value, metadataQuery)) continue;
       const conversation = scoped.find((item) => item.contact_id === row.contactId);
       if (!conversation || !row.value) continue;
       customMatches.set(conversation.id, {
         field: "custom_field",
         label: row.fieldName,
-        snippet: makeSnippet(row.value, primaryQuery),
+        snippet: makeSnippet(row.value, metadataQuery),
         score: row.fieldName.toLocaleLowerCase() === "matricula" ? 95 : 60,
       });
     }
     for (const row of tagRows) {
-      if (!normalizedSearchIncludes(row.name, primaryQuery)) continue;
+      if (!metadataQuery || !normalizedSearchIncludes(row.name, metadataQuery)) continue;
       matchingTagContactIds.add(row.contactId);
     }
   }
@@ -629,6 +641,34 @@ export async function listInboxConversations(
       }
     }
     return true;
+  }
+
+  function contactSearchMatches(conversation: Conversation) {
+    if (!contactQuery) return true;
+    const contact = conversation.contact;
+    const contactText = [
+      contact?.name,
+      contact?.phone,
+      contact?.email,
+      contact?.company,
+      ...(contact?.tags ?? []).map((tag) => tag.name),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return (
+      normalizedSearchIncludes(contactText, contactQuery) ||
+      customMatches.has(conversation.id) ||
+      matchingTagContactIds.has(conversation.contact_id)
+    );
+  }
+
+  function messageSearchMatches(conversation: Conversation) {
+    if (!messageQuery) return true;
+    return (
+      messageMatches.has(conversation.id) ||
+      noteMatches.has(conversation.id) ||
+      normalizedSearchIncludes(conversation.last_message_text, messageQuery)
+    );
   }
 
   function searchMatchFor(conversation: Conversation): SearchMatch | null {
@@ -707,7 +747,9 @@ export async function listInboxConversations(
       (conversation) =>
         matchesTab(conversation, params.tab, params.subtab) &&
         quickFiltersMatch(conversation) &&
-        passesAdvancedFilters(conversation),
+        passesAdvancedFilters(conversation) &&
+        contactSearchMatches(conversation) &&
+        messageSearchMatches(conversation),
     )
     .map((conversation) => ({
       ...conversation,

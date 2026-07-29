@@ -273,6 +273,12 @@
       "quickFiles": "Con archivos",
       "quickTemplates": "Plantillas",
       "quickCustomers": "Clientes",
+      "filters": "Filtros",
+      "contactSearch": "Contacto",
+      "contactSearchPlaceholder": "Nombre, telefono, email o empresa",
+      "messageSearch": "Texto del chat",
+      "messageSearchPlaceholder": "Palabra o frase en mensajes",
+      "quickFilters": "Filtros rapidos",
       "searchMatch": {
         "contact": "Contacto",
         "message": "Mensaje",
@@ -430,6 +436,7 @@
       "lockedPlaceholder": "Acepta o reabre el chat para responder",
       "internal": "Interno",
       "internalNote": "Nota interna",
+      "internalActive": "Mensajeria interna activa",
       "internalHint": "Solo lo vera tu equipo. No se envia al cliente.",
       "internalPlaceholder": "Escribe una nota interna para tu equipo..."
     },
