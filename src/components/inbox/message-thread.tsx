@@ -57,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { MessageBubble } from './message-bubble';
+import type { MediaViewerItem } from './message-bubble';
 import { MessageActions } from './message-actions';
 import {
   MessageComposer,
@@ -483,6 +484,22 @@ export function MessageThread({
       )
       .map((message) => message.id);
   }, [messages, normalizedChatSearchQuery]);
+  const imageGallery = useMemo<MediaViewerItem[]>(
+    () =>
+      messages
+        .filter(
+          (message) =>
+            message.content_type === 'image' &&
+            Boolean(message.media_url) &&
+            !message.deleted_at
+        )
+        .map((message) => ({
+          id: message.id,
+          src: message.media_url ?? '',
+          alt: message.content_text || contact?.name || contact?.phone || '',
+        })),
+    [contact?.name, contact?.phone, messages]
+  );
 
   const signMessageText = useCallback(
     (value: string) => {
@@ -2300,6 +2317,7 @@ export function MessageThread({
                           <MessageBubble
                             message={msg}
                             searchQuery={normalizedChatSearchQuery}
+                            imageGallery={imageGallery}
                           />
                         </div>
                       );
@@ -2342,6 +2360,7 @@ export function MessageThread({
                             }
                             onJumpToMessage={jumpToMessage}
                             searchQuery={normalizedChatSearchQuery}
+                            imageGallery={imageGallery}
                           />
                         </MessageActions>
                       </div>

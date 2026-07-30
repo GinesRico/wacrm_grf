@@ -25,6 +25,8 @@ import {
   RotateCcw,
   Forward,
   ExternalLink,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ReplyQuote } from './reply-quote';
@@ -49,6 +51,13 @@ interface MessageBubbleProps {
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onJumpToMessage?: (messageId: string) => void;
   searchQuery?: string | null;
+  imageGallery?: MediaViewerItem[];
+}
+
+export interface MediaViewerItem {
+  id: string;
+  src: string;
+  alt: string;
 }
 
 function StatusIcon({ status }: { status: Message['status'] }) {
@@ -217,6 +226,8 @@ function MediaViewer({
   alt,
   onClose,
   t,
+  galleryItems,
+  initialIndex = 0,
 }: {
   open: boolean;
   kind: 'image' | 'video';
@@ -224,9 +235,15 @@ function MediaViewer({
   alt: string;
   onClose: () => void;
   t: ReturnType<typeof useTranslations>;
+  galleryItems?: MediaViewerItem[];
+  initialIndex?: number;
 }) {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [resolvedSrc, setResolvedSrc] = useState(src);
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerError, setViewerError] = useState(false);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -239,12 +256,78 @@ function MediaViewer({
     setPan({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
+  const items =
+    kind === 'image' && galleryItems?.length
+      ? galleryItems
+      : [{ id: src, src, alt }];
+  const safeIndex = Math.min(Math.max(currentIndex, 0), items.length - 1);
+  const currentItem = items[safeIndex] ?? items[0];
+  const canNavigate = kind === 'image' && items.length > 1;
+  const displaySrc = kind === 'image' ? resolvedSrc : src;
+  const displayAlt = currentItem?.alt || alt;
 
   const updateZoom = useCallback((nextZoom: number) => {
     const normalized = Math.min(5, Math.max(1, Number(nextZoom.toFixed(2))));
     setZoom(normalized);
     if (normalized === 1) setPan({ x: 0, y: 0 });
   }, []);
+
+  const moveGallery = useCallback(
+    (direction: -1 | 1) => {
+      if (!canNavigate) return;
+      setCurrentIndex((index) => {
+        const next = (index + direction + items.length) % items.length;
+        return next;
+      });
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      dragRef.current = null;
+    },
+    [canNavigate, items.length]
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    setCurrentIndex(Math.min(Math.max(initialIndex, 0), items.length - 1));
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [initialIndex, items.length, open]);
+
+  useEffect(() => {
+    if (!open || kind !== 'image') return;
+
+    const rawSrc = currentItem?.src ?? src;
+    setViewerError(false);
+
+    if (!rawSrc.startsWith('/api/whatsapp/media/')) {
+      setResolvedSrc(rawSrc);
+      setViewerLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    let blobUrl: string | null = null;
+    setViewerLoading(true);
+
+    (async () => {
+      try {
+        const res = await fetch(rawSrc);
+        if (!res.ok) throw new Error('Failed to load media');
+        const blob = await res.blob();
+        blobUrl = URL.createObjectURL(blob);
+        if (!cancelled) setResolvedSrc(blobUrl);
+      } catch {
+        if (!cancelled) setViewerError(true);
+      } finally {
+        if (!cancelled) setViewerLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [currentItem?.src, kind, open, src]);
 
   useEffect(() => {
     if (!open) return;
@@ -254,6 +337,8 @@ function MediaViewer({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeViewer();
+      if (event.key === 'ArrowLeft') moveGallery(-1);
+      if (event.key === 'ArrowRight') moveGallery(1);
       if (kind === 'image' && (event.key === '+' || event.key === '=')) {
         updateZoom(zoom + 0.25);
       }
@@ -267,7 +352,7 @@ function MediaViewer({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [closeViewer, kind, open, updateZoom, zoom]);
+  }, [closeViewer, kind, moveGallery, open, updateZoom, zoom]);
 
   if (!open) return null;
 
@@ -330,7 +415,7 @@ function MediaViewer({
           </>
         ) : null}
         <a
-          href={src}
+          href={displaySrc}
           download
           target="_blank"
           rel="noopener noreferrer"
@@ -354,6 +439,41 @@ function MediaViewer({
           <X className="size-6" />
         </button>
       </div>
+
+      {canNavigate ? (
+        <>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              moveGallery(-1);
+            }}
+            className="absolute top-1/2 left-3 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70 sm:left-5 sm:size-12"
+            aria-label={t('previousImage')}
+            title={t('previousImage')}
+          >
+            <ChevronLeft className="size-7" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              moveGallery(1);
+            }}
+            className="absolute top-1/2 right-3 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white transition hover:bg-black/70 sm:right-5 sm:size-12"
+            aria-label={t('nextImage')}
+            title={t('nextImage')}
+          >
+            <ChevronRight className="size-7" />
+          </button>
+          <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-xs font-medium text-white">
+            {t('imageCounter', {
+              current: safeIndex + 1,
+              total: items.length,
+            })}
+          </div>
+        </>
+      ) : null}
 
       <div
         className="flex h-full w-full items-center justify-center overflow-hidden"
@@ -410,21 +530,33 @@ function MediaViewer({
         }
       >
         {kind === 'image' ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={src}
-            alt={alt}
-            className={cn(
-              'max-h-[92vh] max-w-[92vw] rounded-md object-contain transition-transform duration-100 select-none',
-              zoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
-            )}
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
-              transformOrigin: 'center center',
-              touchAction: 'none',
-            }}
-            draggable={false}
-          />
+          viewerLoading ? (
+            <div className="flex flex-col items-center gap-3 text-white">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/80 border-t-transparent" />
+            </div>
+          ) : viewerError ? (
+            <div className="flex flex-col items-center gap-3 text-white">
+              <ImageOff className="size-10" />
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={displaySrc}
+              alt={displayAlt}
+              className={cn(
+                'max-h-[92vh] max-w-[92vw] rounded-md object-contain transition-transform duration-100 select-none',
+                zoom > 1
+                  ? 'cursor-grab active:cursor-grabbing'
+                  : 'cursor-zoom-in'
+              )}
+              style={{
+                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+                transformOrigin: 'center center',
+                touchAction: 'none',
+              }}
+              draggable={false}
+            />
+          )
         ) : (
           <video
             src={src}
@@ -443,11 +575,15 @@ function MediaImage({
   alt,
   t,
   sticker = false,
+  galleryItems,
+  galleryIndex,
 }: {
   url: string;
   alt: string;
   t: ReturnType<typeof useTranslations>;
   sticker?: boolean;
+  galleryItems?: MediaViewerItem[];
+  galleryIndex?: number;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -537,10 +673,12 @@ function MediaImage({
         <MediaViewer
           open={viewerOpen}
           kind="image"
-          src={src}
+          src={url}
           alt={alt}
           onClose={() => setViewerOpen(false)}
           t={t}
+          galleryItems={sticker ? undefined : galleryItems}
+          initialIndex={galleryIndex ?? 0}
         />
       ) : null}
     </>
@@ -700,12 +838,14 @@ function MessageContent({
   templateFallbackPayload,
   onPrimary,
   searchQuery,
+  imageGallery,
 }: {
   message: Message;
   t: ReturnType<typeof useTranslations>;
   templateFallbackPayload?: InteractiveMessagePayload | null;
   onPrimary: boolean;
   searchQuery?: string | null;
+  imageGallery?: MediaViewerItem[];
 }) {
   const text = message.content_text ?? '';
   const isUnsupportedText =
@@ -789,6 +929,12 @@ function MessageContent({
               }
               t={t}
               sticker={message.content_type === 'sticker'}
+              galleryItems={message.content_type === 'image' ? imageGallery : undefined}
+              galleryIndex={
+                message.content_type === 'image'
+                  ? imageGallery?.findIndex((item) => item.id === message.id)
+                  : undefined
+              }
             />
           ) : (
             <MediaUnavailable
@@ -1015,6 +1161,7 @@ export function MessageBubble({
   templateFallbackPayload,
   onJumpToMessage,
   searchQuery,
+  imageGallery,
 }: MessageBubbleProps) {
   const t = useTranslations('Inbox.bubble');
 
@@ -1089,7 +1236,7 @@ export function MessageBubble({
             <PopoverTrigger
               type="button"
               title={t('messageInfo')}
-              className="mt-1 block border-0 bg-transparent p-0 text-[10px] text-amber-800/70 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none dark:text-amber-200/70"
+              className="mt-1 ml-auto block border-0 bg-transparent p-0 text-[10px] text-amber-800/70 underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:outline-none dark:text-amber-200/70"
             >
               {time}
             </PopoverTrigger>
@@ -1202,6 +1349,7 @@ export function MessageBubble({
           templateFallbackPayload={templateFallbackPayload}
           onPrimary={false}
           searchQuery={searchQuery}
+          imageGallery={imageGallery}
         />
         <div
           className={cn(
