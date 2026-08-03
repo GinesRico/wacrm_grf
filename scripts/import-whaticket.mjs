@@ -403,6 +403,24 @@ async function getMap(client, accountId, importKey, entityType, legacyId) {
   return row?.new_id ?? null;
 }
 
+async function conversationExists(client, accountId, conversationId) {
+  if (!conversationId) return false;
+  const row = await queryOne(
+    client,
+    'select id from conversations where account_id = $1 and id = $2',
+    [accountId, conversationId]
+  );
+  return Boolean(row);
+}
+
+async function messageExists(client, messageId) {
+  if (!messageId) return false;
+  const row = await queryOne(client, 'select id from messages where id = $1', [
+    messageId,
+  ]);
+  return Boolean(row);
+}
+
 async function setMap(
   client,
   accountId,
@@ -885,7 +903,14 @@ async function ensureConversation(client, ctx, row) {
     'ticket',
     legacyId
   );
-  if (mapped) return mapped;
+  if (mapped) {
+    if (await conversationExists(client, ctx.accountId, mapped)) {
+      return mapped;
+    }
+    console.warn(
+      `[tickets] stale legacy map for ticket ${legacyId}: conversation ${mapped} does not exist; recreating`
+    );
+  }
 
   const contactId = await getMap(
     client,
@@ -969,17 +994,32 @@ async function ensureMessage(
     legacyId
   );
   if (mapped) {
-    await repairMappedMessage(client, ctx, mapped, row, mediaMode, warnings);
-    return mapped;
+    if (await messageExists(client, mapped)) {
+      await repairMappedMessage(client, ctx, mapped, row, mediaMode, warnings);
+      return mapped;
+    }
+    console.warn(
+      `[messages] stale legacy map for message ${legacyId}: message ${mapped} does not exist; recreating`
+    );
   }
 
-  const conversationId = await getMap(
+  let conversationId = await getMap(
     client,
     ctx.accountId,
     ctx.importKey,
     'ticket',
     legacy(row.ticketLegacyId)
   );
+  if (
+    conversationId &&
+    !(await conversationExists(client, ctx.accountId, conversationId))
+  ) {
+    const ticket = ticketByLegacy.get(legacy(row.ticketLegacyId));
+    console.warn(
+      `[messages] stale ticket map for message ${legacyId}: conversation ${conversationId} does not exist`
+    );
+    conversationId = ticket ? await ensureConversation(client, ctx, ticket) : null;
+  }
   if (!conversationId) return null;
   const systemText = whaticketSystemMessageText(row.body);
   if (systemText) {
