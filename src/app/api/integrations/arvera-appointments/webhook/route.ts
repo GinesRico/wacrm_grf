@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { timingSafeEqual } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
@@ -17,10 +18,29 @@ import {
 } from '@/lib/integrations/arvera-appointments';
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
 import { recordWebhookEventSample } from '@/lib/webhooks/event-samples';
+import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit';
+import { verifySignatureHeader } from '@/lib/webhooks/sign';
+
+const MAX_WEBHOOK_BYTES = 512 * 1024;
 
 export async function POST(request: Request) {
-  const token = new URL(request.url).searchParams.get('token') ?? '';
-  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const limit = checkRateLimit(
+    `arvera-webhook:${clientIp(request)}`,
+    RATE_LIMITS.arveraWebhook,
+  );
+  if (!limit.success) return rateLimitResponse(limit);
+
+  if (new URL(request.url).searchParams.has('token')) {
+    return NextResponse.json(
+      { error: 'Webhook token must be sent in a header, not in the URL' },
+      { status: 401 },
+    );
+  }
+
+  const rawBody = await request.text();
+  if (rawBody.length > MAX_WEBHOOK_BYTES) {
+    return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+  }
 
   const connections = await db
     .select()
@@ -32,12 +52,14 @@ export async function POST(request: Request) {
       ),
     );
 
-  const connection = connections.map(serializeConnection).find(
-    (item) => resolveAppointmentsWebhookToken(item) === token,
+  const connection = await authenticateConnection(
+    request,
+    rawBody,
+    connections.map(serializeConnection),
   );
   if (!connection) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const payload = (await request.json().catch(() => null)) as {
+  const payload = parsePayload(rawBody) as {
     event?: unknown;
     timestamp?: unknown;
     data?: ArveraAppointmentRecord;
@@ -185,6 +207,58 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ ok: true, appointment_record: record });
+}
+
+function clientIp(request: Request): string {
+  return (
+    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    request.headers.get('x-real-ip')?.trim() ||
+    'unknown'
+  );
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+function parsePayload(rawBody: string): unknown {
+  try {
+    return JSON.parse(rawBody);
+  } catch {
+    return null;
+  }
+}
+
+async function authenticateConnection(
+  request: Request,
+  rawBody: string,
+  connections: ArveraAppointmentsConnection[],
+): Promise<ArveraAppointmentsConnection | null> {
+  const presentedToken = request.headers.get('x-arvera-webhook-token')?.trim() ?? '';
+  const presentedSignature = request.headers.get('x-arvera-signature')?.trim() ?? '';
+  if (!presentedToken && !presentedSignature) return null;
+
+  for (const connection of connections) {
+    const secret = resolveAppointmentsWebhookToken(connection);
+    if (!secret) continue;
+    if (presentedToken && safeEqual(presentedToken, secret)) return connection;
+    if (
+      presentedSignature &&
+      verifySignatureHeader(
+        presentedSignature,
+        rawBody,
+        secret,
+        Math.floor(Date.now() / 1000),
+      )
+    ) {
+      return connection;
+    }
+  }
+
+  return null;
 }
 
 function payloadVars(payload: unknown): Record<string, unknown> {

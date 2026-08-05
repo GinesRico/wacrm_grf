@@ -167,6 +167,10 @@ export const RATE_LIMITS = {
    *  capping a stampede; excess inbounds simply don't get an auto-reply
    *  (they still land in the inbox for a human). */
   aiAutoReplyAccount: { limit: 30, windowMs: 60_000 },
+  /** Public Arvera appointments webhook, per source IP. Legit providers
+   * retry in small bursts, but unauthenticated internet traffic should
+   * never get unlimited JSON parsing + DB lookups. */
+  arveraWebhook: { limit: 60, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

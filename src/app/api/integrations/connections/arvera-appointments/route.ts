@@ -109,7 +109,9 @@ export async function GET(request: Request) {
         (data?.encryptedCredentials as Record<string, string> | undefined)
           ?.api_token
       ),
-      webhook_url: token ? buildWebhookUrl(request, token) : null,
+      webhook_url: token ? buildWebhookUrl(request) : null,
+      webhook_token: token,
+      webhook_signature_header: "X-Arvera-Signature: t=<unix>,v1=<hmac-sha256>",
     });
   } catch (err) {
     return toErrorResponse(err);
@@ -347,7 +349,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({
       connection: serializeConnection(data),
       has_api_token: true,
-      webhook_url: buildWebhookUrl(request, webhookToken),
+      webhook_url: buildWebhookUrl(request),
+      webhook_token: webhookToken,
+      webhook_signature_header: "X-Arvera-Signature: t=<unix>,v1=<hmac-sha256>",
     });
   } catch (err) {
     return toErrorResponse(err);
@@ -380,7 +384,7 @@ function getPublicOrigin(request: Request): string {
   return "http://localhost:3000";
 }
 
-function buildWebhookUrl(request: Request, token: string): string {
+function buildWebhookUrl(request: Request): string {
   const origin = getPublicOrigin(request);
-  return `${origin}/api/integrations/arvera-appointments/webhook?token=${encodeURIComponent(token)}`;
+  return `${origin}/api/integrations/arvera-appointments/webhook`;
 }

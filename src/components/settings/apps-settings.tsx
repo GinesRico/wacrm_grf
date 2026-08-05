@@ -58,6 +58,7 @@ interface AppsResponse {
 
 interface AppointmentsConnectionResponse {
   webhook_url?: string | null;
+  webhook_token?: string | null;
 }
 
 type PaymentTemplateValueSource =
@@ -179,6 +180,7 @@ export function AppsSettings() {
   const [appointmentsStatus, setAppointmentsStatus] = useState("not_configured");
   const [appointmentsLastError, setAppointmentsLastError] = useState<string | null>(null);
   const [appointmentsWebhookUrl, setAppointmentsWebhookUrl] = useState<string | null>(null);
+  const [appointmentsWebhookToken, setAppointmentsWebhookToken] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -283,6 +285,7 @@ export function AppsSettings() {
         const appointmentsPayload =
           (await appointmentsRes.json().catch(() => ({}))) as AppointmentsConnectionResponse;
         setAppointmentsWebhookUrl(appointmentsPayload.webhook_url ?? null);
+        setAppointmentsWebhookToken(appointmentsPayload.webhook_token ?? null);
       }
     } finally {
       setLoading(false);
@@ -453,6 +456,7 @@ export function AppsSettings() {
       }
       setAppointmentsApiToken("");
       setAppointmentsWebhookUrl(payload.webhook_url ?? null);
+      setAppointmentsWebhookToken(payload.webhook_token ?? null);
       toast.success("Citas Arvera guardado");
       window.dispatchEvent(new Event("arvera-appointments-connection-updated"));
       void load();
@@ -961,7 +965,7 @@ export function AppsSettings() {
                 </div>
               )}
               <div className="space-y-1.5 lg:col-span-2">
-                <Label>Webhook para Citas Web</Label>
+                <Label>URL webhook para Citas Web</Label>
                 <div className="flex gap-2">
                   <Input readOnly value={appointmentsWebhookUrl ?? "Guarda la app para generarlo"} />
                   <Button
@@ -972,6 +976,34 @@ export function AppsSettings() {
                       if (!appointmentsWebhookUrl) return;
                       void navigator.clipboard.writeText(appointmentsWebhookUrl);
                       toast.success("Webhook copiado");
+                    }}
+                  >
+                    <Copy className="size-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1.5 lg:col-span-2">
+                <Label>Cabecera de autenticacion</Label>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    type="password"
+                    value={
+                      appointmentsWebhookToken
+                        ? `X-Arvera-Webhook-Token: ${appointmentsWebhookToken}`
+                        : "Guarda la app para generarla"
+                    }
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!appointmentsWebhookToken}
+                    onClick={() => {
+                      if (!appointmentsWebhookToken) return;
+                      void navigator.clipboard.writeText(
+                        `X-Arvera-Webhook-Token: ${appointmentsWebhookToken}`,
+                      );
+                      toast.success("Cabecera copiada");
                     }}
                   >
                     <Copy className="size-4" />

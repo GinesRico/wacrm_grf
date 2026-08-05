@@ -6,7 +6,7 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 /**
  * Baseline security headers applied to every response.
  *
- * CSP ships as `Content-Security-Policy-Report-Only` so the browser
+ * CSP ships as `Content-Security-Policy` so the browser
  * surfaces violations in the console without blocking anything — once
  * we have confidence nothing legit trips it (two deploys, a pass on
  * every route), flip the key to `Content-Security-Policy` to enforce.
@@ -19,6 +19,8 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
  *     deny them. A supply-chain compromise or a forgotten plugin
  *     can't silently opt back in.
  */
+const isDev = process.env.NODE_ENV === "development";
+
 const SECURITY_HEADERS = [
   {
     key: "Strict-Transport-Security",
@@ -36,13 +38,13 @@ const SECURITY_HEADERS = [
     value: "camera=(), microphone=(self), geolocation=(), payment=(), usb=()",
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
       // Next.js needs 'unsafe-inline' for its inline hydration script
       // and 'unsafe-eval' in dev + some production optimisations.
       // Nonce-based CSP is a later project.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "script-src 'self' 'unsafe-inline'" + (isDev ? " 'unsafe-eval'" : ""),
       // Tailwind + inline style attributes on lots of components.
       "style-src 'self' 'unsafe-inline'",
       // Alarik public-bucket avatars, contact avatars (arbitrary
@@ -62,12 +64,6 @@ const SECURITY_HEADERS = [
 ] as const;
 
 const nextConfig: NextConfig = {
-  typescript: {
-    // The local Next dev cache can leave `.next/dev/types/*` entries that
-    // point at non-existent generated JS files. We keep source validation in
-    // `npm run typecheck` and skip only Next's build-time generated-cache check.
-    ignoreBuildErrors: true,
-  },
   /**
    * Cache-Control policy.
    *

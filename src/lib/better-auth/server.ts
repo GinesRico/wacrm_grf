@@ -4,6 +4,17 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import * as schema from "@/db/schema";
 
+function requiredSecret(name: string): string {
+  const value = process.env[name];
+  if (!value && process.env.NODE_ENV === "test") {
+    return "test-only-better-auth-secret";
+  }
+  if (!value) {
+    throw new Error(`${name} must be configured before auth can start.`);
+  }
+  return value;
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
@@ -19,13 +30,21 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {
-      console.info(`[auth] password reset for ${user.email}: ${url}`);
+      if (process.env.NODE_ENV === "development") {
+        console.info(`[auth] password reset requested for ${user.email}`);
+        console.info(`[auth] development reset URL: ${url}`);
+        return;
+      }
+
+      console.warn(
+        `[auth] password reset requested for ${user.email}, but no production email sender is configured.`,
+      );
     },
   },
   user: {
     changeEmail: {
       enabled: true,
-      updateEmailWithoutVerification: true,
+      updateEmailWithoutVerification: false,
     },
   },
   databaseHooks: {
@@ -71,6 +90,6 @@ export const auth = betterAuth({
       },
     },
   },
-  secret: process.env.BETTER_AUTH_SECRET,
+  secret: requiredSecret("BETTER_AUTH_SECRET"),
   baseURL: process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_SITE_URL,
 });

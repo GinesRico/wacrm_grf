@@ -1,6 +1,20 @@
 packages:
   - "."
 
+overrides:
+  postcss: ^8.5.23
+  ip-address: ^10.2.2
+  fast-uri: ^3.1.5
+  hono: ^4.12.34
+  undici: ^7.29.0
+  sharp: ^0.35.0
+  "@hono/node-server": ^2.1.0
+  esbuild: ^0.28.1
+  "brace-expansion@<1.1.18": 1.1.18
+  "brace-expansion@>=4.0.0 <5.0.9": 5.0.9
+  js-yaml: ^4.2.0
+  "@babel/core": ^7.29.6
+
 allowBuilds:
   "@parcel/watcher": true
   "@swc/core": true

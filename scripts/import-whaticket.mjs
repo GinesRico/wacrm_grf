@@ -22,7 +22,6 @@ async function loadLocalEnvIfAvailable() {
   }
 }
 
-const DEFAULT_PASSWORD = 'rme39msu';
 const DEFAULT_COLOR = '#22c55e';
 const CHAT_MEDIA_BUCKET = 'chat-media';
 let s3Client = null;
@@ -43,7 +42,7 @@ const REQUIRED_FILES = [
 ];
 
 function parseArgs(argv) {
-  const args = { media: 'alarik', password: DEFAULT_PASSWORD, dryRun: false };
+  const args = { media: 'alarik', password: '', dryRun: false };
   const positional = [];
   for (const arg of argv) {
     if (arg === '--dry-run') {
@@ -63,7 +62,7 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] [--password=rme39msu] [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--reconcile-live=auto|skip] [--reconcile-window-hours=12] [--repair-media] [--dry-run]',
+    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] --password=<temporary-password> [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--reconcile-live=auto|skip] [--reconcile-window-hours=12] [--repair-media] [--dry-run]',
     '',
     'The export directory must contain manifest.json, the JSON files exported by WhaTicket, and media/.',
   ].join('\n');
@@ -1641,6 +1640,9 @@ async function main() {
   exportDirGlobal = args.exportDir;
 
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
+  if (!args.password) {
+    throw new Error('Use --password=<temporary-password> for imported users.');
+  }
   const manifest = await readJson(args.exportDir, 'manifest.json');
   const importKey =
     text(args['import-key']) ??
@@ -1695,7 +1697,7 @@ async function main() {
       reconcileLiveMode,
       reconcileWindowHours,
     };
-    const passwordHash = await hashPassword(args.password || DEFAULT_PASSWORD);
+    const passwordHash = await hashPassword(args.password);
     const whatsappQueueByWhatsapp = new Map();
     for (const row of data.whatsappsQueues) {
       const list =
