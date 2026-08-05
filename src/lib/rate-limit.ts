@@ -171,6 +171,13 @@ export const RATE_LIMITS = {
    * retry in small bursts, but unauthenticated internet traffic should
    * never get unlimited JSON parsing + DB lookups. */
   arveraWebhook: { limit: 60, windowMs: 60_000 },
+  /** Auth endpoints, per source IP. Sign-in, sign-up, password reset,
+   * and similar credential endpoints are expensive and abuse-prone. */
+  auth: { limit: 30, windowMs: 60_000 },
+  /** New account creation, per source IP. Disabled by default at the
+   * Better Auth layer unless ALLOW_PUBLIC_SIGNUP=true, but keep a tight
+   * budget for controlled onboarding windows. */
+  authSignup: { limit: 3, windowMs: 60_000 },
 } as const;
 
 /** Test-only helper. Clears the in-memory state so unit tests don't

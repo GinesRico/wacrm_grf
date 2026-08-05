@@ -29,6 +29,7 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: true,
+    disableSignUp: process.env.ALLOW_PUBLIC_SIGNUP !== "true",
     sendResetPassword: async ({ user, url }) => {
       if (process.env.NODE_ENV === "development") {
         console.info(`[auth] password reset requested for ${user.email}`);
