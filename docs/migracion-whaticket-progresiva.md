@@ -61,7 +61,16 @@ bash scripts/migrate-whaticket-host.sh
 
 Para una importacion limpia sobre la cuenta actual, manteniendo user/account,
 perfil owner, etiquetas, plantillas, automatizaciones, flujos y la linea
-WhatsApp conectada, ejecuta el host script con:
+WhatsApp conectada, el host script pregunta:
+
+```text
+Hacer importacion limpia? Borra datos operativos WACRM e importa de nuevo WhaTicket
+```
+
+Si respondes `y`, ajusta automaticamente `RESET_OPERATIONAL_DATA=true`,
+`RECONCILE_LIVE=skip` y una `IMPORT_KEY=whaticket-clean-...`.
+
+Tambien puedes forzarlo sin pregunta con:
 
 ```bash
 IMPORT_KEY="whaticket-clean-$(date -Iseconds)" \

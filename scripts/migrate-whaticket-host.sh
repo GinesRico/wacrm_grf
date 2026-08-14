@@ -17,6 +17,7 @@ BRIDGE_DB_HOST="${BRIDGE_DB_HOST:-ppt6w0ho4yywicm0yon1tt4d}"
 BRIDGE_DB_PORT="${BRIDGE_DB_PORT:-5432}"
 BRIDGE_DUMP_IN_CONTAINER="${BRIDGE_DUMP_IN_CONTAINER:-/tmp/whaticket_backup.dump}"
 
+IMPORT_KEY_WAS_SET="${IMPORT_KEY+x}"
 WACRM_APP_CONTAINER="${WACRM_APP_CONTAINER:-}"
 WACRM_WORKDIR="${WACRM_WORKDIR:-/app}"
 EXPORT_DIR="${EXPORT_DIR:-/app/storage/whaticket-export}"
@@ -109,6 +110,22 @@ validate_wacrm_container() {
   exit 1
 }
 
+configure_clean_import_mode() {
+  if [[ "$RESET_OPERATIONAL_DATA" != "true" && "$RESET_OPERATIONAL_DATA" != "1" && "$RESET_OPERATIONAL_DATA" != "yes" && "$RESET_OPERATIONAL_DATA" != "si" ]]; then
+    if confirm "Hacer importacion limpia? Borra datos operativos WACRM e importa de nuevo WhaTicket" "no"; then
+      RESET_OPERATIONAL_DATA="true"
+    fi
+  fi
+
+  if [[ "$RESET_OPERATIONAL_DATA" == "true" || "$RESET_OPERATIONAL_DATA" == "1" || "$RESET_OPERATIONAL_DATA" == "yes" || "$RESET_OPERATIONAL_DATA" == "si" ]]; then
+    RESET_OPERATIONAL_DATA="true"
+    RECONCILE_LIVE="skip"
+    if [[ -z "$IMPORT_KEY_WAS_SET" || "$IMPORT_KEY" == "2026-07-23T15:52:07.787Z" ]]; then
+      IMPORT_KEY="whaticket-clean-$(date -Iseconds)"
+    fi
+  fi
+}
+
 wacrm_exec() {
   run docker exec \
     -w "$WACRM_WORKDIR" \
@@ -132,6 +149,7 @@ main() {
 
   detect_wacrm_container
   validate_wacrm_container
+  configure_clean_import_mode
 
   echo
   echo "Migracion WhaTicket -> WACRM desde host Docker"

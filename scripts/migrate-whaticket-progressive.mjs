@@ -40,6 +40,10 @@ function envPrefix(env) {
     .join(' ');
 }
 
+function cleanImportKey() {
+  return `whaticket-clean-${new Date().toISOString()}`;
+}
+
 function hasCommand(command) {
   const result = spawnSync('sh', ['-lc', `command -v ${command}`], {
     stdio: 'ignore',
@@ -107,6 +111,11 @@ async function collectConfig(rl) {
     }
     config.sourceDumpInContainer = DEFAULTS.sourceDumpInContainer;
     config.bridgeDumpInContainer = DEFAULTS.bridgeDumpInContainer;
+    if (await confirm(rl, 'Hacer importacion limpia? Borra datos operativos WACRM e importa de nuevo WhaTicket', false)) {
+      config.resetOperationalData = 'true';
+      config.reconcileLiveMode = 'skip';
+      config.importKey = await prompt(rl, 'Import key limpia', cleanImportKey());
+    }
     return config;
   }
 
@@ -133,6 +142,10 @@ async function collectConfig(rl) {
   config.reconcileLiveMode = await prompt(rl, 'Reconciliar chats nativos (auto/skip)', DEFAULTS.reconcileLiveMode);
   config.reconcileWindowHours = await prompt(rl, 'Ventana reconciliacion en horas', DEFAULTS.reconcileWindowHours);
   config.resetOperationalData = await prompt(rl, 'Resetear datos operativos antes del import (true/false)', DEFAULTS.resetOperationalData);
+  if (['true', '1', 'yes', 'si'].includes(String(config.resetOperationalData).toLowerCase())) {
+    config.reconcileLiveMode = 'skip';
+    config.importKey = await prompt(rl, 'Import key limpia', cleanImportKey());
+  }
 
   config.sourceDumpInContainer = DEFAULTS.sourceDumpInContainer;
   config.bridgeDumpInContainer = DEFAULTS.bridgeDumpInContainer;
