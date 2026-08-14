@@ -31,6 +31,11 @@ puedes pasarlo asi:
 WACRM_APP_CONTAINER=nombre_contenedor_wacrm bash scripts/migrate-whaticket-host.sh
 ```
 
+El contenedor WACRM debe ser el de la app Node/pnpm que contiene `package.json`
+en `WACRM_WORKDIR` (por defecto `/app`). No uses aqui el contenedor PostgreSQL
+de la base puente. Si Coolify monta el codigo en otra ruta, pasa tambien
+`WACRM_WORKDIR=/ruta/correcta`.
+
 Para ARVERA el script ya usa por defecto el import incremental existente:
 
 ```text
@@ -39,6 +44,7 @@ STATUS_EVENTS_MODE=dedupe
 RECONCILE_LIVE=auto
 RECONCILE_WINDOW_HOURS=12
 REPAIR_MEDIA=true
+RESET_OPERATIONAL_DATA=false
 ```
 
 Puedes sobrescribirlo si hiciera falta:
@@ -49,6 +55,18 @@ STATUS_EVENTS_MODE=dedupe \
 RECONCILE_LIVE=auto \
 RECONCILE_WINDOW_HOURS=12 \
 REPAIR_MEDIA=true \
+RESET_OPERATIONAL_DATA=false \
+bash scripts/migrate-whaticket-host.sh
+```
+
+Para una importacion limpia sobre la cuenta actual, manteniendo user/account,
+perfil owner, etiquetas, plantillas, automatizaciones, flujos y la linea
+WhatsApp conectada, ejecuta el host script con:
+
+```bash
+IMPORT_KEY="whaticket-clean-$(date -Iseconds)" \
+RECONCILE_LIVE=skip \
+RESET_OPERATIONAL_DATA=true \
 bash scripts/migrate-whaticket-host.sh
 ```
 
@@ -194,6 +212,34 @@ El import a WACRM si es idempotente/incremental por `whaticket_legacy_map`:
 
 Para una sincronizacion posterior, normalmente saltas las fases que no cambian,
 refrescas la base puente/export y vuelves a ejecutar el import real.
+
+## Importacion limpia sobre la cuenta actual
+
+Si quieres conservar el usuario/cuenta actual de WACRM y la configuracion
+propia ya creada, pero reemplazar la bandeja y los datos operativos por el
+snapshot de WhaTicket, ejecuta el import con:
+
+```bash
+pnpm import:whaticket /app/storage/whaticket-export \
+  --account=4441e304-18b7-487f-98c3-57a101728091 \
+  --owner-user=<USER_ID_ACTUAL> \
+  --import-key="whaticket-clean-$(date -Iseconds)" \
+  --media=alarik \
+  --status-events=dedupe \
+  --reconcile-live=skip \
+  --repair-media \
+  --reset-operational-data
+```
+
+`--reset-operational-data` borra, dentro de la misma transaccion del import,
+contactos, conversaciones, mensajes, colas/departamentos, respuestas rapidas,
+campos personalizados, integraciones, ejecuciones/logs operativos y mapas de
+importacion de la cuenta destino. Conserva la cuenta, el perfil owner,
+etiquetas, plantillas, automatizaciones, flujos y la configuracion WhatsApp
+conectada.
+
+Usa una `--import-key` nueva para que sea una importacion limpia. Usa
+`--reconcile-live=skip` porque no quedan conversaciones previas que reconciliar.
 
 ## Reanudacion
 

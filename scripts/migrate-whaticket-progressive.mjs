@@ -27,6 +27,7 @@ const DEFAULTS = {
   statusEventsMode: 'dedupe',
   reconcileLiveMode: 'auto',
   reconcileWindowHours: '12',
+  resetOperationalData: 'false',
 };
 
 function q(value) {
@@ -131,6 +132,7 @@ async function collectConfig(rl) {
   config.statusEventsMode = await prompt(rl, 'Modo eventos estado (dedupe/system/skip)', DEFAULTS.statusEventsMode);
   config.reconcileLiveMode = await prompt(rl, 'Reconciliar chats nativos (auto/skip)', DEFAULTS.reconcileLiveMode);
   config.reconcileWindowHours = await prompt(rl, 'Ventana reconciliacion en horas', DEFAULTS.reconcileWindowHours);
+  config.resetOperationalData = await prompt(rl, 'Resetear datos operativos antes del import (true/false)', DEFAULTS.resetOperationalData);
 
   config.sourceDumpInContainer = DEFAULTS.sourceDumpInContainer;
   config.bridgeDumpInContainer = DEFAULTS.bridgeDumpInContainer;
@@ -163,6 +165,7 @@ async function main() {
       statusEventsMode: config.statusEventsMode,
       reconcileLiveMode: config.reconcileLiveMode,
       reconcileWindowHours: config.reconcileWindowHours,
+      resetOperationalData: config.resetOperationalData,
     });
 
     if (!(await confirm(rl, 'Continuar con esta configuracion?', true))) return;
@@ -258,18 +261,20 @@ async function main() {
         false
       )
     ) {
-      await run(
-        [
-          `pnpm import:whaticket ${q(config.exportDir)}`,
-          `--account=${q(config.accountId)}`,
-          `--import-key=${q(config.importKey)}`,
-          `--media=${q(config.mediaMode)}`,
-          `--status-events=${q(config.statusEventsMode)}`,
-          `--reconcile-live=${q(config.reconcileLiveMode)}`,
-          `--reconcile-window-hours=${q(config.reconcileWindowHours)}`,
-          '--repair-media',
-        ].join(' ')
-      );
+      const importArgs = [
+        `pnpm import:whaticket ${q(config.exportDir)}`,
+        `--account=${q(config.accountId)}`,
+        `--import-key=${q(config.importKey)}`,
+        `--media=${q(config.mediaMode)}`,
+        `--status-events=${q(config.statusEventsMode)}`,
+        `--reconcile-live=${q(config.reconcileLiveMode)}`,
+        `--reconcile-window-hours=${q(config.reconcileWindowHours)}`,
+        '--repair-media',
+      ];
+      if (['true', '1', 'yes', 'si'].includes(String(config.resetOperationalData).toLowerCase())) {
+        importArgs.push('--reset-operational-data');
+      }
+      await run(importArgs.join(' '));
     }
 
     console.log('\nProceso terminado.');

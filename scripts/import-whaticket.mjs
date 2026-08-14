@@ -62,9 +62,10 @@ function parseArgs(argv) {
 
 function usage() {
   return [
-    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] --password=<temporary-password> [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--reconcile-live=auto|skip] [--reconcile-window-hours=12] [--repair-media] [--dry-run]',
+    'Usage: pnpm import:whaticket <export-dir> [--account=<uuid>] [--owner-user=<id>] --password=<temporary-password> [--media=alarik|public|skip] [--import-key=<key>] [--status-events=dedupe|system|skip] [--reconcile-live=auto|skip] [--reconcile-window-hours=12] [--repair-media] [--reset-operational-data] [--dry-run]',
     '',
     'The export directory must contain manifest.json, the JSON files exported by WhaTicket, and media/.',
+    '--reset-operational-data clears contacts, conversations, imported users, queues, quick replies, operational logs, and WhaTicket maps for the target account before importing. It preserves the account, owner profile, tags, templates, automations, flows, and connected WhatsApp configs.',
   ].join('\n');
 }
 
@@ -360,6 +361,226 @@ async function queryOne(client, sql, params = []) {
 
 async function exec(client, sql, params = []) {
   return client.query(sql, params);
+}
+
+async function deleteAccountRows(client, summary, label, sql, params) {
+  const result = await exec(client, sql, params);
+  summary[label] = result.rowCount ?? 0;
+}
+
+async function resetOperationalData(client, ctx) {
+  console.log(
+    `\n[reset_operational_data] clearing imported/operational data for account ${ctx.accountId}`
+  );
+  console.log(
+    '[reset_operational_data] preserving account, owner profile, tags, templates, automations, flows, and WhatsApp configs'
+  );
+
+  const summary = {};
+  const accountParams = [ctx.accountId];
+  const ownerParams = [ctx.accountId, ctx.ownerUserId];
+
+  await deleteAccountRows(
+    client,
+    summary,
+    'whaticketLegacyMap',
+    'delete from whaticket_legacy_map where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'notifications',
+    'delete from notifications where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'aiUsageLog',
+    'delete from ai_usage_log where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'aiKnowledgeChunks',
+    'delete from ai_knowledge_chunks where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'aiKnowledgeDocuments',
+    'delete from ai_knowledge_documents where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'aiConfigs',
+    'delete from ai_configs where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'appointmentAvailabilityMessages',
+    'delete from appointment_availability_messages where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'appointmentWebhookEvents',
+    'delete from appointment_webhook_events where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'appointmentRecords',
+    'delete from appointment_records where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'paymentLinks',
+    'delete from payment_links where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'integrationConnections',
+    'delete from integration_connections where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'flowRuns',
+    'delete from flow_runs where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'automationPendingExecutions',
+    'delete from automation_pending_executions where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'automationLogs',
+    'delete from automation_logs where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'broadcasts',
+    'delete from broadcasts where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'deals',
+    'delete from deals where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'pipelines',
+    'delete from pipelines where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'quickReplies',
+    'delete from quick_replies where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'webhookEventSamples',
+    'delete from webhook_event_samples where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'webhookEndpoints',
+    'delete from webhook_endpoints where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'apiKeys',
+    'delete from api_keys where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'conversations',
+    'delete from conversations where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'contacts',
+    'delete from contacts where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'customFields',
+    'delete from custom_fields where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'departments',
+    'delete from departments where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'accountInvitations',
+    'delete from account_invitations where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'memberPresence',
+    'delete from member_presence where account_id = $1',
+    accountParams
+  );
+  await deleteAccountRows(
+    client,
+    summary,
+    'nonOwnerProfiles',
+    'delete from profiles where account_id = $1 and user_id <> $2',
+    ownerParams
+  );
+
+  console.log(
+    `[reset_operational_data] done: ${JSON.stringify(summary)}`
+  );
+  return summary;
 }
 
 function qIdent(value) {
@@ -1710,6 +1931,10 @@ async function main() {
     );
 
     await client.query('begin');
+
+    if (args['reset-operational-data']) {
+      summary.resetOperationalData = await resetOperationalData(client, ctx);
+    }
 
     console.log(
       `Importing WhaTicket package into account ${ctx.accountId} with media=${args.media}${args.dryRun ? ' (dry-run)' : ''}`

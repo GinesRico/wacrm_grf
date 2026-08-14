@@ -27,6 +27,7 @@ STATUS_EVENTS_MODE="${STATUS_EVENTS_MODE:-dedupe}"
 RECONCILE_LIVE="${RECONCILE_LIVE:-auto}"
 RECONCILE_WINDOW_HOURS="${RECONCILE_WINDOW_HOURS:-12}"
 REPAIR_MEDIA="${REPAIR_MEDIA:-true}"
+RESET_OPERATIONAL_DATA="${RESET_OPERATIONAL_DATA:-false}"
 
 WHATICKET_DB_PASS="${WHATICKET_DB_PASS:-}"
 
@@ -89,6 +90,25 @@ detect_wacrm_container() {
   fi
 }
 
+validate_wacrm_container() {
+  if docker exec -w "$WACRM_WORKDIR" "$WACRM_APP_CONTAINER" test -f package.json >/dev/null 2>&1; then
+    return
+  fi
+
+  echo "El contenedor '${WACRM_APP_CONTAINER}' no parece ser la app WACRM en '${WACRM_WORKDIR}'." >&2
+  echo "No encuentro '${WACRM_WORKDIR}/package.json' dentro del contenedor." >&2
+  echo >&2
+  echo "Pistas:" >&2
+  echo "  - Has indicado el contenedor de PostgreSQL/base puente si ves el mismo nombre en 'Base puente'." >&2
+  echo "  - Lista contenedores con: docker ps --format '  {{.Names}}\\t{{.Image}}\\t{{.Status}}'" >&2
+  echo "  - Busca el contenedor que tenga Node/pnpm y el codigo de WACRM." >&2
+  echo "  - Si el codigo vive en otra ruta, ejecuta con WACRM_WORKDIR=/ruta/correcta." >&2
+  echo >&2
+  echo "Ejemplo:" >&2
+  echo "  WACRM_APP_CONTAINER=nombre_app_wacrm WACRM_WORKDIR=/app bash scripts/migrate-whaticket-host.sh" >&2
+  exit 1
+}
+
 wacrm_exec() {
   run docker exec \
     -w "$WACRM_WORKDIR" \
@@ -111,6 +131,7 @@ main() {
   fi
 
   detect_wacrm_container
+  validate_wacrm_container
 
   echo
   echo "Migracion WhaTicket -> WACRM desde host Docker"
@@ -125,6 +146,7 @@ main() {
   echo "Eventos de estado: ${STATUS_EVENTS_MODE}"
   echo "Reconciliar chats nativos durante migracion: ${RECONCILE_LIVE} (${RECONCILE_WINDOW_HOURS}h)"
   echo "Reparar media/avatar: ${REPAIR_MEDIA}"
+  echo "Resetear datos operativos antes de importar: ${RESET_OPERATIONAL_DATA}"
   echo
 
   confirm "Continuar con esta configuracion?" "yes" || exit 0
@@ -185,6 +207,9 @@ main() {
     )
     if [[ "$REPAIR_MEDIA" == "true" || "$REPAIR_MEDIA" == "1" || "$REPAIR_MEDIA" == "yes" || "$REPAIR_MEDIA" == "si" ]]; then
       import_args+=(--repair-media)
+    fi
+    if [[ "$RESET_OPERATIONAL_DATA" == "true" || "$RESET_OPERATIONAL_DATA" == "1" || "$RESET_OPERATIONAL_DATA" == "yes" || "$RESET_OPERATIONAL_DATA" == "si" ]]; then
+      import_args+=(--reset-operational-data)
     fi
     run docker exec -w "$WACRM_WORKDIR" "$WACRM_APP_CONTAINER" "${import_args[@]}"
   fi
