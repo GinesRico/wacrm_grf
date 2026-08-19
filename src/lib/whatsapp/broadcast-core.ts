@@ -16,10 +16,10 @@
 // for API broadcasts exactly as it does for dashboard ones.
 // ============================================================
 
-import { and, eq } from "drizzle-orm";
+import { and, eq } from 'drizzle-orm';
 
-import { db as appDb } from "@/db/client";
-import { broadcastRecipients, broadcasts, messageTemplates } from "@/db/schema";
+import { db as appDb } from '@/db/client';
+import { broadcastRecipients, broadcasts, messageTemplates } from '@/db/schema';
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
 import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config';
@@ -32,11 +32,12 @@ import {
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
-import { serializeMessageTemplate } from "@/lib/whatsapp/template-serializer";
+import { serializeMessageTemplate } from '@/lib/whatsapp/template-serializer';
 import {
   publishBroadcastRecipientUpdated,
   publishBroadcastUpdated,
-} from "@/lib/realtime/broadcast-events";
+} from '@/lib/realtime/broadcast-events';
+import { withMetaFlowTemplateParams } from '@/lib/whatsapp-flows/template-params';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -139,8 +140,8 @@ export async function createBroadcast(
       and(
         eq(messageTemplates.accountId, accountId),
         eq(messageTemplates.name, templateName),
-        eq(messageTemplates.language, templateLanguage),
-      ),
+        eq(messageTemplates.language, templateLanguage)
+      )
     );
   const serializedTemplate = matchingTemplate
     ? serializeMessageTemplate(matchingTemplate)
@@ -159,7 +160,9 @@ export async function createBroadcast(
   const resolved: { contactId: string; phone: string; params: string[] }[] = [];
   let rejected = 0;
   for (const r of recipients) {
-    const sanitized = sanitizePhoneForMeta(typeof r.to === 'string' ? r.to : '');
+    const sanitized = sanitizePhoneForMeta(
+      typeof r.to === 'string' ? r.to : ''
+    );
     if (!isValidE164(sanitized)) {
       rejected++;
       continue;
@@ -229,7 +232,10 @@ export async function createBroadcast(
         status: 'pending' as const,
       }))
     )
-    .returning({ id: broadcastRecipients.id, contactId: broadcastRecipients.contactId });
+    .returning({
+      id: broadcastRecipients.id,
+      contactId: broadcastRecipients.contactId,
+    });
   if (!recipientRows.length) {
     throw new BroadcastError('internal', 'Failed to create broadcast', 500);
   }
@@ -239,7 +245,11 @@ export async function createBroadcast(
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = recipientRows.map((row) => {
     const r = byContact.get(row.contactId as string)!;
-    return { recipientRowId: row.id as string, phone: r.phone, params: r.params };
+    return {
+      recipientRowId: row.id as string,
+      phone: r.phone,
+      params: r.params,
+    };
   });
 
   await publishBroadcastUpdated(accountId, broadcast.id);
@@ -283,6 +293,11 @@ export async function deliverBroadcast(
 
     for (const variant of variants) {
       try {
+        const messageParams = await withMetaFlowTemplateParams(
+          plan.templateRow,
+          { body: recipient.params },
+          plan.accountId
+        );
         const result = await sendTemplateMessage({
           phoneNumberId: plan.phoneNumberId,
           accessToken: plan.accessToken,
@@ -290,13 +305,15 @@ export async function deliverBroadcast(
           templateName: plan.templateName,
           language: plan.templateLanguage,
           template: plan.templateRow ?? undefined,
+          messageParams,
           params: recipient.params,
         });
         sentMessageId = result.messageId;
         lastError = null;
         break;
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
+        const message =
+          error instanceof Error ? error.message : 'Unknown error';
         lastError = message;
         // Only a "recipient not allowed" error is worth another variant.
         if (!isRecipientNotAllowedError(message)) break;
@@ -314,7 +331,10 @@ export async function deliverBroadcast(
           errorMessage: null,
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
-      await publishBroadcastRecipientUpdated(plan.accountId, recipient.recipientRowId);
+      await publishBroadcastRecipientUpdated(
+        plan.accountId,
+        recipient.recipientRowId
+      );
     } else {
       await appDb
         .update(broadcastRecipients)
@@ -323,7 +343,10 @@ export async function deliverBroadcast(
           errorMessage: lastError || 'Unknown error',
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
-      await publishBroadcastRecipientUpdated(plan.accountId, recipient.recipientRowId);
+      await publishBroadcastRecipientUpdated(
+        plan.accountId,
+        recipient.recipientRowId
+      );
     }
   }
 

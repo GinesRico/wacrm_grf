@@ -442,7 +442,8 @@ export function ConversationList({
         if (tab === 'search' && debouncedMessageSearch) {
           params.set('message_search', debouncedMessageSearch);
         }
-        if (quickFilters.length > 0) params.set('quick', quickFilters.join(','));
+        if (quickFilters.length > 0)
+          params.set('quick', quickFilters.join(','));
 
         const res = await fetch(
           `/api/inbox/conversations?${params.toString()}`,
@@ -727,7 +728,9 @@ export function ConversationList({
 
   const handleSelect = useCallback(
     (conv: Conversation) => {
-      onSelect(conv, { jumpToMessageId: conv.search_match?.message_id ?? null });
+      onSelect(conv, {
+        jumpToMessageId: conv.search_match?.message_id ?? null,
+      });
     },
     [onSelect]
   );
@@ -1001,7 +1004,9 @@ export function ConversationList({
                         />
                       </div>
                     </div>
-                    {(contactSearch || messageSearch || quickFilters.length > 0) && (
+                    {(contactSearch ||
+                      messageSearch ||
+                      quickFilters.length > 0) && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1023,7 +1028,9 @@ export function ConversationList({
                 onClick={() =>
                   setScope((value) => (value === 'mine' ? 'all' : 'mine'))
                 }
-                title={effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')}
+                title={
+                  effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')
+                }
                 aria-label={
                   effectiveScope === 'mine' ? t('scopeMine') : t('scopeAll')
                 }
@@ -1728,7 +1735,9 @@ function ConversationPreviewDialog({
                       {lineInitial}
                     </span>
                   )}
-                  {lineName && <span className="min-w-0 truncate">{lineName}</span>}
+                  {lineName && (
+                    <span className="min-w-0 truncate">{lineName}</span>
+                  )}
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -1878,6 +1887,20 @@ function PreviewTemplateActions({
             </button>
           );
         })
+      ) : payload.kind === 'flow' ? (
+        <button
+          type="button"
+          disabled
+          className={cn(
+            'flex w-full items-center justify-center gap-1.5 border-t px-3 py-1.5 text-xs font-medium',
+            onPrimary
+              ? 'border-primary/20 text-primary'
+              : 'border-border text-primary'
+          )}
+        >
+          <CornerDownLeft className="size-3" />
+          <span className="truncate">{payload.flow_cta}</span>
+        </button>
       ) : (
         <button
           type="button"
@@ -1963,10 +1986,12 @@ function PreviewMessageBubble({
   const text = message.content_text || fallback;
 
   return (
-    <div className={cn('flex w-full', isAgent ? 'justify-end' : 'justify-start')}>
+    <div
+      className={cn('flex w-full', isAgent ? 'justify-end' : 'justify-start')}
+    >
       <div
         className={cn(
-          'min-w-20 max-w-[min(82%,34rem)] rounded-lg px-3 py-2 text-sm shadow-sm',
+          'max-w-[min(82%,34rem)] min-w-20 rounded-lg px-3 py-2 text-sm shadow-sm',
           isDeleted
             ? isAgent
               ? 'border-primary/20 bg-primary/10 text-primary/80 border'

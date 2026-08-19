@@ -241,9 +241,12 @@ export const platformAccountRequests = pgTable(
     phone: text('phone'),
     notes: text('notes'),
     status: text('status').notNull().default('pending'),
-    reviewedByUserId: text('reviewed_by_user_id').references(() => authUser.id, {
-      onDelete: 'set null',
-    }),
+    reviewedByUserId: text('reviewed_by_user_id').references(
+      () => authUser.id,
+      {
+        onDelete: 'set null',
+      }
+    ),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -1479,6 +1482,42 @@ export const appointmentAvailabilityMessages = pgTable(
     check(
       'appointment_availability_send_mode_check',
       sql`${table.sendMode} in ('booking_link', 'interactive_list', 'cta_url')`
+    ),
+  ]
+);
+
+export const whatsappMetaFlows = pgTable(
+  'whatsapp_meta_flows',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    slug: text('slug').notNull(),
+    flowId: text('flow_id').notNull(),
+    title: text('title').notNull(),
+    bodyText: text('body_text').notNull(),
+    footerText: text('footer_text'),
+    buttonText: text('button_text').notNull(),
+    initialScreen: text('initial_screen').notNull().default('APPOINTMENT'),
+    active: boolean('active').notNull().default(true),
+    config: jsonb('config').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('whatsapp_meta_flows_account_slug_key').on(
+      table.accountId,
+      table.slug
+    ),
+    index('idx_whatsapp_meta_flows_account_active').on(
+      table.accountId,
+      table.active
     ),
   ]
 );

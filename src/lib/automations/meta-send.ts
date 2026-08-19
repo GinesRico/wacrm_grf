@@ -25,6 +25,7 @@ import {
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import { serializeMessageTemplate } from '@/lib/whatsapp/template-serializer';
+import { withMetaFlowTemplateParams } from '@/lib/whatsapp-flows/template-params';
 import type { MessageTemplate } from '@/types';
 
 // ------------------------------------------------------------
@@ -238,6 +239,11 @@ async function sendViaMeta(
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
+      const messageParams = await withMetaFlowTemplateParams(
+        templateRow,
+        input.messageParams,
+        input.accountId
+      );
       const r = await sendTemplateMessage({
         phoneNumberId: config.phone_number_id,
         accessToken,
@@ -246,7 +252,7 @@ async function sendViaMeta(
         language: input.language,
         params: input.params,
         template: templateRow ?? undefined,
-        messageParams: input.messageParams,
+        messageParams,
       });
       return r.messageId;
     }
@@ -299,7 +305,9 @@ async function sendViaMeta(
   // from manual agent sends.
   const content_type = input.kind === 'template' ? 'template' : 'text';
   const structuredTemplateParams =
-    input.kind === 'template' ? (input.messageParams ?? { body: input.params }) : {};
+    input.kind === 'template'
+      ? (input.messageParams ?? { body: input.params })
+      : {};
   const renderedTemplateBody =
     input.kind === 'template'
       ? renderTemplateBodyPreview(
@@ -309,13 +317,18 @@ async function sendViaMeta(
       : null;
   const templateButtonsPayload =
     input.kind === 'template'
-      ? templatePreviewPayload(templateRow, renderedTemplateBody, structuredTemplateParams)
+      ? templatePreviewPayload(
+          templateRow,
+          renderedTemplateBody,
+          structuredTemplateParams
+        )
       : null;
   const templateMediaUrl =
     input.kind === 'template'
       ? templateHeaderMediaUrl(templateRow, structuredTemplateParams)
       : null;
-  const content_text = input.kind === 'text' ? input.text : renderedTemplateBody;
+  const content_text =
+    input.kind === 'text' ? input.text : renderedTemplateBody;
   const template_name = input.kind === 'template' ? input.templateName : null;
 
   try {

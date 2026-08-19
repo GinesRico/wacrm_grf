@@ -1,17 +1,17 @@
-import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { NextResponse } from 'next/server';
+import { and, eq } from 'drizzle-orm';
 
-import { db } from "@/db/client";
-import { messageTemplates } from "@/db/schema";
-import { requireDbRole } from "@/lib/auth/current-account";
-import { toErrorResponse } from "@/lib/auth/errors";
-import { decrypt } from "@/lib/whatsapp/encryption";
-import { getDefaultWhatsAppConfig } from "@/lib/whatsapp/config";
-import { normalizeStatus } from "@/lib/whatsapp/template-status-normalize";
-import { publishRealtimeEvent } from "@/lib/realtime/soketi-server";
-import type { TemplateButton, TemplateSampleValues } from "@/types";
+import { db } from '@/db/client';
+import { messageTemplates } from '@/db/schema';
+import { requireDbRole } from '@/lib/auth/current-account';
+import { toErrorResponse } from '@/lib/auth/errors';
+import { decrypt } from '@/lib/whatsapp/encryption';
+import { getDefaultWhatsAppConfig } from '@/lib/whatsapp/config';
+import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize';
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
+import type { TemplateButton, TemplateSampleValues } from '@/types';
 
-const META_API_VERSION = "v21.0";
+const META_API_VERSION = 'v21.0';
 const META_API_BASE = `https://graph.facebook.com/${META_API_VERSION}`;
 
 interface MetaButton {
@@ -19,6 +19,9 @@ interface MetaButton {
   text: string;
   url?: string;
   phone_number?: string;
+  flow_id?: string;
+  flow_action?: 'navigate' | 'data_exchange';
+  navigate_screen?: string;
   example?: string[] | string;
 }
 
@@ -45,7 +48,7 @@ interface MetaTemplate {
 }
 
 async function readJsonResponse<T>(
-  response: Response,
+  response: Response
 ): Promise<{ data?: T; error?: string }> {
   const text = await response.text();
   if (!text) return {};
@@ -60,23 +63,23 @@ async function readJsonResponse<T>(
 }
 
 function normalizeCategory(
-  meta: string,
-): "Marketing" | "Utility" | "Authentication" {
+  meta: string
+): 'Marketing' | 'Utility' | 'Authentication' {
   const upper = meta.toUpperCase();
-  if (upper === "UTILITY") return "Utility";
-  if (upper === "AUTHENTICATION") return "Authentication";
-  return "Marketing";
+  if (upper === 'UTILITY') return 'Utility';
+  if (upper === 'AUTHENTICATION') return 'Authentication';
+  return 'Marketing';
 }
 
 function normalizeQualityScore(
-  raw: MetaTemplate["quality_score"],
-): "GREEN" | "YELLOW" | "RED" | null {
+  raw: MetaTemplate['quality_score']
+): 'GREEN' | 'YELLOW' | 'RED' | null {
   const score =
-    typeof raw === "string" ? raw : raw?.score ? String(raw.score) : null;
+    typeof raw === 'string' ? raw : raw?.score ? String(raw.score) : null;
   if (!score) return null;
   const upper = score.toUpperCase();
-  return upper === "GREEN" || upper === "YELLOW" || upper === "RED"
-    ? (upper as "GREEN" | "YELLOW" | "RED")
+  return upper === 'GREEN' || upper === 'YELLOW' || upper === 'RED'
+    ? (upper as 'GREEN' | 'YELLOW' | 'RED')
     : null;
 }
 
@@ -85,31 +88,40 @@ function parseButtons(metaButtons: MetaButton[] | undefined): TemplateButton[] {
   const out: TemplateButton[] = [];
   for (const b of metaButtons) {
     switch (b.type?.toUpperCase()) {
-      case "QUICK_REPLY":
-        out.push({ type: "QUICK_REPLY", text: b.text });
+      case 'QUICK_REPLY':
+        out.push({ type: 'QUICK_REPLY', text: b.text });
         break;
-      case "URL":
+      case 'URL':
         out.push({
-          type: "URL",
+          type: 'URL',
           text: b.text,
-          url: b.url ?? "",
+          url: b.url ?? '',
           example: Array.isArray(b.example) ? b.example[0] : b.example,
         });
         break;
-      case "PHONE_NUMBER":
+      case 'PHONE_NUMBER':
         out.push({
-          type: "PHONE_NUMBER",
+          type: 'PHONE_NUMBER',
           text: b.text,
-          phone_number: b.phone_number ?? "",
+          phone_number: b.phone_number ?? '',
         });
         break;
-      case "COPY_CODE":
+      case 'COPY_CODE':
         out.push({
-          type: "COPY_CODE",
+          type: 'COPY_CODE',
           text: b.text,
           example: Array.isArray(b.example)
-            ? b.example[0] ?? ""
-            : b.example ?? "",
+            ? (b.example[0] ?? '')
+            : (b.example ?? ''),
+        });
+        break;
+      case 'FLOW':
+        out.push({
+          type: 'FLOW',
+          text: b.text,
+          flow_id: b.flow_id,
+          flow_action: b.flow_action,
+          navigate_screen: b.navigate_screen,
         });
         break;
     }
@@ -119,7 +131,7 @@ function parseButtons(metaButtons: MetaButton[] | undefined): TemplateButton[] {
 
 function extractSampleValues(
   body: MetaTemplateComponent | undefined,
-  header: MetaTemplateComponent | undefined,
+  header: MetaTemplateComponent | undefined
 ): TemplateSampleValues | null {
   const bodySample = body?.example?.body_text?.[0];
   const headerSample = header?.example?.header_text;
@@ -134,7 +146,7 @@ export async function POST() {
   try {
     let ctx;
     try {
-      ctx = await requireDbRole("admin");
+      ctx = await requireDbRole('admin');
     } catch (err) {
       return toErrorResponse(err);
     }
@@ -145,9 +157,9 @@ export async function POST() {
       return NextResponse.json(
         {
           error:
-            "WhatsApp not configured. Connect your WhatsApp Business account in Settings first.",
+            'WhatsApp not configured. Connect your WhatsApp Business account in Settings first.',
         },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
@@ -155,18 +167,17 @@ export async function POST() {
       return NextResponse.json(
         {
           error:
-            "WABA (WhatsApp Business Account) ID missing. Re-connect your account in Settings.",
+            'WABA (WhatsApp Business Account) ID missing. Re-connect your account in Settings.',
         },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
     const accessToken = decrypt(config.access_token);
 
     const metaTemplates: MetaTemplate[] = [];
-    let nextUrl:
-      | string
-      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`;
+    let nextUrl: string | null =
+      `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`;
     const PAGE_CAP = 20;
     let pageCount = 0;
 
@@ -179,7 +190,7 @@ export async function POST() {
       if (!metaRes.ok) {
         let metaErr = `Meta API error: ${metaRes.status}`;
         const body = await readJsonResponse<{ error?: { message?: string } }>(
-          metaRes,
+          metaRes
         );
         if (body.data?.error?.message) {
           metaErr = body.data.error.message;
@@ -195,8 +206,8 @@ export async function POST() {
       }>(metaRes);
       if (!parsed.data) {
         return NextResponse.json(
-          { error: parsed.error || "Meta returned an invalid response." },
-          { status: 502 },
+          { error: parsed.error || 'Meta returned an invalid response.' },
+          { status: 502 }
         );
       }
       const metaBody = parsed.data;
@@ -209,20 +220,20 @@ export async function POST() {
     const errors: { name: string; language: string; message: string }[] = [];
 
     for (const t of metaTemplates) {
-      const body = (t.components ?? []).find((c) => c.type === "BODY");
-      const header = (t.components ?? []).find((c) => c.type === "HEADER");
-      const footer = (t.components ?? []).find((c) => c.type === "FOOTER");
-      const buttons = (t.components ?? []).find((c) => c.type === "BUTTONS");
+      const body = (t.components ?? []).find((c) => c.type === 'BODY');
+      const header = (t.components ?? []).find((c) => c.type === 'HEADER');
+      const footer = (t.components ?? []).find((c) => c.type === 'FOOTER');
+      const buttons = (t.components ?? []).find((c) => c.type === 'BUTTONS');
 
       const parsedButtons = parseButtons(buttons?.buttons);
       const sampleValues = extractSampleValues(body, header);
 
       const headerFormat = header?.format?.toUpperCase();
       const headerType =
-        headerFormat === "TEXT" ||
-        headerFormat === "IMAGE" ||
-        headerFormat === "VIDEO" ||
-        headerFormat === "DOCUMENT"
+        headerFormat === 'TEXT' ||
+        headerFormat === 'IMAGE' ||
+        headerFormat === 'VIDEO' ||
+        headerFormat === 'DOCUMENT'
           ? headerFormat.toLowerCase()
           : null;
 
@@ -235,7 +246,7 @@ export async function POST() {
         headerType,
         headerContent: header?.text ?? null,
         headerHandle: header?.example?.header_handle?.[0] ?? null,
-        bodyText: body?.text ?? "",
+        bodyText: body?.text ?? '',
         footerText: footer?.text ?? null,
         buttons: parsedButtons.length ? parsedButtons : null,
         sampleValues,
@@ -252,8 +263,8 @@ export async function POST() {
           and(
             eq(messageTemplates.accountId, ctx.accountId),
             eq(messageTemplates.name, t.name),
-            eq(messageTemplates.language, t.language),
-          ),
+            eq(messageTemplates.language, t.language)
+          )
         )
         .limit(1);
 
@@ -272,17 +283,17 @@ export async function POST() {
         errors.push({
           name: t.name,
           language: t.language,
-          message: err instanceof Error ? err.message : "Template sync failed.",
+          message: err instanceof Error ? err.message : 'Template sync failed.',
         });
       }
     }
 
     if (inserted > 0 || updated > 0) {
-      await publishRealtimeEvent("template.updated", {
+      await publishRealtimeEvent('template.updated', {
         accountId: ctx.accountId,
         payload: { synced: true, inserted, updated },
       }).catch((error) => {
-        console.warn("[realtime] failed to publish template.updated:", error);
+        console.warn('[realtime] failed to publish template.updated:', error);
       });
     }
 
@@ -295,13 +306,13 @@ export async function POST() {
       truncated: pageCount >= PAGE_CAP && nextUrl !== null,
     });
   } catch (error) {
-    console.error("Error syncing WhatsApp templates:", error);
+    console.error('Error syncing WhatsApp templates:', error);
     return NextResponse.json(
       {
         error:
-          error instanceof Error ? error.message : "Failed to sync templates",
+          error instanceof Error ? error.message : 'Failed to sync templates',
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }

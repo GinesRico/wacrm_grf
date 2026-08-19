@@ -49,6 +49,8 @@ export interface SendTimeParams {
    * override at send time.
    */
   buttonParams?: Record<number, string>;
+  /** WhatsApp Flow template buttons expect initial data at action.flow_action_data. */
+  flowActionData?: Record<number, Record<string, unknown>>;
 }
 
 export type MetaSendComponent =
@@ -56,7 +58,7 @@ export type MetaSendComponent =
   | { type: 'body'; parameters: MetaSendParameter[] }
   | {
       type: 'button';
-      sub_type: 'url' | 'quick_reply' | 'copy_code';
+      sub_type: 'url' | 'quick_reply' | 'copy_code' | 'flow';
       index: string;
       parameters: MetaSendParameter[];
     };
@@ -67,11 +69,18 @@ type MetaSendParameter =
   | { type: 'video'; video: { link?: string; id?: string } }
   | { type: 'document'; document: { link?: string; id?: string } }
   | { type: 'coupon_code'; coupon_code: string }
-  | { type: 'payload'; payload: string };
+  | { type: 'payload'; payload: string }
+  | {
+      type: 'action';
+      action: {
+        flow_token: string;
+        flow_action_data?: Record<string, unknown>;
+      };
+    };
 
 function buildHeaderComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   const headerType = template.header_type;
   if (!headerType) return null;
@@ -80,12 +89,14 @@ function buildHeaderComponent(
     // TEXT header with {{1}} → need a value. Static text headers
     // (no variables) just ride along inside the template itself; no
     // header component required on send.
-    const varCount = extractVariableIndices(template.header_content ?? '').length;
+    const varCount = extractVariableIndices(
+      template.header_content ?? ''
+    ).length;
     if (varCount === 0) return null;
     const value = params.headerText;
     if (!value || !value.trim()) {
       throw new Error(
-        'Header text variable {{1}} requires a value — pass headerText.',
+        'Header text variable {{1}} requires a value — pass headerText.'
       );
     }
     return {
@@ -107,7 +118,7 @@ function buildHeaderComponent(
   const id = params.headerMediaId;
   if (!link && !id) {
     throw new Error(
-      `${headerType} header requires a media link or id at send time — set header_media_url on the template or pass headerMediaUrl/headerMediaId.`,
+      `${headerType} header requires a media link or id at send time — set header_media_url on the template or pass headerMediaUrl/headerMediaId.`
     );
   }
   const mediaPayload: { link?: string; id?: string } = id ? { id } : { link };
@@ -125,14 +136,14 @@ function buildHeaderComponent(
 
 function buildBodyComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   const varCount = extractVariableIndices(template.body_text).length;
   const body = params.body ?? [];
   if (varCount === 0 && body.length === 0) return null;
   if (body.length < varCount) {
     throw new Error(
-      `Body has ${varCount} variable(s) but only ${body.length} value(s) were supplied.`,
+      `Body has ${varCount} variable(s) but only ${body.length} value(s) were supplied.`
     );
   }
   // Trim to the variable count — extra values are dropped silently so
@@ -146,7 +157,7 @@ function buildBodyComponent(
 
 function buttonNeedsSendParam(
   button: TemplateButton,
-  override: string | undefined,
+  override: string | undefined
 ): boolean {
   switch (button.type) {
     case 'URL':
@@ -155,6 +166,8 @@ function buttonNeedsSendParam(
       // We always emit a button param for COPY_CODE so the customer
       // gets a real code (either the caller's override or the
       // template's example as a default).
+      return true;
+    case 'FLOW':
       return true;
     case 'QUICK_REPLY':
     case 'PHONE_NUMBER':
@@ -166,6 +179,7 @@ function buildButtonComponent(
   button: TemplateButton,
   index: number,
   override: string | undefined,
+  flowActionData: Record<string, unknown> | undefined
 ): MetaSendComponent | null {
   if (!buttonNeedsSendParam(button, override)) return null;
 
@@ -175,7 +189,7 @@ function buildButtonComponent(
       // the button's index in the template's buttons array.
       if (!override || !override.trim()) {
         throw new Error(
-          `URL button #${index + 1} uses {{1}} — requires a buttonParams[${index}] value.`,
+          `URL button #${index + 1} uses {{1}} — requires a buttonParams[${index}] value.`
         );
       }
       return {
@@ -208,6 +222,26 @@ function buildButtonComponent(
       // PHONE_NUMBER buttons never accept send-time params per Meta —
       // return null even if an override snuck through.
       return null;
+    case 'FLOW':
+      if (!override || !override.trim()) {
+        throw new Error(
+          `FLOW button #${index + 1} requires a buttonParams[${index}] flow token.`
+        );
+      }
+      return {
+        type: 'button',
+        sub_type: 'flow',
+        index: String(index),
+        parameters: [
+          {
+            type: 'action',
+            action: {
+              flow_token: override,
+              flow_action_data: flowActionData ?? {},
+            },
+          },
+        ],
+      };
   }
 }
 
@@ -218,7 +252,7 @@ function buildButtonComponent(
  */
 export function buildSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
   const header = buildHeaderComponent(template, params);
@@ -228,7 +262,12 @@ export function buildSendComponents(
   if (template.buttons?.length) {
     template.buttons.forEach((btn, i) => {
       const override = params.buttonParams?.[i];
-      const component = buildButtonComponent(btn, i, override);
+      const component = buildButtonComponent(
+        btn,
+        i,
+        override,
+        params.flowActionData?.[i]
+      );
       if (component) out.push(component);
     });
   }

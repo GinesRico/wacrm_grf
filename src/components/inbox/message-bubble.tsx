@@ -785,6 +785,20 @@ function TemplateActions({
             </button>
           );
         })
+      ) : payload.kind === 'flow' ? (
+        <button
+          type="button"
+          disabled
+          className={cn(
+            'flex w-full items-center justify-center gap-2 border-t px-3 py-2 text-sm font-medium',
+            onPrimary
+              ? 'border-primary-foreground/25 text-primary-foreground'
+              : 'border-border text-primary'
+          )}
+        >
+          <CornerDownLeft className="size-3.5" />
+          <span className="truncate">{payload.flow_cta}</span>
+        </button>
       ) : (
         <button
           type="button"
@@ -929,7 +943,9 @@ function MessageContent({
               }
               t={t}
               sticker={message.content_type === 'sticker'}
-              galleryItems={message.content_type === 'image' ? imageGallery : undefined}
+              galleryItems={
+                message.content_type === 'image' ? imageGallery : undefined
+              }
               galleryIndex={
                 message.content_type === 'image'
                   ? imageGallery?.findIndex((item) => item.id === message.id)
@@ -1220,9 +1236,9 @@ export function MessageBubble({
               }
             />
           )}
-          <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+          <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-semibold tracking-wide text-amber-700 uppercase dark:text-amber-300">
             <span>{t('internalNote')}</span>
-            <span className="normal-case tracking-normal text-amber-800/80 dark:text-amber-200/80">
+            <span className="tracking-normal text-amber-800/80 normal-case dark:text-amber-200/80">
               {senderName}
             </span>
           </div>
@@ -1249,8 +1265,14 @@ export function MessageBubble({
                 {t('messageInfo')}
               </div>
               <dl className="space-y-1.5">
-                <MessageInfoRow label={t('status')} value={statusLabel(message.status, t)} />
-                <MessageInfoRow label={t('type')} value={contentTypeLabel(message.content_type, t)} />
+                <MessageInfoRow
+                  label={t('status')}
+                  value={statusLabel(message.status, t)}
+                />
+                <MessageInfoRow
+                  label={t('type')}
+                  value={contentTypeLabel(message.content_type, t)}
+                />
                 <MessageInfoRow label={t('createdAt')} value={createdAt} />
               </dl>
             </PopoverContent>

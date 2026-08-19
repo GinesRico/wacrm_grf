@@ -1,12 +1,12 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { ExternalLink, List, Reply } from "lucide-react";
-import { useTranslations } from "next-intl";
-import { cn } from "@/lib/utils";
-import { WhatsAppText } from "@/components/inbox/whatsapp-text";
-import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
-import { resolveTemplateButtonUrl } from "@/lib/inbox/template-buttons";
+import { useState } from 'react';
+import { ExternalLink, List, Reply, Workflow } from 'lucide-react';
+import { useTranslations } from 'next-intl';
+import { cn } from '@/lib/utils';
+import { WhatsAppText } from '@/components/inbox/whatsapp-text';
+import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
+import { resolveTemplateButtonUrl } from '@/lib/inbox/template-buttons';
 
 /**
  * WhatsApp-style read-only render of an interactive message. Used both
@@ -31,48 +31,50 @@ export function InteractivePreview({
   embedded?: boolean;
   onPrimary?: boolean;
 }) {
-  const t = useTranslations("InteractiveBuilder");
+  const t = useTranslations('InteractiveBuilder');
   const [listOpen, setListOpen] = useState(false);
   const actionClass = cn(
-    "flex w-full items-center justify-center gap-1.5 border-t px-3 py-2 text-sm font-medium",
+    'flex w-full items-center justify-center gap-1.5 border-t px-3 py-2 text-sm font-medium',
     embedded
       ? onPrimary
-        ? "border-primary-foreground/25 text-primary-foreground"
-        : "border-border text-primary"
-      : "border-border text-primary",
+        ? 'border-primary-foreground/25 text-primary-foreground'
+        : 'border-border text-primary'
+      : 'border-border text-primary'
   );
 
   return (
     <div
       className={cn(
         embedded
-          ? "w-full overflow-hidden text-inherit"
-          : "w-full max-w-[260px] overflow-hidden rounded-lg bg-card text-foreground shadow-sm ring-1 ring-border",
-        className,
+          ? 'w-full overflow-hidden text-inherit'
+          : 'bg-card text-foreground ring-border w-full max-w-[260px] overflow-hidden rounded-lg shadow-sm ring-1',
+        className
       )}
     >
-      <div className={cn(embedded ? "pb-2" : "px-3 py-2")}>
+      <div className={cn(embedded ? 'pb-2' : 'px-3 py-2')}>
         {payload.header ? (
-          <p className="mb-1 break-words text-sm font-semibold">
+          <p className="mb-1 text-sm font-semibold break-words">
             <WhatsAppText text={payload.header} />
           </p>
         ) : null}
         {payload.body || !hideEmptyBody ? (
-          <p className="whitespace-pre-wrap break-words text-sm">
+          <p className="text-sm break-words whitespace-pre-wrap">
             {payload.body ? (
               <WhatsAppText text={payload.body} />
             ) : (
-              <span className="text-muted-foreground">{t("messageBodyFallback")}</span>
+              <span className="text-muted-foreground">
+                {t('messageBodyFallback')}
+              </span>
             )}
           </p>
         ) : null}
         {payload.footer ? (
           <p
             className={cn(
-              "mt-1 break-words text-[11px]",
+              'mt-1 text-[11px] break-words',
               embedded && onPrimary
-                ? "text-primary-foreground/70"
-                : "text-muted-foreground",
+                ? 'text-primary-foreground/70'
+                : 'text-muted-foreground'
             )}
           >
             <WhatsAppText text={payload.footer} />
@@ -80,7 +82,7 @@ export function InteractivePreview({
         ) : null}
       </div>
 
-      {payload.kind === "buttons" ? (
+      {payload.kind === 'buttons' ? (
         <div className="flex flex-col">
           {payload.buttons.map((b, i) => {
             const href = resolveTemplateButtonUrl(b);
@@ -92,7 +94,7 @@ export function InteractivePreview({
                   <Reply className="h-3.5 w-3.5" />
                 )}
                 <span className="truncate">
-                  <WhatsAppText text={b.title || t("buttonFallback")} />
+                  <WhatsAppText text={b.title || t('buttonFallback')} />
                 </span>
               </>
             );
@@ -104,7 +106,10 @@ export function InteractivePreview({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(event) => event.stopPropagation()}
-                className={cn(actionClass, i === 0 && !embedded ? "first:border-t" : "")}
+                className={cn(
+                  actionClass,
+                  i === 0 && !embedded ? 'first:border-t' : ''
+                )}
               >
                 {content}
               </a>
@@ -121,7 +126,7 @@ export function InteractivePreview({
             );
           })}
         </div>
-      ) : payload.kind === "list" ? (
+      ) : payload.kind === 'list' ? (
         <div className="flex flex-col">
           <button
             type="button"
@@ -133,26 +138,31 @@ export function InteractivePreview({
             aria-expanded={listOpen}
           >
             <List className="h-3.5 w-3.5" />
-            <span className="truncate">{payload.button_label || t("menuFallback")}</span>
+            <span className="truncate">
+              {payload.button_label || t('menuFallback')}
+            </span>
           </button>
           {listOpen ? (
             <div
               className={cn(
-                "border-t px-2 py-2",
+                'border-t px-2 py-2',
                 embedded && onPrimary
-                  ? "border-primary-foreground/25"
-                  : "border-border",
+                  ? 'border-primary-foreground/25'
+                  : 'border-border'
               )}
             >
               {payload.sections.map((section, sectionIndex) => (
-                <div key={`${section.title ?? "section"}-${sectionIndex}`} className="space-y-1">
+                <div
+                  key={`${section.title ?? 'section'}-${sectionIndex}`}
+                  className="space-y-1"
+                >
                   {section.title ? (
                     <p
                       className={cn(
-                        "px-1 text-[11px] font-semibold uppercase tracking-wide",
+                        'px-1 text-[11px] font-semibold tracking-wide uppercase',
                         embedded && onPrimary
-                          ? "text-primary-foreground/70"
-                          : "text-muted-foreground",
+                          ? 'text-primary-foreground/70'
+                          : 'text-muted-foreground'
                       )}
                     >
                       <WhatsAppText text={section.title} />
@@ -164,10 +174,10 @@ export function InteractivePreview({
                       type="button"
                       disabled
                       className={cn(
-                        "w-full rounded-md px-2 py-1.5 text-left text-xs",
+                        'w-full rounded-md px-2 py-1.5 text-left text-xs',
                         embedded && onPrimary
-                          ? "text-primary-foreground/90"
-                          : "text-foreground",
+                          ? 'text-primary-foreground/90'
+                          : 'text-foreground'
                       )}
                     >
                       <span className="block font-medium">
@@ -176,10 +186,10 @@ export function InteractivePreview({
                       {row.description ? (
                         <span
                           className={cn(
-                            "mt-0.5 block",
+                            'mt-0.5 block',
                             embedded && onPrimary
-                              ? "text-primary-foreground/65"
-                              : "text-muted-foreground",
+                              ? 'text-primary-foreground/65'
+                              : 'text-muted-foreground'
                           )}
                         >
                           <WhatsAppText text={row.description} />
@@ -192,6 +202,18 @@ export function InteractivePreview({
             </div>
           ) : null}
         </div>
+      ) : payload.kind === 'flow' ? (
+        <button
+          type="button"
+          disabled
+          onClick={(event) => event.stopPropagation()}
+          className={actionClass}
+        >
+          <Workflow className="h-3.5 w-3.5" />
+          <span className="truncate">
+            {payload.flow_cta || t('buttonFallback')}
+          </span>
+        </button>
       ) : (
         <a
           href={payload.url}
@@ -201,7 +223,9 @@ export function InteractivePreview({
           className={actionClass}
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          <span className="truncate">{payload.button_label || t("buttonFallback")}</span>
+          <span className="truncate">
+            {payload.button_label || t('buttonFallback')}
+          </span>
         </a>
       )}
     </div>

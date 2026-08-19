@@ -17,6 +17,7 @@ import {
 import {
   sendInteractiveButtons,
   sendInteractiveCtaUrl,
+  sendInteractiveFlow,
   sendInteractiveList,
   sendMediaMessage,
   sendTemplateMessage,
@@ -34,6 +35,9 @@ import { maybeSendTypingIndicatorForConversation } from '@/lib/whatsapp/typing-i
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { getInboxConversationById } from '@/lib/inbox/conversations';
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
+import { createMetaFlowToken } from '@/lib/whatsapp-flows/token';
+import { getMetaFlowHandler } from '@/lib/whatsapp-flows/registry';
+import { withMetaFlowTemplateParams } from '@/lib/whatsapp-flows/template-params';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -221,6 +225,20 @@ function parseTemplateMessageParams(value: unknown): SendTimeParams {
         ? params.headerMediaId
         : undefined,
     buttonParams,
+    flowActionData:
+      params.flowActionData && typeof params.flowActionData === 'object'
+        ? Object.fromEntries(
+            Object.entries(params.flowActionData as Record<string, unknown>)
+              .filter(
+                ([key, v]) =>
+                  /^\d+$/.test(key) &&
+                  Boolean(v) &&
+                  typeof v === 'object' &&
+                  !Array.isArray(v)
+              )
+              .map(([key, v]) => [Number(key), v as Record<string, unknown>])
+          )
+        : undefined,
   };
 }
 
@@ -420,6 +438,15 @@ export async function sendMessageToConversation(
     templateRow = row ? serializeTemplate(row) : null;
   }
 
+  const structuredTemplateParams =
+    messageType === 'template'
+      ? await withMetaFlowTemplateParams(
+          templateRow,
+          parseTemplateMessageParams(templateMessageParams),
+          accountId
+        )
+      : {};
+
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
@@ -429,7 +456,7 @@ export async function sendMessageToConversation(
         templateName: templateName!,
         language: templateLanguage || 'en_US',
         template: templateRow ?? undefined,
-        messageParams: templateMessageParams ?? undefined,
+        messageParams: structuredTemplateParams,
         params: templateParams || [],
         contextMessageId,
       });
@@ -473,6 +500,41 @@ export async function sendMessageToConversation(
           headerText: payload.header || undefined,
           footerText: payload.footer || undefined,
           sections: payload.sections,
+          contextMessageId,
+        });
+        return result.messageId;
+      }
+      if (payload.kind === 'flow') {
+        const flowSlug = payload.flow_slug || 'citas';
+        const flowToken =
+          payload.flow_token ||
+          createMetaFlowToken({
+            accountId,
+            slug: flowSlug,
+          });
+        const handler = getMetaFlowHandler(flowSlug);
+        const flowData =
+          payload.data ??
+          (handler
+            ? await handler.getInitialData({
+                accountId,
+                slug: flowSlug,
+                flowToken,
+              })
+            : undefined);
+        const result = await sendInteractiveFlow({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          bodyText: payload.body,
+          headerText: payload.header || undefined,
+          footerText: payload.footer || undefined,
+          flowId: payload.flow_id,
+          flowCta: payload.flow_cta,
+          flowToken,
+          flowAction: payload.flow_action,
+          screen: payload.screen,
+          data: flowData,
           contextMessageId,
         });
         return result.messageId;
@@ -540,10 +602,6 @@ export async function sendMessageToConversation(
       .where(eq(contacts.id, conversation.contactId));
   }
 
-  const structuredTemplateParams =
-    messageType === 'template'
-      ? parseTemplateMessageParams(templateMessageParams)
-      : {};
   const renderedTemplateBody =
     messageType === 'template'
       ? renderTemplateBodyPreview(

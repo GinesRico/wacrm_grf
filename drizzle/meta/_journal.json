@@ -225,6 +225,13 @@
       "when": 1785456000000,
       "tag": "0031_webhook_event_samples",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1787049600000,
+      "tag": "0032_whatsapp_meta_flows",
+      "breakpoints": true
     }
   ]
 }
