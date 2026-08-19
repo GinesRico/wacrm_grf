@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import {
   useState,
@@ -7,7 +7,7 @@ import {
   useEffect,
   KeyboardEvent,
   ClipboardEvent,
-} from "react";
+} from 'react';
 import {
   Send,
   LayoutTemplate,
@@ -22,94 +22,95 @@ import {
   PenLine,
   CreditCard,
   CalendarClock,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { GatedButton } from "@/components/ui/gated-button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  Workflow,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { GatedButton } from '@/components/ui/gated-button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from '@/components/ui/dropdown-menu';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@/components/ui/popover";
+} from '@/components/ui/popover';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from '@/components/ui/tooltip';
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { useCan } from "@/hooks/use-can";
-import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+} from '@/components/ui/dialog';
+import { useCan } from '@/hooks/use-can';
+import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 import {
   uploadAccountMedia,
   deleteAccountMedia,
   MEDIA_MAX_BYTES_BY_KIND,
-} from "@/lib/storage/upload-media";
-import { ReplyQuote } from "./reply-quote";
-import { useTranslations } from "next-intl";
+} from '@/lib/storage/upload-media';
+import { ReplyQuote } from './reply-quote';
+import { useTranslations } from 'next-intl';
 import {
   InteractiveBuilder,
   blankButtonsPayload,
-} from "@/components/interactive/interactive-builder";
-import { validateInteractivePayload } from "@/lib/whatsapp/interactive";
+} from '@/components/interactive/interactive-builder';
+import { validateInteractivePayload } from '@/lib/whatsapp/interactive';
 import {
   buildPaymentTemplateParams,
   resolvePaymentTemplateValue,
   type PaymentTemplateValueInput,
   type PaymentTemplateValueSource,
-} from "@/lib/integrations/payment-template-params";
-import type { Contact, InteractiveMessagePayload, QuickReply } from "@/types";
-import { QuickReplyPicker } from "./quick-reply-picker";
-import { useAppPrompt } from "@/hooks/use-app-dialog";
+} from '@/lib/integrations/payment-template-params';
+import type { Contact, InteractiveMessagePayload, QuickReply } from '@/types';
+import { QuickReplyPicker } from './quick-reply-picker';
+import { useAppPrompt } from '@/hooks/use-app-dialog';
 
 /** Media content types an agent can send from the composer. */
-export type ComposerMediaKind = "image" | "video" | "document" | "audio";
+export type ComposerMediaKind = 'image' | 'video' | 'document' | 'audio';
 
 /** Alarik storage bucket holding agent-sent chat attachments (migration 023). */
-export const CHAT_MEDIA_BUCKET = "chat-media";
+export const CHAT_MEDIA_BUCKET = 'chat-media';
 
 /** Meta caps media captions at 1024 chars. Enforced here and in the send route. */
 export const MEDIA_CAPTION_MAX = 1024;
 
 const EMOJI_CHOICES = [
-  "😀",
-  "😄",
-  "😂",
-  "😊",
-  "😍",
-  "😘",
-  "😎",
-  "🤔",
-  "😮",
-  "😢",
-  "🙏",
-  "👍",
-  "👌",
-  "👏",
-  "💪",
-  "❤️",
-  "🔥",
-  "✅",
-  "🚗",
-  "🔧",
-  "📦",
-  "📸",
-  "📍",
-  "☎️",
+  '😀',
+  '😄',
+  '😂',
+  '😊',
+  '😍',
+  '😘',
+  '😎',
+  '🤔',
+  '😮',
+  '😢',
+  '🙏',
+  '👍',
+  '👌',
+  '👏',
+  '💪',
+  '❤️',
+  '🔥',
+  '✅',
+  '🚗',
+  '🔧',
+  '📦',
+  '📸',
+  '📍',
+  '☎️',
 ];
 
 export interface SendMediaPayload {
@@ -136,37 +137,49 @@ interface ReplyDraft {
 // the file picker so unsupported files are rejected before upload rather
 // than failing with a confusing Storage error.
 const PICKER_ACCEPT: Record<ComposerMediaKind, string> = {
-  image: "image/png,image/jpeg,image/webp",
-  video: "video/mp4,video/3gpp",
-  audio: "audio/ogg,audio/mpeg,audio/aac,audio/mp4,audio/amr",
+  image: 'image/png,image/jpeg,image/webp',
+  video: 'video/mp4,video/3gpp',
+  audio: 'audio/ogg,audio/mpeg,audio/aac,audio/mp4,audio/amr',
   document:
-    "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
+    'application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain',
 };
 
-const ATTACH_ACCEPT = Object.values(PICKER_ACCEPT).join(",");
+const ATTACH_ACCEPT = Object.values(PICKER_ACCEPT).join(',');
 const APPOINTMENT_DAY_COUNT = 5;
 
-type AppointmentSendMode = "booking_link" | "interactive_list" | "cta_url";
+type AppointmentSendMode = 'booking_link' | 'interactive_list' | 'cta_url';
 
 const APPOINTMENT_SERVICES = [
-  "Neumaticos",
-  "Alineacion",
-  "Neumaticos + Alineacion",
+  'Neumaticos',
+  'Alineacion',
+  'Neumaticos + Alineacion',
 ];
+
+interface MetaFlowRow {
+  id: string;
+  slug: string;
+  flow_id: string;
+  title: string;
+  body_text: string;
+  footer_text: string | null;
+  button_text: string;
+  initial_screen: string;
+  active: boolean;
+}
 
 function renderPaymentMessageTemplate(
   template: string,
-  values: PaymentTemplateValueInput,
+  values: PaymentTemplateValueInput
 ) {
   return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, rawKey: string) =>
-    resolvePaymentTemplateValue(rawKey as PaymentTemplateValueSource, values),
+    resolvePaymentTemplateValue(rawKey as PaymentTemplateValueSource, values)
   );
 }
 
 function formatLocalDateInput(date: Date) {
   const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -185,18 +198,18 @@ function getNextWeekdayDates(count = APPOINTMENT_DAY_COUNT) {
 }
 
 function formatAppointmentDay(date: string) {
-  return new Intl.DateTimeFormat("es-ES", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
+  return new Intl.DateTimeFormat('es-ES', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
   }).format(new Date(`${date}T12:00:00`));
 }
 
 function mediaKindFromFile(file: File): ComposerMediaKind {
-  if (file.type.startsWith("image/")) return "image";
-  if (file.type.startsWith("video/")) return "video";
-  if (file.type.startsWith("audio/")) return "audio";
-  return "document";
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/')) return 'video';
+  if (file.type.startsWith('audio/')) return 'audio';
+  return 'document';
 }
 
 interface MediaDraft {
@@ -216,7 +229,10 @@ interface MessageComposerProps {
   onSend: (text: string, replyToId?: string) => void;
   onSendInternal: (text: string, replyToId?: string) => void;
   onSendMedia: (payload: SendMediaPayload) => void;
-  onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
+  onSendInteractive: (
+    payload: InteractiveMessagePayload,
+    replyToId?: string
+  ) => void;
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   aiDraftSeed?: string | null;
@@ -243,10 +259,10 @@ export function MessageComposer({
   onSignatureEnabledChange,
   contact,
 }: MessageComposerProps) {
-  const t = useTranslations("Inbox.composer");
+  const t = useTranslations('Inbox.composer');
   const { prompt, promptDialog } = useAppPrompt();
 
-  const [text, setText] = useState("");
+  const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [internalMode, setInternalMode] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -258,12 +274,18 @@ export function MessageComposer({
     useState<InteractiveMessagePayload>(blankButtonsPayload);
   const [savingQuickReply, setSavingQuickReply] = useState(false);
   const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+  const [metaFlowOpen, setMetaFlowOpen] = useState(false);
+  const [metaFlows, setMetaFlows] = useState<MetaFlowRow[]>([]);
+  const [metaFlowsLoading, setMetaFlowsLoading] = useState(false);
+  const [savingMetaFlowQuickReply, setSavingMetaFlowQuickReply] = useState<
+    string | null
+  >(null);
   const [slashQuickReplies, setSlashQuickReplies] = useState<QuickReply[]>([]);
   const [slashLoading, setSlashLoading] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [paymentDelivery, setPaymentDelivery] = useState<{
-    mode: "text" | "template" | "cta_url";
+    mode: 'text' | 'template' | 'cta_url';
     defaultMessage?: string;
     ctaButtonLabel?: string;
     ctaUrlTemplate?: string;
@@ -271,20 +293,20 @@ export function MessageComposer({
     templateLanguage?: string;
     templateBodyParams?: Record<string, PaymentTemplateValueSource>;
     templateButtonParams?: Record<string, PaymentTemplateValueSource>;
-  }>({ mode: "text" });
+  }>({ mode: 'text' });
   const [paymentOpen, setPaymentOpen] = useState(false);
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentConcept, setPaymentConcept] = useState("");
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentConcept, setPaymentConcept] = useState('');
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
   const [appointmentOpen, setAppointmentOpen] = useState(false);
   const [appointmentDateOptions, setAppointmentDateOptions] = useState(() =>
-    getNextWeekdayDates(),
+    getNextWeekdayDates()
   );
   const [appointmentDates, setAppointmentDates] = useState<string[]>([]);
   const [appointmentSendMode, setAppointmentSendMode] =
-    useState<AppointmentSendMode>("booking_link");
-  const [appointmentService, setAppointmentService] = useState("");
+    useState<AppointmentSendMode>('booking_link');
+  const [appointmentService, setAppointmentService] = useState('');
   const [appointmentBusy, setAppointmentBusy] = useState(false);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
@@ -309,13 +331,16 @@ export function MessageComposer({
   // Viewers (read-only role) can browse the inbox but never send.
   // For solo users this is always true — single-owner accounts pass
   // every capability — so the disabled branch is a no-op there.
-  const canSend = useCan("send-messages");
+  const canSend = useCan('send-messages');
   const readOnly = !canSend;
   // Media (like free-form text) is only allowed inside the 24h window.
   const customerInputsDisabled = readOnly || sessionExpired || locked;
   const inputsDisabled = internalMode ? readOnly : customerInputsDisabled;
   const sendDisabled =
-    !text.trim() || sending || readOnly || (!internalMode && (sessionExpired || locked));
+    !text.trim() ||
+    sending ||
+    readOnly ||
+    (!internalMode && (sessionExpired || locked));
 
   useEffect(() => {
     if (inputsDisabled || draft) return;
@@ -335,7 +360,7 @@ export function MessageComposer({
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "auto";
+    el.style.height = 'auto';
     // Max 4 lines (~96px)
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
@@ -351,9 +376,9 @@ export function MessageComposer({
       } else {
         onSend(trimmed, replyTo?.id);
       }
-      setText("");
+      setText('');
       if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
+        textareaRef.current.style.height = 'auto';
       }
     } finally {
       setSending(false);
@@ -362,7 +387,7 @@ export function MessageComposer({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
@@ -394,15 +419,17 @@ export function MessageComposer({
         target.setSelectionRange(cursor, cursor);
       });
     },
-    [adjustHeight, text],
+    [adjustHeight, text]
   );
 
-  const slashQuery = text.startsWith("/") ? text.slice(1).trim().toLowerCase() : "";
+  const slashQuery = text.startsWith('/')
+    ? text.slice(1).trim().toLowerCase()
+    : '';
   const slashPickerOpen =
-    text.startsWith("/") && !inputsDisabled && !draft && !internalMode;
+    text.startsWith('/') && !inputsDisabled && !draft && !internalMode;
   const visibleSlashQuickReplies = slashQuickReplies.filter((qr) => {
     if (!slashQuery) return true;
-    const haystack = `${qr.title} ${qr.content_text ?? ""}`.toLowerCase();
+    const haystack = `${qr.title} ${qr.content_text ?? ''}`.toLowerCase();
     return haystack.includes(slashQuery);
   });
 
@@ -412,7 +439,7 @@ export function MessageComposer({
     setSlashLoading(true);
     void (async () => {
       try {
-        const res = await fetch("/api/quick-replies", { cache: "no-store" });
+        const res = await fetch('/api/quick-replies', { cache: 'no-store' });
         const data = await res.json().catch(() => ({}));
         if (!cancelled && res.ok) {
           setSlashQuickReplies((data.quick_replies as QuickReply[]) ?? []);
@@ -426,24 +453,47 @@ export function MessageComposer({
     };
   }, [slashPickerOpen]);
 
+  const loadMetaFlows = useCallback(async () => {
+    setMetaFlowsLoading(true);
+    try {
+      const res = await fetch('/api/whatsapp/meta-flows?active=1', {
+        cache: 'no-store',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setMetaFlows((data.flows as MetaFlowRow[]) ?? []);
+      }
+    } finally {
+      setMetaFlowsLoading(false);
+    }
+  }, []);
+
+  const openMetaFlows = useCallback(() => {
+    setMetaFlowOpen(true);
+    void loadMetaFlows();
+  }, [loadMetaFlows]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/integrations/apps", { cache: "no-store" });
+        const res = await fetch('/api/integrations/apps', {
+          cache: 'no-store',
+        });
         if (!res.ok) return;
         const payload = await res.json();
         const app = payload.apps?.find(
-          (item: { slug: string }) => item.slug === "arvera-payments",
+          (item: { slug: string }) => item.slug === 'arvera-payments'
         );
         if (!cancelled) {
           setPaymentsEnabled(Boolean(app?.connection?.enabled));
           const config = app?.connection?.config ?? {};
           setPaymentDelivery({
             mode:
-              config.delivery_mode === "template" || config.delivery_mode === "cta_url"
+              config.delivery_mode === 'template' ||
+              config.delivery_mode === 'cta_url'
                 ? config.delivery_mode
-                : "text",
+                : 'text',
             defaultMessage: config.default_message,
             ctaButtonLabel: config.cta_button_label,
             ctaUrlTemplate: config.cta_url_template,
@@ -466,11 +516,13 @@ export function MessageComposer({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/integrations/apps", { cache: "no-store" });
+        const res = await fetch('/api/integrations/apps', {
+          cache: 'no-store',
+        });
         if (!res.ok) return;
         const payload = await res.json();
         const app = payload.apps?.find(
-          (item: { slug: string }) => item.slug === "arvera-appointments",
+          (item: { slug: string }) => item.slug === 'arvera-appointments'
         );
         if (!cancelled) {
           setAppointmentsEnabled(Boolean(app?.connection?.enabled));
@@ -478,13 +530,13 @@ export function MessageComposer({
           setAppointmentService(
             APPOINTMENT_SERVICES.includes(defaultService)
               ? defaultService
-              : APPOINTMENT_SERVICES[0],
+              : APPOINTMENT_SERVICES[0]
           );
           setAppointmentSendMode(
-            app?.connection?.config?.default_send_mode === "interactive_list" ||
-              app?.connection?.config?.default_send_mode === "cta_url"
+            app?.connection?.config?.default_send_mode === 'interactive_list' ||
+              app?.connection?.config?.default_send_mode === 'cta_url'
               ? app.connection.config.default_send_mode
-              : "booking_link",
+              : 'booking_link'
           );
         }
       } catch {
@@ -503,23 +555,23 @@ export function MessageComposer({
     if (drafting) return;
     setDrafting(true);
     try {
-      const res = await fetch("/api/ai/draft", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/ai/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversation_id: conversationId }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (data.code === "ai_not_configured") {
-          toast.error(t("aiNotConfigured"));
+        if (data.code === 'ai_not_configured') {
+          toast.error(t('aiNotConfigured'));
         } else {
-          toast.error(data.error ?? t("aiDraftFailed"));
+          toast.error(data.error ?? t('aiDraftFailed'));
         }
         return;
       }
-      const draftText = typeof data.draft === "string" ? data.draft.trim() : "";
+      const draftText = typeof data.draft === 'string' ? data.draft.trim() : '';
       if (!draftText) {
-        toast.error(t("aiEmptyReply"));
+        toast.error(t('aiEmptyReply'));
         return;
       }
       setText(draftText);
@@ -534,7 +586,7 @@ export function MessageComposer({
         }
       });
     } catch {
-      toast.error(t("aiNetworkFailed"));
+      toast.error(t('aiNetworkFailed'));
     } finally {
       setDrafting(false);
     }
@@ -552,7 +604,7 @@ export function MessageComposer({
       setInteractivePayload(seed ?? blankButtonsPayload());
       setInteractiveOpen(true);
     },
-    [],
+    []
   );
 
   const sendInteractive = useCallback(() => {
@@ -566,6 +618,58 @@ export function MessageComposer({
     onClearReply?.();
   }, [interactivePayload, onSendInteractive, replyTo?.id, onClearReply]);
 
+  const metaFlowPayload = useCallback(
+    (flow: MetaFlowRow): InteractiveMessagePayload => ({
+      kind: 'flow',
+      flow_slug: flow.slug,
+      flow_id: flow.flow_id,
+      flow_cta: flow.button_text,
+      flow_action: 'navigate',
+      screen: flow.initial_screen,
+      header: flow.title,
+      body: flow.body_text,
+      footer: flow.footer_text || undefined,
+    }),
+    []
+  );
+
+  const sendMetaFlow = useCallback(
+    (flow: MetaFlowRow) => {
+      onSendInteractive(metaFlowPayload(flow), replyTo?.id);
+      setMetaFlowOpen(false);
+      onClearReply?.();
+    },
+    [metaFlowPayload, onClearReply, onSendInteractive, replyTo?.id]
+  );
+
+  const saveMetaFlowAsQuickReply = useCallback(
+    async (flow: MetaFlowRow) => {
+      setSavingMetaFlowQuickReply(flow.id);
+      try {
+        const res = await fetch('/api/quick-replies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: flow.title,
+            kind: 'interactive',
+            interactive_payload: metaFlowPayload(flow),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          toast.error(data.error ?? t('quickReplySaveError'));
+          return;
+        }
+        toast.success(t('quickReplySaved'));
+      } catch {
+        toast.error(t('quickReplySaveError'));
+      } finally {
+        setSavingMetaFlowQuickReply(null);
+      }
+    },
+    [metaFlowPayload, t]
+  );
+
   // Persist the current builder payload as a reusable interactive snippet.
   const saveAsQuickReply = useCallback(async () => {
     const result = validateInteractivePayload(interactivePayload);
@@ -575,31 +679,31 @@ export function MessageComposer({
     }
     const title = (
       await prompt({
-        title: t("quickReplyNamePrompt"),
-        confirmLabel: t("save"),
-        cancelLabel: t("cancel"),
+        title: t('quickReplyNamePrompt'),
+        confirmLabel: t('save'),
+        cancelLabel: t('cancel'),
       })
     )?.trim();
     if (!title) return;
     setSavingQuickReply(true);
     try {
-      const res = await fetch("/api/quick-replies", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/api/quick-replies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title,
-          kind: "interactive",
+          kind: 'interactive',
           interactive_payload: interactivePayload,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? t("quickReplySaveError"));
+        toast.error(data.error ?? t('quickReplySaveError'));
         return;
       }
-      toast.success(t("quickReplySaved"));
+      toast.success(t('quickReplySaved'));
     } catch {
-      toast.error(t("quickReplySaveError"));
+      toast.error(t('quickReplySaveError'));
     } finally {
       setSavingQuickReply(false);
     }
@@ -609,61 +713,65 @@ export function MessageComposer({
     const amount = Number(paymentAmount);
     const concept = paymentConcept.trim();
     if (!Number.isFinite(amount) || amount <= 0) {
-      toast.error(t("paymentAmountRequired"));
+      toast.error(t('paymentAmountRequired'));
       return;
     }
     if (!concept) {
-      toast.error(t("paymentConceptRequired"));
+      toast.error(t('paymentConceptRequired'));
       return;
     }
     setPaymentBusy(true);
     try {
-      const res = await fetch("/api/integrations/arvera-payments/payment-links", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversation_id: conversationId,
-          contact_id: contact?.id,
-          amount_eur: amount,
-          concept,
-          email: contact?.email,
-          phone: contact?.phone,
-        }),
-      });
+      const res = await fetch(
+        '/api/integrations/arvera-payments/payment-links',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversation_id: conversationId,
+            contact_id: contact?.id,
+            amount_eur: amount,
+            concept,
+            email: contact?.email,
+            phone: contact?.phone,
+          }),
+        }
+      );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(payload.error || t("paymentCreateFailed"));
+        toast.error(payload.error || t('paymentCreateFailed'));
         return;
       }
       const paymentUrl = payload.payment_link?.payment_url;
       if (!paymentUrl) {
-        toast.error(t("paymentCreateFailed"));
+        toast.error(t('paymentCreateFailed'));
         return;
       }
       const paymentValues: PaymentTemplateValueInput = {
         payment_url: paymentUrl,
-        order_id: payload.payment_link?.order_id ?? "",
-        amount_cents: payload.payment_link?.amount_cents ?? Math.round(amount * 100),
+        order_id: payload.payment_link?.order_id ?? '',
+        amount_cents:
+          payload.payment_link?.amount_cents ?? Math.round(amount * 100),
         concept: payload.payment_link?.concept ?? concept,
         email: payload.payment_link?.email ?? contact?.email,
         phone: payload.payment_link?.phone ?? contact?.phone,
       };
-      if (paymentDelivery.mode === "template" && paymentDelivery.templateName) {
+      if (paymentDelivery.mode === 'template' && paymentDelivery.templateName) {
         const templateParams = buildPaymentTemplateParams(
           {
             template_body_params: paymentDelivery.templateBodyParams ?? {},
             template_button_params: paymentDelivery.templateButtonParams ?? {},
           },
-          paymentValues,
+          paymentValues
         );
-        const sendRes = await fetch("/api/whatsapp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const sendRes = await fetch('/api/whatsapp/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             conversation_id: conversationId,
-            message_type: "template",
+            message_type: 'template',
             template_name: paymentDelivery.templateName,
-            template_language: paymentDelivery.templateLanguage || "en_US",
+            template_language: paymentDelivery.templateLanguage || 'en_US',
             template_params: templateParams.body,
             template_message_params: {
               body: templateParams.body,
@@ -674,35 +782,36 @@ export function MessageComposer({
         });
         const sendPayload = await sendRes.json().catch(() => ({}));
         if (!sendRes.ok) {
-          toast.error(sendPayload.error || t("paymentSendFailed"));
+          toast.error(sendPayload.error || t('paymentSendFailed'));
           return;
         }
-      } else if (paymentDelivery.mode === "cta_url") {
+      } else if (paymentDelivery.mode === 'cta_url') {
         const body = renderPaymentMessageTemplate(
-          paymentDelivery.defaultMessage || "Aqui tienes tu enlace de pago.",
-          paymentValues,
+          paymentDelivery.defaultMessage || 'Aqui tienes tu enlace de pago.',
+          paymentValues
         ).trim();
         const buttonUrl = renderPaymentMessageTemplate(
-          paymentDelivery.ctaUrlTemplate || "{{payment_url}}",
-          paymentValues,
+          paymentDelivery.ctaUrlTemplate || '{{payment_url}}',
+          paymentValues
         ).trim();
         onSendInteractive({
-          kind: "cta_url",
-          body: body || "Aqui tienes tu enlace de pago.",
-          button_label: paymentDelivery.ctaButtonLabel || "Pagar ahora",
+          kind: 'cta_url',
+          body: body || 'Aqui tienes tu enlace de pago.',
+          button_label: paymentDelivery.ctaButtonLabel || 'Pagar ahora',
           url: buttonUrl || paymentUrl,
         });
       } else {
         const body = renderPaymentMessageTemplate(
-          paymentDelivery.defaultMessage || "Aqui tienes tu enlace de pago: {{payment_url}}",
-          paymentValues,
+          paymentDelivery.defaultMessage ||
+            'Aqui tienes tu enlace de pago: {{payment_url}}',
+          paymentValues
         ).trim();
         onSend(body || `Aqui tienes tu enlace de pago: ${paymentUrl}`);
       }
       setPaymentOpen(false);
-      setPaymentAmount("");
-      setPaymentConcept("");
-      toast.success(t("paymentCreated"));
+      setPaymentAmount('');
+      setPaymentConcept('');
+      toast.success(t('paymentCreated'));
     } finally {
       setPaymentBusy(false);
     }
@@ -719,29 +828,32 @@ export function MessageComposer({
 
   const sendAppointmentAvailability = useCallback(async () => {
     if (appointmentDates.length === 0) {
-      toast.error(t("appointmentDateRequired"));
+      toast.error(t('appointmentDateRequired'));
       return;
     }
     setAppointmentBusy(true);
     try {
-      const res = await fetch("/api/integrations/arvera-appointments/availability-message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversation_id: conversationId,
-          contact_id: contact?.id,
-          dates: appointmentDates,
-          service: appointmentService,
-          send_mode: appointmentSendMode,
-        }),
-      });
+      const res = await fetch(
+        '/api/integrations/arvera-appointments/availability-message',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            conversation_id: conversationId,
+            contact_id: contact?.id,
+            dates: appointmentDates,
+            service: appointmentService,
+            send_mode: appointmentSendMode,
+          }),
+        }
+      );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(payload.error || t("appointmentSendFailed"));
+        toast.error(payload.error || t('appointmentSendFailed'));
         return;
       }
       setAppointmentOpen(false);
-      toast.success(t("appointmentSent"));
+      toast.success(t('appointmentSent'));
     } finally {
       setAppointmentBusy(false);
     }
@@ -758,14 +870,16 @@ export function MessageComposer({
     setAppointmentDates((current) =>
       current.includes(date)
         ? current.filter((item) => item !== date)
-        : [...current, date].sort(),
+        : [...current, date].sort()
     );
   }, []);
 
   const refreshAppointmentDays = useCallback(() => {
     const nextDates = getNextWeekdayDates();
     setAppointmentDateOptions(nextDates);
-    setAppointmentDates((current) => current.filter((date) => nextDates.includes(date)));
+    setAppointmentDates((current) =>
+      current.filter((date) => nextDates.includes(date))
+    );
   }, []);
 
   // A picked quick reply: text fills the composer; interactive opens the
@@ -773,15 +887,15 @@ export function MessageComposer({
   const handlePickQuickReply = useCallback(
     (qr: QuickReply) => {
       setQuickReplyOpen(false);
-      if (qr.kind === "interactive" && qr.interactive_payload) {
+      if (qr.kind === 'interactive' && qr.interactive_payload) {
         openInteractiveBuilder(qr.interactive_payload);
         return;
       }
-      const body = qr.content_text ?? "";
+      const body = qr.content_text ?? '';
       // Separate the snippet from any existing draft with a newline so the
       // words don't run together ("Thanks" + "we'll…" → "Thankswe'll…").
       setText((prev) =>
-        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`,
+        prev && !/\s$/.test(prev) ? `${prev}\n${body}` : `${prev}${body}`
       );
       requestAnimationFrame(() => {
         adjustHeight();
@@ -792,17 +906,17 @@ export function MessageComposer({
         }
       });
     },
-    [openInteractiveBuilder, adjustHeight],
+    [openInteractiveBuilder, adjustHeight]
   );
 
   const handlePickSlashQuickReply = useCallback(
     (qr: QuickReply) => {
-      if (qr.kind === "interactive" && qr.interactive_payload) {
-        setText("");
+      if (qr.kind === 'interactive' && qr.interactive_payload) {
+        setText('');
         openInteractiveBuilder(qr.interactive_payload);
         return;
       }
-      setText(qr.content_text ?? "");
+      setText(qr.content_text ?? '');
       requestAnimationFrame(() => {
         adjustHeight();
         const el = textareaRef.current;
@@ -811,7 +925,7 @@ export function MessageComposer({
         el.setSelectionRange(el.value.length, el.value.length);
       });
     },
-    [openInteractiveBuilder, adjustHeight],
+    [openInteractiveBuilder, adjustHeight]
   );
 
   // Upload a captured file to chat-media and stage it as a draft.
@@ -823,34 +937,43 @@ export function MessageComposer({
       const max = MEDIA_MAX_BYTES_BY_KIND[kind];
       if (file.size > max) {
         toast.error(
-          t("fileTooLarge", {
+          t('fileTooLarge', {
             size: (file.size / 1024 / 1024).toFixed(1),
             kind,
             max: Math.round(max / 1024 / 1024),
-          }),
+          })
         );
         return;
       }
       setBusy(true);
       try {
-        const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        const { publicUrl, path } = await uploadAccountMedia(
+          CHAT_MEDIA_BUCKET,
+          file
+        );
         // Replacing an existing draft? GC the previous object first.
         removeStaged(draftRef.current?.path);
-        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        setDraft({
+          kind,
+          mediaUrl: publicUrl,
+          path,
+          filename: file.name,
+          caption: '',
+        });
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : t("uploadFailed"));
+        toast.error(err instanceof Error ? err.message : t('uploadFailed'));
       } finally {
         setBusy(false);
       }
     },
-    [removeStaged, t],
+    [removeStaged, t]
   );
 
   const handlePicked = useCallback(
     (file: File | undefined) => {
       if (file) void stageUpload(mediaKindFromFile(file), file);
     },
-    [stageUpload],
+    [stageUpload]
   );
 
   const handlePaste = useCallback(
@@ -859,14 +982,14 @@ export function MessageComposer({
       const file =
         Array.from(e.clipboardData.files)[0] ??
         Array.from(e.clipboardData.items)
-          .find((item) => item.kind === "file")
+          .find((item) => item.kind === 'file')
           ?.getAsFile();
       if (!file) return;
 
       e.preventDefault();
       void stageUpload(mediaKindFromFile(file), file);
     },
-    [busy, draft, inputsDisabled, internalMode, stageUpload],
+    [busy, draft, inputsDisabled, internalMode, stageUpload]
   );
 
   // ---- Draft send / discard -----------------------------------------
@@ -880,8 +1003,8 @@ export function MessageComposer({
       // Audio takes no caption (Meta rejects it). Everything else: the
       // trimmed caption, or undefined when blank.
       caption:
-        draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
-      filename: draft.kind === "document" ? draft.filename : undefined,
+        draft.kind === 'audio' ? undefined : draft.caption.trim() || undefined,
+      filename: draft.kind === 'document' ? draft.filename : undefined,
       replyToId: replyTo?.id,
     });
     // The object is now owned by the sent message — clear without GC.
@@ -902,7 +1025,7 @@ export function MessageComposer({
   // ---- Render --------------------------------------------------------
 
   return (
-    <div className="border-t border-border bg-card p-3">
+    <div className="border-border bg-card border-t p-3">
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote
@@ -914,9 +1037,7 @@ export function MessageComposer({
       )}
       {sessionExpired && !internalMode && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
-          <p className="text-xs text-amber-400">
-            {t("sessionExpiredHint")}
-          </p>
+          <p className="text-xs text-amber-400">{t('sessionExpiredHint')}</p>
           <Button
             variant="ghost"
             size="sm"
@@ -924,7 +1045,7 @@ export function MessageComposer({
             onClick={onOpenTemplates}
           >
             <LayoutTemplate className="mr-1 h-3 w-3" />
-            {t("templates")}
+            {t('templates')}
           </Button>
         </div>
       )}
@@ -937,7 +1058,7 @@ export function MessageComposer({
         className="hidden"
         onChange={(e) => {
           handlePicked(e.target.files?.[0]);
-          e.target.value = "";
+          e.target.value = '';
         }}
       />
 
@@ -955,14 +1076,14 @@ export function MessageComposer({
         <div className="relative flex items-end gap-2">
           {/* Quick replies appear inline when the draft starts with /. */}
           {slashPickerOpen && (
-            <div className="absolute bottom-full left-11 z-30 mb-2 max-h-72 w-80 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 text-sm shadow-lg">
+            <div className="border-border bg-popover absolute bottom-full left-11 z-30 mb-2 max-h-72 w-80 overflow-y-auto rounded-lg border p-1.5 text-sm shadow-lg">
               {slashLoading ? (
-                <div className="flex items-center justify-center py-5 text-muted-foreground">
+                <div className="text-muted-foreground flex items-center justify-center py-5">
                   <Loader2 className="h-4 w-4 animate-spin" />
                 </div>
               ) : visibleSlashQuickReplies.length === 0 ? (
-                <div className="px-3 py-5 text-center text-xs text-muted-foreground">
-                  {t("quickRepliesEmpty")}
+                <div className="text-muted-foreground px-3 py-5 text-center text-xs">
+                  {t('quickRepliesEmpty')}
                 </div>
               ) : (
                 visibleSlashQuickReplies.map((qr) => (
@@ -971,20 +1092,20 @@ export function MessageComposer({
                     type="button"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => handlePickSlashQuickReply(qr)}
-                    className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left hover:bg-muted"
+                    className="hover:bg-muted flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left"
                   >
-                    {qr.kind === "interactive" ? (
-                      <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    {qr.kind === 'interactive' ? (
+                      <Zap className="text-primary mt-0.5 h-4 w-4 shrink-0" />
                     ) : (
-                      <MessageSquareDashed className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <MessageSquareDashed className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium text-foreground">
+                      <span className="text-foreground block truncate font-medium">
                         {qr.title}
                       </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {qr.kind === "interactive"
-                          ? t("interactiveMessage")
+                      <span className="text-muted-foreground block truncate text-xs">
+                        {qr.kind === 'interactive'
+                          ? t('interactiveMessage')
                           : qr.content_text}
                       </span>
                     </span>
@@ -1000,12 +1121,12 @@ export function MessageComposer({
               disabled={inputsDisabled || busy || internalMode}
               title={
                 readOnly
-                  ? t("readOnlyTitle")
+                  ? t('readOnlyTitle')
                   : inputsDisabled
                     ? undefined
-                    : t("moreActions")
+                    : t('moreActions')
               }
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              className="text-muted-foreground hover:text-foreground inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -1013,27 +1134,34 @@ export function MessageComposer({
                 <Plus className="h-4 w-4" />
               )}
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64 border-border bg-popover">
+            <DropdownMenuContent
+              align="start"
+              className="border-border bg-popover w-64"
+            >
               <DropdownMenuItem onClick={() => attachInputRef.current?.click()}>
                 <Paperclip className="mr-2 h-4 w-4" />
-                {t("attach")}
+                {t('attach')}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onOpenTemplates}>
                 <LayoutTemplate className="mr-2 h-4 w-4" />
-                {t("templates")}
+                {t('templates')}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => openInteractiveBuilder()}>
                 <MessageSquareDashed className="mr-2 h-4 w-4" />
-                {t("interactiveMessage")}
+                {t('interactiveMessage')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={openMetaFlows}>
+                <Workflow className="mr-2 h-4 w-4" />
+                {t('flows')}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setQuickReplyOpen(true)}>
                 <Zap className="mr-2 h-4 w-4" />
-                {t("quickReplies")}
+                {t('quickReplies')}
               </DropdownMenuItem>
               {paymentsEnabled && (
                 <DropdownMenuItem onClick={() => setPaymentOpen(true)}>
                   <CreditCard className="mr-2 h-4 w-4" />
-                  {t("paymentLink")}
+                  {t('paymentLink')}
                 </DropdownMenuItem>
               )}
               {appointmentsEnabled && (
@@ -1044,7 +1172,7 @@ export function MessageComposer({
                   }}
                 >
                   <CalendarClock className="mr-2 h-4 w-4" />
-                  {t("appointmentAvailability")}
+                  {t('appointmentAvailability')}
                 </DropdownMenuItem>
               )}
               <DropdownMenuCheckboxItem
@@ -1052,7 +1180,7 @@ export function MessageComposer({
                 onCheckedChange={onSignatureEnabledChange}
               >
                 <PenLine className="mr-2 h-4 w-4" />
-                {t("signMessages")}
+                {t('signMessages')}
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1064,16 +1192,16 @@ export function MessageComposer({
                   type="button"
                   disabled={readOnly}
                   onClick={() => setInternalMode((value) => !value)}
-                  title={internalMode ? t("internalActive") : t("internalNote")}
+                  title={internalMode ? t('internalActive') : t('internalNote')}
                   aria-label={
-                    internalMode ? t("internalActive") : t("internalNote")
+                    internalMode ? t('internalActive') : t('internalNote')
                   }
                   aria-pressed={internalMode}
                   className={cn(
-                    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+                    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                     internalMode
-                      ? "border-amber-400/45 bg-amber-400/12 text-amber-600 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12)]"
-                      : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                      ? 'border-amber-400/45 bg-amber-400/12 text-amber-600 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12)]'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground border-transparent'
                   )}
                 />
               }
@@ -1081,15 +1209,15 @@ export function MessageComposer({
               <MessageSquareDashed className="h-4 w-4" />
             </TooltipTrigger>
             <TooltipContent side="top">
-              {internalMode ? t("internalActive") : t("internalHint")}
+              {internalMode ? t('internalActive') : t('internalHint')}
             </TooltipContent>
           </Tooltip>
 
           <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
             <PopoverTrigger
               disabled={inputsDisabled}
-              title={t("emoji")}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              title={t('emoji')}
+              className="text-muted-foreground hover:text-foreground inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Smile className="h-4 w-4" />
             </PopoverTrigger>
@@ -1106,7 +1234,7 @@ export function MessageComposer({
                     insertTextAtCursor(emoji);
                     setEmojiOpen(false);
                   }}
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-lg hover:bg-muted"
+                  className="hover:bg-muted flex h-8 w-8 items-center justify-center rounded-md text-lg"
                 >
                   {emoji}
                 </button>
@@ -1122,14 +1250,14 @@ export function MessageComposer({
             onPaste={handlePaste}
             placeholder={
               readOnly
-                ? t("readOnlyPlaceholder")
+                ? t('readOnlyPlaceholder')
                 : internalMode
-                  ? t("internalPlaceholder")
+                  ? t('internalPlaceholder')
                   : locked
-                  ? (lockedReason ?? t("lockedPlaceholder"))
-                  : sessionExpired
-                  ? t("sessionExpiredPlaceholder")
-                  : t("typeMessagePlaceholder")
+                    ? (lockedReason ?? t('lockedPlaceholder'))
+                    : sessionExpired
+                      ? t('sessionExpiredPlaceholder')
+                      : t('typeMessagePlaceholder')
             }
             disabled={inputsDisabled}
             rows={1}
@@ -1138,18 +1266,18 @@ export function MessageComposer({
             // The placeholder text also surfaces the read-only state.
             title={
               internalMode
-                ? t("internalHint")
+                ? t('internalHint')
                 : locked
                   ? lockedReason
                   : readOnly
-                    ? t("readOnlyTitle")
+                    ? t('readOnlyTitle')
                     : undefined
             }
             className={cn(
-              "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
+              'border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 resize-none rounded-xl border px-4 py-2.5 text-sm transition-colors outline-none',
               internalMode &&
-                "border-amber-400/40 bg-amber-400/10 focus:border-amber-400/70",
-              inputsDisabled && "cursor-not-allowed opacity-50"
+                'border-amber-400/40 bg-amber-400/10 focus:border-amber-400/70',
+              inputsDisabled && 'cursor-not-allowed opacity-50'
             )}
           />
 
@@ -1160,10 +1288,10 @@ export function MessageComposer({
             disabled={sendDisabled}
             onClick={handleSend}
             className={cn(
-              "h-9 w-9 shrink-0 p-0 disabled:opacity-40",
+              'h-9 w-9 shrink-0 p-0 disabled:opacity-40',
               internalMode
-                ? "bg-amber-500 text-white hover:bg-amber-600"
-                : "bg-primary hover:bg-primary/90",
+                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                : 'bg-primary hover:bg-primary/90'
             )}
           >
             <Send className="h-4 w-4" />
@@ -1175,7 +1303,7 @@ export function MessageComposer({
       <Dialog open={interactiveOpen} onOpenChange={setInteractiveOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{t("interactiveMessage")}</DialogTitle>
+            <DialogTitle>{t('interactiveMessage')}</DialogTitle>
           </DialogHeader>
           <div className="max-h-[70vh] overflow-y-auto">
             <InteractiveBuilder
@@ -1194,11 +1322,11 @@ export function MessageComposer({
               ) : (
                 <Zap className="mr-1 h-4 w-4" />
               )}
-              {t("saveAsQuickReply")}
+              {t('saveAsQuickReply')}
             </Button>
             <Button onClick={sendInteractive}>
               <Send className="mr-1 h-4 w-4" />
-              {t("send")}
+              {t('send')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1210,14 +1338,77 @@ export function MessageComposer({
         onOpenChange={setQuickReplyOpen}
         onPick={handlePickQuickReply}
       />
+      <Dialog open={metaFlowOpen} onOpenChange={setMetaFlowOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('flows')}</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto">
+            {metaFlowsLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
+              </div>
+            ) : metaFlows.length === 0 ? (
+              <p className="text-muted-foreground py-8 text-center text-sm">
+                {t('flowsEmpty')}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {metaFlows.map((flow) => (
+                  <div
+                    key={flow.id}
+                    className="border-border bg-muted/35 rounded-lg border p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Workflow className="text-primary h-4 w-4 shrink-0" />
+                          <h3 className="text-foreground truncate text-sm font-semibold">
+                            {flow.title}
+                          </h3>
+                        </div>
+                        <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">
+                          {flow.body_text}
+                        </p>
+                      </div>
+                      <span className="bg-background text-primary shrink-0 rounded-md px-2 py-1 text-xs">
+                        {flow.button_text}
+                      </span>
+                    </div>
+                    <div className="border-border mt-3 flex justify-end gap-2 border-t pt-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={savingMetaFlowQuickReply === flow.id}
+                        onClick={() => saveMetaFlowAsQuickReply(flow)}
+                      >
+                        {savingMetaFlowQuickReply === flow.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="h-3.5 w-3.5" />
+                        )}
+                        {t('saveAsQuickReply')}
+                      </Button>
+                      <Button size="sm" onClick={() => sendMetaFlow(flow)}>
+                        <Send className="h-3.5 w-3.5" />
+                        {t('send')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog open={paymentOpen} onOpenChange={setPaymentOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{t("paymentLink")}</DialogTitle>
+            <DialogTitle>{t('paymentLink')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>{t("paymentAmount")}</Label>
+              <Label>{t('paymentAmount')}</Label>
               <Input
                 type="number"
                 min={0.01}
@@ -1227,7 +1418,7 @@ export function MessageComposer({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>{t("paymentConcept")}</Label>
+              <Label>{t('paymentConcept')}</Label>
               <Input
                 value={paymentConcept}
                 onChange={(e) => setPaymentConcept(e.target.value)}
@@ -1237,7 +1428,7 @@ export function MessageComposer({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPaymentOpen(false)}>
-              {t("cancel")}
+              {t('cancel')}
             </Button>
             <Button onClick={sendPaymentLink} disabled={paymentBusy}>
               {paymentBusy ? (
@@ -1245,7 +1436,7 @@ export function MessageComposer({
               ) : (
                 <CreditCard className="h-4 w-4" />
               )}
-              {t("sendPaymentLink")}
+              {t('sendPaymentLink')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1253,34 +1444,36 @@ export function MessageComposer({
       <Dialog open={appointmentOpen} onOpenChange={setAppointmentOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{t("appointmentAvailability")}</DialogTitle>
+            <DialogTitle>{t('appointmentAvailability')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label>{t("appointmentDates")}</Label>
-              <div className="rounded-md border border-border">
+              <Label>{t('appointmentDates')}</Label>
+              <div className="border-border rounded-md border">
                 {appointmentDateOptions.map((date) => (
                   <label
                     key={date}
-                    className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 text-sm last:border-b-0 hover:bg-muted/60"
+                    className="border-border hover:bg-muted/60 flex cursor-pointer items-center gap-3 border-b px-3 py-2.5 text-sm last:border-b-0"
                   >
                     <input
                       type="checkbox"
                       checked={appointmentDates.includes(date)}
                       onChange={() => toggleAppointmentDate(date)}
-                      className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                      className="border-border text-primary focus:ring-primary h-4 w-4 rounded"
                     />
-                    <span className="capitalize">{formatAppointmentDay(date)}</span>
+                    <span className="capitalize">
+                      {formatAppointmentDay(date)}
+                    </span>
                   </label>
                 ))}
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>{t("appointmentService")}</Label>
+              <Label>{t('appointmentService')}</Label>
               <select
                 value={appointmentService}
                 onChange={(e) => setAppointmentService(e.target.value)}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
+                className="border-input bg-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px]"
               >
                 {APPOINTMENT_SERVICES.map((service) => (
                   <option key={service} value={service}>
@@ -1290,38 +1483,38 @@ export function MessageComposer({
               </select>
             </div>
             <div className="space-y-1.5">
-              <Label>{t("appointmentSendMode")}</Label>
+              <Label>{t('appointmentSendMode')}</Label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setAppointmentSendMode("booking_link")}
+                  onClick={() => setAppointmentSendMode('booking_link')}
                   className={cn(
-                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                    appointmentSendMode === "booking_link"
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:bg-muted",
+                    'rounded-md border px-3 py-2 text-left text-sm transition-colors',
+                    appointmentSendMode === 'booking_link'
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:bg-muted'
                   )}
                 >
-                  {t("appointmentModeMessages")}
+                  {t('appointmentModeMessages')}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAppointmentSendMode("interactive_list")}
+                  onClick={() => setAppointmentSendMode('interactive_list')}
                   className={cn(
-                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                    appointmentSendMode === "interactive_list"
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border hover:bg-muted",
+                    'rounded-md border px-3 py-2 text-left text-sm transition-colors',
+                    appointmentSendMode === 'interactive_list'
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border hover:bg-muted'
                   )}
                 >
-                  {t("appointmentModeInteractive")}
+                  {t('appointmentModeInteractive')}
                 </button>
               </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAppointmentOpen(false)}>
-              {t("cancel")}
+              {t('cancel')}
             </Button>
             <Button
               onClick={sendAppointmentAvailability}
@@ -1332,7 +1525,7 @@ export function MessageComposer({
               ) : (
                 <CalendarClock className="h-4 w-4" />
               )}
-              {t("sendAppointmentAvailability")}
+              {t('sendAppointmentAvailability')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1366,10 +1559,10 @@ function MediaDraftPreview({
   t: ReturnType<typeof useTranslations>;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-muted/40 p-3">
+    <div className="border-border bg-muted/40 rounded-xl border p-3">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          {draft.kind === "image" && (
+          {draft.kind === 'image' && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={draft.mediaUrl}
@@ -1377,15 +1570,19 @@ function MediaDraftPreview({
               className="max-h-40 rounded-lg object-cover"
             />
           )}
-          {draft.kind === "video" && (
-            <video src={draft.mediaUrl} controls className="max-h-40 rounded-lg" />
+          {draft.kind === 'video' && (
+            <video
+              src={draft.mediaUrl}
+              controls
+              className="max-h-40 rounded-lg"
+            />
           )}
-          {draft.kind === "audio" && (
+          {draft.kind === 'audio' && (
             <audio src={draft.mediaUrl} controls className="w-full" />
           )}
-          {draft.kind === "document" && (
-            <div className="flex items-center gap-2 text-sm text-foreground">
-              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+          {draft.kind === 'document' && (
+            <div className="text-foreground flex items-center gap-2 text-sm">
+              <FileText className="text-muted-foreground h-5 w-5 shrink-0" />
               <span className="truncate">{draft.filename}</span>
             </div>
           )}
@@ -1393,27 +1590,27 @@ function MediaDraftPreview({
         <button
           type="button"
           onClick={onDiscard}
-          aria-label={t("removeAttachment")}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={t('removeAttachment')}
+          className="text-muted-foreground hover:bg-muted hover:text-foreground rounded p-1"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
       <div className="mt-2 flex items-end gap-2">
-        {draft.kind !== "audio" && (
+        {draft.kind !== 'audio' && (
           <input
             value={draft.caption}
             maxLength={MEDIA_CAPTION_MAX}
             onChange={(e) => onCaptionChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 onSend();
               }
             }}
-            placeholder={t("addCaption")}
-            className="flex-1 rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50"
+            placeholder={t('addCaption')}
+            className="border-border bg-muted text-foreground placeholder-muted-foreground focus:border-primary/50 flex-1 rounded-xl border px-4 py-2.5 text-sm transition-colors outline-none"
           />
         )}
         <GatedButton
@@ -1423,8 +1620,8 @@ function MediaDraftPreview({
           disabled={busy}
           onClick={onSend}
           className={cn(
-            "h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40",
-            draft.kind === "audio" && "ml-auto",
+            'bg-primary hover:bg-primary/90 h-9 w-9 shrink-0 p-0 disabled:opacity-40',
+            draft.kind === 'audio' && 'ml-auto'
           )}
         >
           <Send className="h-4 w-4" />
