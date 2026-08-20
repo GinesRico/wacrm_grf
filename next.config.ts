@@ -56,6 +56,7 @@ const SECURITY_HEADERS = [
       "media-src 'self' blob: https:",
       "font-src 'self' data:",
       "connect-src 'self' https: ws: wss:",
+      "frame-src 'self' https://partes.arvera.es",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",
