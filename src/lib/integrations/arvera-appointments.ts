@@ -8,7 +8,8 @@ import { decrypt, encrypt } from '@/lib/whatsapp/encryption';
 export const ARVERA_APPOINTMENTS_SLUG = 'arvera-appointments';
 export const ARVERA_APPOINTMENTS_DEFAULT_BASE_URL = 'https://citas.arvera.es';
 export const ARVERA_APPOINTMENTS_DEFAULT_IFRAME_URL =
-  'https://citas.arvera.es/index.html';
+  'https://partes.arvera.es/embed/calendario';
+export const ARVERA_APPOINTMENTS_EMBED_VERSION = 'embed-20260820';
 export const ARVERA_APPOINTMENTS_DEFAULT_PUBLIC_BOOKING_URL =
   'https://citas.arvera.es/reservas.html';
 export const ARVERA_APPOINTMENTS_DEFAULT_MESSAGE = '{{mensaje}}';
@@ -26,6 +27,7 @@ export const ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_TITLE = '{{time}}';
 export const ARVERA_APPOINTMENTS_DEFAULT_LIST_ROW_DESCRIPTION = '{{service}}';
 
 export type AppointmentSendMode = 'booking_link' | 'interactive_list' | 'cta_url';
+export type AppointmentsEmbedMode = 'calendario' | 'disponibles';
 
 export interface ArveraAppointmentsConfig {
   base_url: string;
@@ -76,6 +78,12 @@ export interface AvailabilitySlot {
 
 export interface AvailabilityResponse {
   disponibles: AvailabilitySlot[];
+}
+
+export interface AppointmentsEmbedTokenResponse {
+  embed_token: string;
+  expires_in: number;
+  mode: AppointmentsEmbedMode;
 }
 
 export interface ArveraAppointmentRecord {
@@ -239,6 +247,51 @@ export async function fetchAvailabilityMessage(args: {
   return payload;
 }
 
+export async function fetchAppointmentsEmbedToken(args: {
+  config: ArveraAppointmentsConfig;
+  apiToken: string;
+  mode: AppointmentsEmbedMode;
+  origin: string;
+  fetchImpl?: typeof fetch;
+}): Promise<AppointmentsEmbedTokenResponse> {
+  const fetcher = args.fetchImpl ?? fetch;
+  const res = await fetcher(`${args.config.base_url}/api/embed-token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': args.apiToken,
+    },
+    body: JSON.stringify({
+      mode: args.mode,
+      origin: args.origin,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  const payload = (await res.json().catch(() => ({}))) as Partial<AppointmentsEmbedTokenResponse> & {
+    detail?: string;
+    error?: string;
+  };
+  if (!res.ok || typeof payload.embed_token !== 'string') {
+    throw new Error(payload.error || payload.detail || `Citas returned HTTP ${res.status}`);
+  }
+  return {
+    embed_token: payload.embed_token,
+    expires_in: normalizePositiveInteger(payload.expires_in, 3600),
+    mode: payload.mode === 'disponibles' ? 'disponibles' : 'calendario',
+  };
+}
+
+export function buildAppointmentsEmbedUrl(args: {
+  config: ArveraAppointmentsConfig;
+  mode: AppointmentsEmbedMode;
+  embedToken: string;
+}): string {
+  const url = new URL(resolveEmbedFrameUrl(args.config.iframe_url, args.mode));
+  url.searchParams.set('embed_token', args.embedToken);
+  url.searchParams.set('v', ARVERA_APPOINTMENTS_EMBED_VERSION);
+  return url.toString();
+}
+
 export async function fetchAvailabilitySlots(args: {
   config: ArveraAppointmentsConfig;
   apiToken?: string | null;
@@ -343,4 +396,21 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function resolveEmbedFrameUrl(
+  configuredUrl: string,
+  mode: AppointmentsEmbedMode,
+): string {
+  try {
+    const url = new URL(configuredUrl);
+    if (url.pathname.startsWith('/embed/')) {
+      url.pathname = `/embed/${mode}`;
+      url.search = '';
+      return url.toString();
+    }
+  } catch {
+    // Fall back to the documented production embed below.
+  }
+  return `https://partes.arvera.es/embed/${mode}`;
 }

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createAppointment,
+  buildAppointmentsEmbedUrl,
+  fetchAppointmentsEmbedToken,
   fetchAvailabilityMessage,
   fetchAvailabilitySlots,
   listAppointments,
@@ -12,7 +14,7 @@ describe('arvera appointments connector', () => {
   it('normalizes config defaults', () => {
     expect(normalizeAppointmentsConfig({})).toMatchObject({
       base_url: 'https://citas.arvera.es',
-      iframe_url: 'https://citas.arvera.es/index.html',
+      iframe_url: 'https://partes.arvera.es/embed/calendario',
       public_booking_url: 'https://citas.arvera.es/reservas.html',
       default_send_mode: 'booking_link',
       duracion: 45,
@@ -72,6 +74,63 @@ describe('arvera appointments connector', () => {
       }),
     );
     expect(payload.disponibles).toHaveLength(1);
+  });
+
+  it('fetches an embed token without exposing the API key to the browser', async () => {
+    const fetchImpl = vi.fn(async () =>
+      Response.json({
+        embed_token: 'embed-token',
+        expires_in: 3600,
+        mode: 'calendario',
+      }),
+    ) as unknown as typeof fetch;
+
+    const payload = await fetchAppointmentsEmbedToken({
+      config: normalizeAppointmentsConfig({}),
+      apiToken: 'token',
+      mode: 'calendario',
+      origin: 'https://chat.arvera.es',
+      fetchImpl,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://citas.arvera.es/api/embed-token',
+      expect.objectContaining({
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': 'token',
+        },
+        body: JSON.stringify({
+          mode: 'calendario',
+          origin: 'https://chat.arvera.es',
+        }),
+      }),
+    );
+    expect(payload.embed_token).toBe('embed-token');
+  });
+
+  it('builds the documented embed iframe URL', () => {
+    expect(
+      buildAppointmentsEmbedUrl({
+        config: normalizeAppointmentsConfig({}),
+        mode: 'calendario',
+        embedToken: 'token value',
+      }),
+    ).toBe(
+      'https://partes.arvera.es/embed/calendario?embed_token=token+value&v=embed-20260820',
+    );
+    expect(
+      buildAppointmentsEmbedUrl({
+        config: normalizeAppointmentsConfig({
+          iframe_url: 'https://citas.arvera.es/index.html',
+        }),
+        mode: 'disponibles',
+        embedToken: 'token',
+      }),
+    ).toBe(
+      'https://partes.arvera.es/embed/disponibles?embed_token=token&v=embed-20260820',
+    );
   });
 
   it('lists and creates appointments with x-api-key', async () => {
