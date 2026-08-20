@@ -826,7 +826,7 @@ export function ConversationList({
   return (
     <div
       className={cn(
-        'border-border bg-card flex h-full w-full min-w-0 flex-col border-r lg:w-[23.75rem]'
+        'border-border bg-card flex h-full w-full min-w-0 flex-col overflow-hidden border-r lg:w-[23.75rem]'
       )}
     >
       <div className="border-border min-w-0 border-b">
@@ -1205,7 +1205,9 @@ export function ConversationList({
         </div>
       </div>
 
-      <ScrollArea className={cn('min-h-0 flex-1', tab !== 'inbox' && 'pt-px')}>
+      <ScrollArea
+        className={cn('min-h-0 min-w-0 flex-1', tab !== 'inbox' && 'pt-px')}
+      >
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="border-primary h-5 w-5 animate-spin rounded-full border-2 border-t-transparent" />
@@ -1217,7 +1219,7 @@ export function ConversationList({
             </p>
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div className="flex min-w-0 flex-col">
             {filtered.map((conv) => (
               <ConversationItem
                 key={conv.id}
@@ -1398,7 +1400,7 @@ function ConversationItem({
   return (
     <div
       className={cn(
-        'border-border/70 hover:bg-muted/50 relative flex w-full items-stretch gap-3 border-b pl-3 text-left transition-colors',
+        'border-border/70 hover:bg-muted/50 relative flex w-full min-w-0 items-stretch gap-2 overflow-hidden border-b pl-3 text-left transition-colors sm:gap-3',
         isActive && 'bg-muted/70'
       )}
     >
@@ -1428,7 +1430,7 @@ function ConversationItem({
               }
             : undefined
         }
-        className="flex min-w-0 flex-1 items-start gap-3 py-3 pr-1 text-left"
+        className="flex min-w-0 flex-1 items-start gap-3 overflow-hidden py-3 pr-1 text-left"
       >
         <div className="relative h-11 w-11 shrink-0">
           <div className="bg-muted text-foreground flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium">
@@ -1455,12 +1457,12 @@ function ConversationItem({
         </div>
 
         <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 overflow-hidden">
             <span className="text-foreground block truncate text-sm font-medium">
               {displayName}
             </span>
             <div className="mt-0.5 min-w-0 pt-0.5">
-              <p className="text-muted-foreground truncate text-xs">
+              <p className="text-muted-foreground min-w-0 truncate text-xs">
                 <ConversationPreviewText
                   text={conversation.last_message_text || t('noMessagesYet')}
                   t={t}
@@ -1468,7 +1470,7 @@ function ConversationItem({
                 />
               </p>
               {conversation.search_match?.snippet && (
-                <p className="text-foreground mt-1 truncate text-xs">
+                <p className="text-foreground mt-1 min-w-0 truncate text-xs">
                   <span className="text-muted-foreground">
                     {conversation.search_match.label ||
                       t(`searchMatch.${conversation.search_match.field}`)}
@@ -1541,12 +1543,12 @@ function ConversationItem({
           type="button"
           disabled={accepting}
           onClick={() => onAccept(conversation)}
-          className="group bg-primary text-primary-foreground hover:bg-primary/90 flex w-14 shrink-0 items-center justify-center overflow-hidden transition-all duration-200 ease-out hover:w-24 disabled:opacity-60"
+          className="group bg-primary text-primary-foreground hover:bg-primary/90 flex w-12 shrink-0 items-center justify-center overflow-hidden transition-all duration-200 ease-out hover:w-12 disabled:opacity-60 sm:w-14 sm:hover:w-24"
           title={t('accept')}
           aria-label={t('accept')}
         >
           <Check className="h-5 w-5" />
-          <span className="ml-0 max-w-0 overflow-hidden text-xs font-bold whitespace-nowrap opacity-0 transition-all duration-200 group-hover:ml-2 group-hover:max-w-16 group-hover:opacity-100">
+          <span className="ml-0 hidden max-w-0 overflow-hidden text-xs font-bold whitespace-nowrap opacity-0 transition-all duration-200 group-hover:ml-2 group-hover:max-w-16 group-hover:opacity-100 sm:inline">
             {t('accept')}
           </span>
         </button>
