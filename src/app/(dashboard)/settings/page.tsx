@@ -16,6 +16,7 @@ import { DepartmentsSettings } from '@/components/settings/departments-settings'
 import { TemplateManager } from '@/components/settings/template-manager';
 import { QuickRepliesManager } from '@/components/settings/quick-replies-manager';
 import { AppsSettings } from '@/components/settings/apps-settings';
+import { EmailAdminSettings } from '@/components/settings/email-admin-settings';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
@@ -48,6 +49,7 @@ export default function SettingsPage() {
         'templates',
         'quick-replies',
         'apps',
+        'email',
         'fields',
         'deals',
         'members',
@@ -83,6 +85,7 @@ export default function SettingsPage() {
     templates: <TemplateManager />,
     'quick-replies': <QuickRepliesManager />,
     apps: <AppsSettings />,
+    email: <EmailAdminSettings />,
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     members: <MembersTab />,

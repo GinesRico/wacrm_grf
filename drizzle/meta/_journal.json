@@ -232,6 +232,13 @@
       "when": 1787049600000,
       "tag": "0032_whatsapp_meta_flows",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788793327000,
+      "tag": "0033_email_shared_platform",
+      "breakpoints": true
     }
   ]
 }

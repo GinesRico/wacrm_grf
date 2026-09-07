@@ -1256,6 +1256,323 @@ export const integrationConnections = pgTable(
   ]
 );
 
+export const emailAccounts = pgTable(
+  'email_accounts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    createdBy: text('created_by').references(() => authUser.id, {
+      onDelete: 'set null',
+    }),
+    label: text('label').notNull(),
+    emailAddress: text('email_address').notNull(),
+    imapHost: text('imap_host').notNull(),
+    imapPort: integer('imap_port').notNull().default(993),
+    imapSecure: boolean('imap_secure').notNull().default(true),
+    smtpHost: text('smtp_host').notNull(),
+    smtpPort: integer('smtp_port').notNull().default(465),
+    smtpSecure: boolean('smtp_secure').notNull().default(true),
+    encryptedCredentials: jsonb('encrypted_credentials').notNull().default({}),
+    syncMailbox: text('sync_mailbox').notNull().default('INBOX'),
+    syncCursor: jsonb('sync_cursor').notNull().default({}),
+    enabled: boolean('enabled').notNull().default(true),
+    status: text('status').notNull().default('not_configured'),
+    lastError: text('last_error'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_accounts_account_address_key').on(
+      table.accountId,
+      table.emailAddress
+    ),
+    index('idx_email_accounts_account').on(table.accountId),
+    check(
+      'email_accounts_status_check',
+      sql`${table.status} in ('not_configured', 'active', 'disabled', 'error')`
+    ),
+  ]
+);
+
+export const emailMailboxes = pgTable(
+  'email_mailboxes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    emailAccountId: uuid('email_account_id')
+      .notNull()
+      .references(() => emailAccounts.id, { onDelete: 'cascade' }),
+    ownerUserId: text('owner_user_id').references(() => authUser.id, {
+      onDelete: 'set null',
+    }),
+    address: text('address').notNull(),
+    displayName: text('display_name'),
+    kind: text('kind').notNull().default('shared'),
+    canSend: boolean('can_send').notNull().default(true),
+    isDefault: boolean('is_default').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_mailboxes_account_address_key').on(
+      table.accountId,
+      table.address
+    ),
+    index('idx_email_mailboxes_account').on(table.accountId),
+    check(
+      'email_mailboxes_kind_check',
+      sql`${table.kind} in ('personal', 'shared')`
+    ),
+  ]
+);
+
+export const emailFolders = pgTable(
+  'email_folders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id')
+      .notNull()
+      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    kind: text('kind').notNull().default('custom'),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_folders_mailbox_slug_key').on(table.mailboxId, table.slug),
+    index('idx_email_folders_account_mailbox').on(
+      table.accountId,
+      table.mailboxId
+    ),
+    check(
+      'email_folders_kind_check',
+      sql`${table.kind} in ('inbox', 'sent', 'archive', 'trash', 'custom')`
+    ),
+  ]
+);
+
+export const emailPermissions = pgTable(
+  'email_permissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    departmentId: uuid('department_id')
+      .notNull()
+      .references(() => departments.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id')
+      .notNull()
+      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    folderId: uuid('folder_id').references(() => emailFolders.id, {
+      onDelete: 'cascade',
+    }),
+    canRead: boolean('can_read').notNull().default(true),
+    canMove: boolean('can_move').notNull().default(false),
+    canClassify: boolean('can_classify').notNull().default(false),
+    canSend: boolean('can_send').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('email_permissions_department_target_key').on(
+      table.departmentId,
+      table.mailboxId,
+      table.folderId
+    ),
+    index('idx_email_permissions_account_department').on(
+      table.accountId,
+      table.departmentId
+    ),
+  ]
+);
+
+export const emailMessages = pgTable(
+  'email_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    emailAccountId: uuid('email_account_id')
+      .notNull()
+      .references(() => emailAccounts.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id')
+      .notNull()
+      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    folderId: uuid('folder_id')
+      .notNull()
+      .references(() => emailFolders.id, { onDelete: 'restrict' }),
+    imapMailbox: text('imap_mailbox').notNull().default('INBOX'),
+    imapUidValidity: text('imap_uid_validity').notNull().default('0'),
+    imapUid: integer('imap_uid').notNull(),
+    messageId: text('message_id'),
+    threadKey: text('thread_key'),
+    subject: text('subject').notNull().default('(Sin asunto)'),
+    fromName: text('from_name'),
+    fromAddress: text('from_address').notNull(),
+    toAddresses: text('to_addresses').array().notNull().default([]),
+    ccAddresses: text('cc_addresses').array().notNull().default([]),
+    bccAddresses: text('bcc_addresses').array().notNull().default([]),
+    replyToAddresses: text('reply_to_addresses').array().notNull().default([]),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    snippet: text('snippet'),
+    bodyText: text('body_text'),
+    bodyHtml: text('body_html'),
+    isRead: boolean('is_read').notNull().default(false),
+    hasAttachments: boolean('has_attachments').notNull().default(false),
+    rawHeaders: jsonb('raw_headers').notNull().default({}),
+    rawSize: integer('raw_size'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_messages_import_identity_key').on(
+      table.emailAccountId,
+      table.imapMailbox,
+      table.imapUidValidity,
+      table.imapUid
+    ),
+    index('idx_email_messages_account_folder_received').on(
+      table.accountId,
+      table.folderId,
+      table.receivedAt
+    ),
+    index('idx_email_messages_mailbox_received').on(
+      table.mailboxId,
+      table.receivedAt
+    ),
+  ]
+);
+
+export const emailAttachments = pgTable(
+  'email_attachments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => emailMessages.id, { onDelete: 'cascade' }),
+    fileName: text('file_name').notNull(),
+    contentType: text('content_type'),
+    size: integer('size'),
+    storageKey: text('storage_key').notNull(),
+    contentId: text('content_id'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('idx_email_attachments_message').on(table.messageId),
+    index('idx_email_attachments_account').on(table.accountId),
+  ]
+);
+
+export const emailRules = pgTable(
+  'email_rules',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
+    targetFolderId: uuid('target_folder_id')
+      .notNull()
+      .references(() => emailFolders.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    field: text('field').notNull(),
+    operator: text('operator').notNull().default('contains'),
+    value: text('value').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('idx_email_rules_account_position').on(table.accountId, table.position),
+    check(
+      'email_rules_field_check',
+      sql`${table.field} in ('from', 'from_domain', 'subject', 'to', 'cc')`
+    ),
+    check(
+      'email_rules_operator_check',
+      sql`${table.operator} in ('contains', 'equals', 'starts_with', 'ends_with')`
+    ),
+  ]
+);
+
+export const emailAuditEvents = pgTable(
+  'email_audit_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id').references(() => authUser.id, {
+      onDelete: 'set null',
+    }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'set null',
+    }),
+    folderId: uuid('folder_id').references(() => emailFolders.id, {
+      onDelete: 'set null',
+    }),
+    messageId: uuid('message_id').references(() => emailMessages.id, {
+      onDelete: 'set null',
+    }),
+    eventType: text('event_type').notNull(),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('idx_email_audit_account_created').on(table.accountId, table.createdAt),
+    index('idx_email_audit_message').on(table.messageId),
+  ]
+);
+
 export const webhookEventSamples = pgTable(
   'webhook_event_samples',
   {

@@ -14,6 +14,7 @@ import {
   GitBranch,
   LayoutDashboard,
   LogOut,
+  Mail,
   MessageSquare,
   Radio,
   Settings,
@@ -92,6 +93,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
   { href: "/inbox", labelKey: "inbox", icon: MessageSquare },
+  { href: "/email", labelKey: "email", icon: Mail },
   { href: "/contacts", labelKey: "contacts", icon: Users },
   { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
