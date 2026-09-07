@@ -7,6 +7,7 @@ import {
   createEmailFolder,
   grantEmailPermission,
   listEmailAdminState,
+  updateEmailAccount,
 } from '@/lib/email/service';
 
 export async function GET() {
@@ -50,6 +51,45 @@ export async function POST(request: Request) {
         mailbox: created.mailbox,
         folders: created.folders,
       });
+    }
+
+    if (action === 'update_account') {
+      if (typeof body.email_account_id !== 'string') {
+        return NextResponse.json({ error: 'email_account_id is required.' }, { status: 400 });
+      }
+      const account = await updateEmailAccount({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        emailAccountId: body.email_account_id,
+        input: {
+          label: typeof body.label === 'string' ? body.label : undefined,
+          emailAddress: typeof body.email_address === 'string' ? body.email_address : undefined,
+          imapHost: typeof body.imap_host === 'string' ? body.imap_host : undefined,
+          imapPort: body.imap_port ? Number(body.imap_port) : undefined,
+          imapSecure:
+            typeof body.imap_secure === 'boolean' ? body.imap_secure : undefined,
+          imapUser: typeof body.imap_user === 'string' ? body.imap_user : undefined,
+          imapPassword:
+            typeof body.imap_password === 'string' ? body.imap_password : undefined,
+          smtpHost: typeof body.smtp_host === 'string' ? body.smtp_host : undefined,
+          smtpPort: body.smtp_port ? Number(body.smtp_port) : undefined,
+          smtpSecure:
+            typeof body.smtp_secure === 'boolean' ? body.smtp_secure : undefined,
+          smtpUser: typeof body.smtp_user === 'string' ? body.smtp_user : undefined,
+          smtpPassword:
+            typeof body.smtp_password === 'string' ? body.smtp_password : undefined,
+          syncMailbox:
+            typeof body.sync_mailbox === 'string' ? body.sync_mailbox : undefined,
+          enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+          mailboxKind:
+            body.mailbox_kind === 'personal' || body.mailbox_kind === 'shared'
+              ? body.mailbox_kind
+              : undefined,
+          ownerUserId:
+            typeof body.owner_user_id === 'string' ? body.owner_user_id : undefined,
+        },
+      });
+      return NextResponse.json({ account });
     }
 
     if (action === 'create_folder') {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { FolderPlus, Loader2, Save, ShieldCheck, Upload } from 'lucide-react';
+import { FolderPlus, Loader2, Plus, Save, ShieldCheck, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -11,9 +11,26 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsPanelHead } from './settings-panel-head';
 
+interface EmailAccountRow {
+  id: string;
+  label: string;
+  email_address: string;
+  imap_host: string;
+  imap_port: number;
+  imap_secure: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  sync_mailbox: string;
+  enabled: boolean;
+  status: string;
+  last_error: string | null;
+  last_synced_at: string | null;
+}
+
 interface AdminState {
-  accounts: Array<{ id: string; label: string; email_address: string; status: string; last_error: string | null; last_synced_at: string | null }>;
-  mailboxes: Array<{ id: string; address: string; display_name: string | null; kind: string }>;
+  accounts: EmailAccountRow[];
+  mailboxes: Array<{ id: string; email_account_id: string; address: string; display_name: string | null; kind: string }>;
   folders: Array<{ id: string; mailbox_id: string; name: string; kind: string }>;
   permissions: Array<{ id: string; department_id: string; mailbox_id: string; folder_id: string | null; can_read: boolean; can_move: boolean; can_classify: boolean; can_send: boolean }>;
   departments: Array<{ id: string; name: string; color: string }>;
@@ -36,15 +53,16 @@ export function EmailAdminSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rulesSource, setRulesSource] = useState('');
+  const [selectedAccountId, setSelectedAccountId] = useState('');
   const [form, setForm] = useState({
     label: '',
     email_address: '',
-    imap_host: 'serviciodecorreo.es',
+    imap_host: 'imap.serviciodecorreo.es',
     imap_port: '993',
     imap_secure: true,
     imap_user: '',
     imap_password: '',
-    smtp_host: 'serviciodecorreo.es',
+    smtp_host: 'smtp.serviciodecorreo.es',
     smtp_port: '465',
     smtp_secure: true,
     smtp_user: '',
@@ -55,6 +73,7 @@ export function EmailAdminSettings() {
 
   const firstMailboxId = state.mailboxes[0]?.id ?? '';
   const firstDepartmentId = state.departments[0]?.id ?? '';
+  const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId) ?? null;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +82,11 @@ export function EmailAdminSettings() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo cargar Email');
       setState({ ...emptyState, ...payload });
+      setSelectedAccountId((current) =>
+        current && payload.accounts?.some((account: EmailAccountRow) => account.id === current)
+          ? current
+          : payload.accounts?.[0]?.id ?? '',
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar Email');
     } finally {
@@ -112,6 +136,62 @@ export function EmailAdminSettings() {
       smtp_user: '',
       smtp_password: '',
     }));
+  }
+
+  function loadAccountIntoForm(account: EmailAccountRow) {
+    const mailbox = state.mailboxes.find((item) => item.email_account_id === account.id);
+    setSelectedAccountId(account.id);
+    setForm({
+      label: account.label,
+      email_address: account.email_address,
+      imap_host: account.imap_host,
+      imap_port: String(account.imap_port),
+      imap_secure: account.imap_secure,
+      imap_user: '',
+      imap_password: '',
+      smtp_host: account.smtp_host,
+      smtp_port: String(account.smtp_port),
+      smtp_secure: account.smtp_secure,
+      smtp_user: '',
+      smtp_password: '',
+      sync_mailbox: account.sync_mailbox,
+      mailbox_kind: mailbox?.kind === 'personal' ? 'personal' : 'shared',
+    });
+  }
+
+  async function saveSelectedAccount() {
+    if (!selectedAccount) return;
+    await post(
+      {
+        action: 'update_account',
+        email_account_id: selectedAccount.id,
+        ...form,
+        imap_port: Number(form.imap_port),
+        smtp_port: Number(form.smtp_port),
+        enabled: selectedAccount.enabled,
+      },
+      'Buzon actualizado',
+    );
+  }
+
+  function newAccountForm() {
+    setSelectedAccountId('');
+    setForm({
+      label: '',
+      email_address: '',
+      imap_host: 'imap.serviciodecorreo.es',
+      imap_port: '993',
+      imap_secure: true,
+      imap_user: '',
+      imap_password: '',
+      smtp_host: 'smtp.serviciodecorreo.es',
+      smtp_port: '465',
+      smtp_secure: true,
+      smtp_user: '',
+      smtp_password: '',
+      sync_mailbox: 'INBOX',
+      mailbox_kind: 'shared',
+    });
   }
 
   async function grantPermission() {
@@ -174,7 +254,17 @@ export function EmailAdminSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Nuevo buzon IMAP/SMTP</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base">
+              {selectedAccount ? 'Modificar buzon IMAP/SMTP' : 'Nuevo buzon IMAP/SMTP'}
+            </CardTitle>
+            {selectedAccount ? (
+              <Button variant="outline" size="sm" onClick={newAccountForm}>
+                <Plus className="size-4" />
+                Nuevo
+              </Button>
+            ) : null}
+          </div>
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
           <Field label="Etiqueta" value={form.label} onChange={(value) => setForm({ ...form, label: value })} />
@@ -200,9 +290,9 @@ export function EmailAdminSettings() {
             </select>
           </div>
           <div className="flex justify-end lg:col-span-2">
-            <Button onClick={createAccount} disabled={saving}>
+            <Button onClick={selectedAccount ? saveSelectedAccount : createAccount} disabled={saving}>
               {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-              Guardar buzon
+              {selectedAccount ? 'Actualizar buzon' : 'Guardar buzon'}
             </Button>
           </div>
         </CardContent>
@@ -215,13 +305,19 @@ export function EmailAdminSettings() {
           </CardHeader>
           <CardContent className="space-y-3">
             {state.accounts.map((account) => (
-              <div key={account.id} className="rounded-md border border-border p-3 text-sm">
+              <button
+                key={account.id}
+                type="button"
+                onClick={() => loadAccountIntoForm(account)}
+                className="block w-full rounded-md border border-border p-3 text-left text-sm transition-colors hover:bg-muted"
+              >
                 <div className="font-medium">{account.label} · {account.email_address}</div>
                 <div className="text-xs text-muted-foreground">
-                  {account.status}{account.last_synced_at ? ` · ${new Date(account.last_synced_at).toLocaleString()}` : ''}
+                  {account.imap_host}:{account.imap_port} · {account.status}
+                  {account.last_synced_at ? ` · ${new Date(account.last_synced_at).toLocaleString()}` : ''}
                 </div>
                 {account.last_error && <div className="mt-1 text-xs text-destructive">{account.last_error}</div>}
-              </div>
+              </button>
             ))}
             {state.mailboxes.length === 0 && <p className="text-sm text-muted-foreground">Aun no hay buzones.</p>}
             <Button variant="outline" onClick={createFolder} disabled={!firstMailboxId || saving}>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Archive, Inbox, Loader2, Mail, MailOpen, RefreshCw, Reply, Search, Send } from 'lucide-react';
+import { Archive, FolderPlus, Inbox, Loader2, Mail, MailOpen, RefreshCw, Reply, Search, Send, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -49,6 +49,17 @@ interface MessagesResponse {
   messages: Message[];
 }
 
+interface Rule {
+  id: string;
+  mailbox_id: string;
+  target_folder_id: string;
+  name: string;
+  field: string;
+  operator: string;
+  value: string;
+  enabled: boolean;
+}
+
 export function EmailClient() {
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -61,6 +72,8 @@ export function EmailClient() {
   const [syncing, setSyncing] = useState(false);
   const [sending, setSending] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [rules, setRules] = useState<Rule[]>([]);
+  const [selectedRuleId, setSelectedRuleId] = useState('');
 
   const selectedMessage = messages.find((message) => message.id === selectedMessageId) ?? messages[0] ?? null;
   const selectedMailbox = mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null;
@@ -107,6 +120,31 @@ export function EmailClient() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!selectedMailboxId) {
+      setRules([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch(`/api/email/rules?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
+        cache: 'no-store',
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!cancelled && res.ok) {
+        setRules(payload.rules ?? []);
+        setSelectedRuleId((current) =>
+          current && payload.rules?.some((rule: Rule) => rule.id === current)
+            ? current
+            : payload.rules?.[0]?.id ?? '',
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMailboxId]);
+
   async function patchMessage(body: Record<string, unknown>) {
     if (!selectedMessage) return;
     const res = await fetch('/api/email/messages', {
@@ -139,6 +177,44 @@ export function EmailClient() {
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function createPublicFolder() {
+    if (!selectedMailbox) return;
+    const name = window.prompt('Nombre de la nueva carpeta publica');
+    if (!name?.trim()) return;
+    const res = await fetch('/api/email/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mailbox_id: selectedMailbox.id, name }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudo crear la carpeta');
+      return;
+    }
+    toast.success('Carpeta publica creada');
+    await load();
+  }
+
+  async function applyRule() {
+    if (!selectedMessage || !selectedRuleId) return;
+    const res = await fetch('/api/email/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'apply',
+        message_id: selectedMessage.id,
+        rule_id: selectedRuleId,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudo aplicar la regla');
+      return;
+    }
+    toast.success('Regla aplicada');
+    await load();
   }
 
   async function sendReply() {
@@ -206,6 +282,16 @@ export function EmailClient() {
           )}
 
           <div className="border-t border-border pt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={createPublicFolder}
+              disabled={!selectedMailbox}
+              className="mb-2 w-full justify-start"
+            >
+              <FolderPlus className="size-4" />
+              Nueva carpeta publica
+            </Button>
             {visibleFolders.map((folder) => (
               <button
                 key={folder.id}
@@ -270,6 +356,25 @@ export function EmailClient() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h1 className="min-w-0 truncate text-lg font-semibold">{selectedMessage.subject}</h1>
                 <div className="flex gap-2">
+                  {rules.length > 0 ? (
+                    <div className="flex min-w-48 gap-2">
+                      <select
+                        value={selectedRuleId}
+                        onChange={(event) => setSelectedRuleId(event.target.value)}
+                        className="h-7 min-w-0 flex-1 rounded-md border border-border bg-muted px-2 text-xs"
+                      >
+                        {rules.map((rule) => (
+                          <option key={rule.id} value={rule.id}>
+                            {rule.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Button variant="outline" size="sm" onClick={applyRule} disabled={!selectedRuleId}>
+                        <Wand2 className="size-4" />
+                        Aplicar
+                      </Button>
+                    </div>
+                  ) : null}
                   <Button variant="outline" size="sm" onClick={() => patchMessage({ is_read: !selectedMessage.is_read })}>
                     {selectedMessage.is_read ? <Mail className="size-4" /> : <MailOpen className="size-4" />}
                     {selectedMessage.is_read ? 'No leido' : 'Leido'}
@@ -291,6 +396,15 @@ export function EmailClient() {
               <p className="text-xs text-muted-foreground">
                 Para {selectedMessage.to_addresses.join(', ') || selectedMailbox?.address} · {new Date(selectedMessage.received_at).toLocaleString()}
               </p>
+              {rules.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {rules.slice(0, 6).map((rule) => (
+                    <span key={rule.id} className="rounded-md border border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
+                      {rule.name}: {rule.field} {rule.operator} {rule.value}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <article className="min-h-0 flex-1 overflow-y-auto p-4">
               {selectedMessage.body_html ? (

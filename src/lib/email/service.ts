@@ -203,6 +203,122 @@ export async function createEmailAccount(args: {
   });
 }
 
+export async function updateEmailAccount(args: {
+  accountId: string;
+  userId: string;
+  emailAccountId: string;
+  input: Partial<CreateEmailAccountInput> & {
+    enabled?: boolean;
+    label?: string;
+    emailAddress?: string;
+    imapHost?: string;
+    imapPort?: number;
+    imapSecure?: boolean;
+    smtpHost?: string;
+    smtpPort?: number;
+    smtpSecure?: boolean;
+    syncMailbox?: string;
+  };
+}) {
+  const [existing] = await db
+    .select()
+    .from(emailAccounts)
+    .where(
+      and(
+        eq(emailAccounts.accountId, args.accountId),
+        eq(emailAccounts.id, args.emailAccountId),
+      ),
+    )
+    .limit(1);
+  if (!existing) throw new Error('Email account not found.');
+
+  const existingCredentials = existing.encryptedCredentials as Record<string, unknown>;
+  const hasNewCredentials =
+    Boolean(clean(args.input.imapUser)) ||
+    Boolean(clean(args.input.imapPassword)) ||
+    Boolean(clean(args.input.smtpUser)) ||
+    Boolean(clean(args.input.smtpPassword));
+  const encryptedCredentials = hasNewCredentials
+    ? encryptEmailCredentials({
+        imapUser: clean(args.input.imapUser) || decryptEmailCredentials(existingCredentials).imap_user,
+        imapPassword:
+          clean(args.input.imapPassword) ||
+          decryptEmailCredentials(existingCredentials).imap_password,
+        smtpUser: clean(args.input.smtpUser) || decryptEmailCredentials(existingCredentials).smtp_user,
+        smtpPassword:
+          clean(args.input.smtpPassword) ||
+          decryptEmailCredentials(existingCredentials).smtp_password,
+      })
+    : existingCredentials;
+
+  return db.transaction(async (tx) => {
+    const emailAddress = args.input.emailAddress
+      ? normalizeEmail(args.input.emailAddress)
+      : existing.emailAddress;
+    const [account] = await tx
+      .update(emailAccounts)
+      .set({
+        label: clean(args.input.label) || existing.label,
+        emailAddress,
+        imapHost: clean(args.input.imapHost) || existing.imapHost,
+        imapPort: args.input.imapPort || existing.imapPort,
+        imapSecure:
+          typeof args.input.imapSecure === 'boolean'
+            ? args.input.imapSecure
+            : existing.imapSecure,
+        smtpHost: clean(args.input.smtpHost) || existing.smtpHost,
+        smtpPort: args.input.smtpPort || existing.smtpPort,
+        smtpSecure:
+          typeof args.input.smtpSecure === 'boolean'
+            ? args.input.smtpSecure
+            : existing.smtpSecure,
+        syncMailbox: clean(args.input.syncMailbox) || existing.syncMailbox,
+        encryptedCredentials,
+        enabled:
+          typeof args.input.enabled === 'boolean' ? args.input.enabled : existing.enabled,
+        status:
+          typeof args.input.enabled === 'boolean' && !args.input.enabled
+            ? 'disabled'
+            : existing.status === 'disabled'
+              ? 'active'
+              : existing.status,
+        updatedAt: new Date(),
+      })
+      .where(eq(emailAccounts.id, existing.id))
+      .returning();
+
+    await tx
+      .update(emailMailboxes)
+      .set({
+        address: emailAddress,
+        displayName: clean(args.input.label) || undefined,
+        kind: args.input.mailboxKind ?? undefined,
+        ownerUserId:
+          args.input.mailboxKind === 'shared'
+            ? null
+            : args.input.ownerUserId === undefined
+              ? undefined
+              : args.input.ownerUserId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(emailMailboxes.accountId, args.accountId),
+          eq(emailMailboxes.emailAccountId, existing.id),
+        ),
+      );
+
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId,
+      eventType: 'mailbox.updated',
+      metadata: { email_account_id: existing.id, address: emailAddress },
+    });
+
+    return account;
+  });
+}
+
 export async function listEmailAdminState(accountId: string) {
   const [
     accountRows,
@@ -330,6 +446,34 @@ export async function createEmailFolder(args: {
   return row;
 }
 
+export async function createPublicEmailFolder(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId: string;
+  name: string;
+}) {
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+  });
+  if (!permission.canRead) {
+    throw new Error('You do not have permission to create folders in this mailbox.');
+  }
+  const folder = await createEmailFolder(args);
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: args.mailboxId,
+    folderId: folder.id,
+    eventType: 'folder.created',
+    metadata: { name: folder.name, visibility: 'public' },
+  });
+  return folder;
+}
+
 export async function listEmailWorkspace(args: {
   accountId: string;
   userId: string;
@@ -345,6 +489,139 @@ export async function listEmailWorkspace(args: {
     mailboxes: mailboxes.map(serializeEmailMailbox),
     folders: folders.map(serializeEmailFolder),
   };
+}
+
+export async function listEmailRulesForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId?: string | null;
+}) {
+  const workspace = await listEmailWorkspace(args);
+  const mailboxIds = workspace.mailboxes.map((mailbox) => mailbox.id);
+  if (mailboxIds.length === 0) return { rules: [], ...workspace };
+  const effectiveMailboxIds =
+    args.mailboxId && mailboxIds.includes(args.mailboxId)
+      ? [args.mailboxId]
+      : mailboxIds;
+  const rows = await db
+    .select()
+    .from(emailRules)
+    .where(
+      and(
+        eq(emailRules.accountId, args.accountId),
+        inArray(emailRules.mailboxId, effectiveMailboxIds),
+      ),
+    )
+    .orderBy(asc(emailRules.position), asc(emailRules.name));
+  return { rules: rows, ...workspace };
+}
+
+export async function createEmailRule(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId: string;
+  targetFolderId: string;
+  name: string;
+  field: string;
+  operator: string;
+  value: string;
+}) {
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+    folderId: args.targetFolderId,
+  });
+  if (!permission.canClassify) {
+    throw new Error('You do not have permission to create rules for this mailbox.');
+  }
+  const [rule] = await db
+    .insert(emailRules)
+    .values({
+      accountId: args.accountId,
+      mailboxId: args.mailboxId,
+      targetFolderId: args.targetFolderId,
+      name: clean(args.name) || 'Regla',
+      field: args.field,
+      operator: args.operator,
+      value: clean(args.value),
+      enabled: true,
+      position: 0,
+    })
+    .returning();
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: args.mailboxId,
+    folderId: args.targetFolderId,
+    eventType: 'rule.created',
+    metadata: { rule_id: rule.id, name: rule.name },
+  });
+  return rule;
+}
+
+export async function applyEmailRuleToMessage(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  messageId: string;
+  ruleId: string;
+}) {
+  const current = await getEmailMessageForUser(args);
+  if (!current) throw new Error('Message not found or not permitted.');
+  if (!current.permission.canClassify && !current.permission.canMove) {
+    throw new Error('You do not have permission to classify this email.');
+  }
+  const [rule] = await db
+    .select()
+    .from(emailRules)
+    .where(
+      and(
+        eq(emailRules.accountId, args.accountId),
+        eq(emailRules.id, args.ruleId),
+        eq(emailRules.mailboxId, current.message.mailboxId),
+      ),
+    )
+    .limit(1);
+  if (!rule) throw new Error('Rule not found for this mailbox.');
+
+  const [targetFolder] = await db
+    .select()
+    .from(emailFolders)
+    .where(
+      and(
+        eq(emailFolders.accountId, args.accountId),
+        eq(emailFolders.id, rule.targetFolderId),
+        eq(emailFolders.mailboxId, current.message.mailboxId),
+      ),
+    )
+    .limit(1);
+  if (!targetFolder) throw new Error('Rule target folder not found.');
+
+  const [updated] = await db
+    .update(emailMessages)
+    .set({ folderId: targetFolder.id, updatedAt: new Date() })
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        eq(emailMessages.id, args.messageId),
+      ),
+    )
+    .returning();
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: updated.mailboxId,
+    folderId: targetFolder.id,
+    messageId: updated.id,
+    eventType: 'rule.applied',
+    metadata: { rule_id: rule.id, rule_name: rule.name },
+  });
+  return updated;
 }
 
 export async function listEmailMessages(args: {
