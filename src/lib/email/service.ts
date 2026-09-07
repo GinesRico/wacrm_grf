@@ -16,7 +16,7 @@ import {
   emailPermissions,
   emailRules,
 } from '@/db/schema';
-import { putObject } from '@/lib/storage/alarik';
+import { putObject, signedObjectUrl } from '@/lib/storage/alarik';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
 import { resolveEmailPermission } from './permissions';
 import { resolveRuleTargetFolder } from './rules';
@@ -127,6 +127,19 @@ export function serializeEmailFolder(row: typeof emailFolders.$inferSelect) {
     slug: row.slug,
     kind: row.kind,
     position: row.position,
+  };
+}
+
+export function serializeEmailAttachment(row: typeof emailAttachments.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    message_id: row.messageId,
+    file_name: row.fileName,
+    content_type: row.contentType,
+    size: row.size,
+    content_id: row.contentId,
+    created_at: row.createdAt.toISOString(),
   };
 }
 
@@ -730,6 +743,61 @@ export async function updateEmailMessageState(args: {
   return updated;
 }
 
+export async function listEmailAttachmentsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  messageId: string;
+}) {
+  const current = await getEmailMessageForUser(args);
+  if (!current) throw new Error('Message not found or not permitted.');
+
+  const rows = await db
+    .select()
+    .from(emailAttachments)
+    .where(
+      and(
+        eq(emailAttachments.accountId, args.accountId),
+        eq(emailAttachments.messageId, args.messageId),
+      ),
+    )
+    .orderBy(asc(emailAttachments.fileName));
+
+  return rows.map(serializeEmailAttachment);
+}
+
+export async function getEmailAttachmentDownloadForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  attachmentId: string;
+}) {
+  const [attachment] = await db
+    .select()
+    .from(emailAttachments)
+    .where(
+      and(
+        eq(emailAttachments.accountId, args.accountId),
+        eq(emailAttachments.id, args.attachmentId),
+      ),
+    )
+    .limit(1);
+  if (!attachment) throw new Error('Attachment not found.');
+
+  const current = await getEmailMessageForUser({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    messageId: attachment.messageId,
+  });
+  if (!current) throw new Error('Message not found or not permitted.');
+
+  return {
+    ...serializeEmailAttachment(attachment),
+    url: await signedObjectUrl(attachment.storageKey),
+  };
+}
+
 async function rulesFor(accountId: string, mailboxId: string) {
   return db
     .select()
@@ -952,6 +1020,11 @@ export async function sendEmail(args: {
   subject: string;
   text: string;
   html?: string;
+  attachments?: {
+    filename: string;
+    contentType?: string;
+    contentBase64: string;
+  }[];
   inReplyToMessageId?: string | null;
 }) {
   const [mailbox] = await db
@@ -994,6 +1067,11 @@ export async function sendEmail(args: {
     subject: args.subject || '(Sin asunto)',
     text: args.text,
     html: args.html,
+    attachments: args.attachments?.map((attachment) => ({
+      filename: attachment.filename || 'attachment',
+      contentType: attachment.contentType,
+      content: Buffer.from(attachment.contentBase64, 'base64'),
+    })),
   });
 
   await db.insert(emailAuditEvents).values({
@@ -1006,6 +1084,7 @@ export async function sendEmail(args: {
       from: mailbox.address,
       to: args.to,
       cc: args.cc ?? [],
+      attachment_count: args.attachments?.length ?? 0,
       in_reply_to_message_id: args.inReplyToMessageId ?? null,
     },
   });
