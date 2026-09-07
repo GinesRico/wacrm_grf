@@ -23,6 +23,8 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  RotateCw,
+  RefreshCcw,
   Forward,
   ExternalLink,
   ChevronLeft,
@@ -239,6 +241,7 @@ function MediaViewer({
   initialIndex?: number;
 }) {
   const [zoom, setZoom] = useState(1);
+  const [rotation, setRotation] = useState(0);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [resolvedSrc, setResolvedSrc] = useState(src);
@@ -253,6 +256,7 @@ function MediaViewer({
   } | null>(null);
   const closeViewer = useCallback(() => {
     setZoom(1);
+    setRotation(0);
     setPan({ x: 0, y: 0 });
     onClose();
   }, [onClose]);
@@ -280,6 +284,7 @@ function MediaViewer({
         return next;
       });
       setZoom(1);
+      setRotation(0);
       setPan({ x: 0, y: 0 });
       dragRef.current = null;
     },
@@ -290,6 +295,7 @@ function MediaViewer({
     if (!open) return;
     setCurrentIndex(Math.min(Math.max(initialIndex, 0), items.length - 1));
     setZoom(1);
+    setRotation(0);
     setPan({ x: 0, y: 0 });
   }, [initialIndex, items.length, open]);
 
@@ -362,6 +368,15 @@ function MediaViewer({
 
   const resetZoom = () => {
     setZoom(1);
+    setRotation(0);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const rotateImage = (direction: -1 | 1) => {
+    setRotation((currentRotation) => {
+      const nextRotation = currentRotation + direction * 90;
+      return ((nextRotation % 360) + 360) % 360;
+    });
     setPan({ x: 0, y: 0 });
   };
 
@@ -373,7 +388,7 @@ function MediaViewer({
       aria-label={kind === 'image' ? t('openImage') : t('openVideo')}
       onClick={closeViewer}
     >
-      <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+      <div className="absolute top-4 right-4 z-10 flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-end gap-2">
         {kind === 'image' ? (
           <>
             <button
@@ -395,10 +410,34 @@ function MediaViewer({
                 resetZoom();
               }}
               className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
-              aria-label={t('resetZoom')}
-              title={t('resetZoom')}
+              aria-label={t('resetView')}
+              title={t('resetView')}
+            >
+              <RefreshCcw className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                rotateImage(-1);
+              }}
+              className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+              aria-label={t('rotateLeft')}
+              title={t('rotateLeft')}
             >
               <RotateCcw className="size-5" />
+            </button>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                rotateImage(1);
+              }}
+              className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white transition hover:bg-black/75"
+              aria-label={t('rotateRight')}
+              title={t('rotateRight')}
+            >
+              <RotateCw className="size-5" />
             </button>
             <button
               type="button"
@@ -550,7 +589,7 @@ function MediaViewer({
                   : 'cursor-zoom-in'
               )}
               style={{
-                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) rotate(${rotation}deg) scale(${zoom})`,
                 transformOrigin: 'center center',
                 touchAction: 'none',
               }}
