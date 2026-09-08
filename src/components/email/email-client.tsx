@@ -154,7 +154,7 @@ type ContextActionId =
 
 interface MailTab {
   id: string;
-  type: 'folder' | 'message';
+  type: 'folder' | 'message' | 'compose';
   title: string;
   messageId?: string;
 }
@@ -812,6 +812,7 @@ export function EmailClient() {
     if (activeTabId === tabId) {
       setActiveTabId('folder');
       setSelectedMessageId(null);
+      if (tabId === 'compose') setComposeOpen(false);
     }
   }
 
@@ -821,6 +822,15 @@ export function EmailClient() {
     }
     setSelectedMessageId(null);
     setActiveTabId('folder');
+  }
+
+  function openComposeTab(title: string) {
+    setTabs((current) => [
+      ...current.filter((tab) => tab.id !== 'compose'),
+      { id: 'compose', type: 'compose' as const, title },
+    ].slice(-8));
+    setActiveTabId('compose');
+    setComposeOpen(true);
   }
 
   function setTableSort(nextSort: 'received' | 'sender' | 'subject' | 'size') {
@@ -1115,7 +1125,7 @@ export function EmailClient() {
     setCompose(emptyCompose);
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
-    setComposeOpen(true);
+    openComposeTab('Nuevo correo');
   }
 
   function openReply(source?: Message) {
@@ -1135,7 +1145,7 @@ export function EmailClient() {
     });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
-    setComposeOpen(true);
+    openComposeTab('Responder');
   }
 
   function openReplyAll(source?: Message) {
@@ -1157,7 +1167,7 @@ export function EmailClient() {
     });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
-    setComposeOpen(true);
+    openComposeTab('Responder a todos');
   }
 
   function openForward(source?: Message) {
@@ -1177,7 +1187,7 @@ export function EmailClient() {
     });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
-    setComposeOpen(true);
+    openComposeTab('Reenviar');
   }
 
   const saveDraft = useCallback(async (silent = false) => {
@@ -1341,7 +1351,7 @@ export function EmailClient() {
   });
 
   return (
-    <div className="flex min-h-[calc(100vh-7rem)] flex-col rounded-lg border border-border bg-background">
+    <div className="-m-4 flex min-h-[calc(100vh-3.5rem)] flex-col bg-background sm:-m-6">
       <div className="flex min-h-14 items-center gap-2 overflow-x-auto border-b border-border px-3 py-2 whitespace-nowrap">
         <Button onClick={openNewMessage} disabled={!selectedMailbox?.can_send}>
           <PencilLine className="size-4" />
@@ -1404,12 +1414,13 @@ export function EmailClient() {
               activeTabId === tab.id ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
             )}
           >
-            <Mail className="size-4 shrink-0" />
+            {tab.type === 'compose' ? <PencilLine className="size-4 shrink-0" /> : <Mail className="size-4 shrink-0" />}
             <button
               type="button"
               onClick={() => {
                 setActiveTabId(tab.id);
                 if (tab.messageId) setSelectedMessageId(tab.messageId);
+                if (tab.type === 'compose') setComposeOpen(true);
               }}
               className="min-w-0 flex-1 truncate text-left"
             >
@@ -1417,9 +1428,9 @@ export function EmailClient() {
             </button>
             <button
               type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                closeTab(tab.id);
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(tab.id);
               }}
               className="ml-1 rounded p-0.5 hover:bg-muted"
               title="Cerrar pestana"
@@ -1819,7 +1830,7 @@ export function EmailClient() {
             layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-2',
           )}
         >
-          {selectedMessage ? (
+          {!composeOpen && selectedMessage ? (
             <div className="flex h-full min-h-[620px] flex-col">
               <div className="border-b border-border p-4">
                 <div className="flex flex-wrap items-start gap-3">
@@ -1979,12 +1990,12 @@ export function EmailClient() {
                 )}
               </article>
             </div>
-          ) : (
+          ) : !composeOpen ? (
             <div className="flex min-h-[620px] flex-col items-center justify-center gap-2 text-muted-foreground">
               <MailOpen className="size-9" />
               <p className="text-sm">Selecciona un correo para leerlo.</p>
             </div>
-          )}
+          ) : null}
 
           {ruleBuilderOpen ? (
             <div className="absolute right-4 top-4 z-10 w-[min(460px,calc(100%-2rem))] rounded-lg border border-border bg-background shadow-xl">
@@ -2055,7 +2066,7 @@ export function EmailClient() {
           ) : null}
 
           {composeOpen ? (
-            <div className="fixed inset-4 z-40 flex h-[calc(100vh-2rem)] flex-col rounded-lg border border-border bg-background shadow-2xl">
+            <div className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">
               <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">
@@ -2063,7 +2074,7 @@ export function EmailClient() {
                   </p>
                   <p className="truncate text-xs text-muted-foreground">Desde {selectedMailbox?.address}</p>
                 </div>
-                <Button size="icon-sm" variant="ghost" onClick={() => setComposeOpen(false)} title="Cerrar">
+                <Button size="icon-sm" variant="ghost" onClick={() => closeTab('compose')} title="Cerrar redactor">
                   <X className="size-4" />
                 </Button>
               </div>
