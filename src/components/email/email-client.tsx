@@ -363,6 +363,56 @@ function spreadsheetRowsForSheet(workbook: XLSX.WorkBook, sheetName: string): Sp
   };
 }
 
+function PdfPreview({ url }: { url: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function renderPdf() {
+      try {
+        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+          'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+          import.meta.url,
+        ).toString();
+        const document = await pdfjs.getDocument({ url }).promise;
+        const page = await document.getPage(1);
+        const viewport = page.getViewport({ scale: 1.35 });
+        const canvas = canvasRef.current;
+        if (!canvas || cancelled) return;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas no disponible');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        if (!cancelled) setStatus('ready');
+      } catch {
+        if (!cancelled) setStatus('error');
+      }
+    }
+    void renderPdf();
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (status === 'error') {
+    return (
+      <div className="flex h-full min-h-80 items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        No se pudo renderizar el PDF. Puedes abrirlo en una pestaña nueva.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-full items-start justify-center overflow-auto bg-muted/30 p-5">
+      {status === 'loading' ? <Loader2 className="absolute top-1/2 size-7 animate-spin text-primary" /> : null}
+      <canvas ref={canvasRef} className="max-w-full bg-white shadow-md" aria-label="Vista previa del PDF" />
+    </div>
+  );
+}
+
 function initialEmailPanelWidths(): EmailPanelWidths {
   if (typeof window === 'undefined') return DEFAULT_EMAIL_PANEL_WIDTHS;
   try {
@@ -2894,20 +2944,7 @@ export function EmailClient() {
                   />
                 </div>
               ) : attachmentPreview.kind === 'pdf' ? (
-                <object
-                  data={attachmentPreview.rawUrl}
-                  type="application/pdf"
-                  className="h-full min-h-[620px] w-full rounded bg-white"
-                  aria-label={attachmentPreview.attachment.file_name}
-                >
-                  <div className="flex h-full flex-col items-center justify-center rounded bg-background p-6 text-center text-foreground">
-                    <FileIcon className="mb-3 size-10 text-muted-foreground" />
-                    <p className="text-sm font-medium">No se pudo mostrar el PDF dentro del navegador.</p>
-                    <Button className="mt-4" size="sm" onClick={() => window.open(attachmentPreview.rawUrl, '_blank', 'noopener,noreferrer')}>
-                      Abrir PDF
-                    </Button>
-                  </div>
-                </object>
+                <PdfPreview url={attachmentPreview.rawUrl} />
               ) : attachmentPreview.kind === 'spreadsheet' ? (
                 <div className="min-h-full rounded bg-white p-3 text-black">
                   {attachmentPreview.loading ? (

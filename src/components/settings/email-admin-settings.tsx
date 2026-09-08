@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { SettingsPanelHead } from './settings-panel-head';
+import { cn } from '@/lib/utils';
 
 interface EmailAccountRow {
   id: string;
@@ -61,6 +62,8 @@ export function EmailAdminSettings() {
   const [state, setState] = useState<AdminState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [activeSection, setActiveSection] = useState<'mailboxes' | 'folders' | 'permissions' | 'rules'>('mailboxes');
+  const [editorOpen, setEditorOpen] = useState(false);
   const [savingRuleId, setSavingRuleId] = useState('');
   const [editingRuleId, setEditingRuleId] = useState('');
   const [ruleEdits, setRuleEdits] = useState<Record<string, {
@@ -170,11 +173,13 @@ export function EmailAdminSettings() {
       smtp_user: '',
       smtp_password: '',
     }));
+    setEditorOpen(false);
   }
 
   function loadAccountIntoForm(account: EmailAccountRow) {
     const mailbox = state.mailboxes.find((item) => item.email_account_id === account.id);
     setSelectedAccountId(account.id);
+    setEditorOpen(true);
     setForm({
       label: account.label,
       email_address: account.email_address,
@@ -210,6 +215,7 @@ export function EmailAdminSettings() {
 
   function newAccountForm() {
     setSelectedAccountId('');
+    setEditorOpen(true);
     setForm({
       label: '',
       email_address: '',
@@ -367,21 +373,62 @@ export function EmailAdminSettings() {
         description="Configura buzones IMAP/SMTP, carpetas internas, permisos por departamento y reglas Thunderbird."
       />
 
-      <Card>
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold">Administracion de correo</p>
+              <p className="text-xs text-muted-foreground">Gestiona accesos y organizacion desde un solo lugar.</p>
+            </div>
+            <Button size="sm" onClick={newAccountForm}>
+              <Plus className="size-4" />
+              Nuevo buzon
+            </Button>
+          </div>
+          <nav className="flex gap-1 overflow-x-auto px-2 pt-2" aria-label="Secciones de correo">
+            {[
+              ['mailboxes', 'Buzones'],
+              ['folders', 'Carpetas publicas'],
+              ['permissions', 'Permisos'],
+              ['rules', 'Reglas'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveSection(id as typeof activeSection)}
+                className={cn(
+                  'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                  activeSection === id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          <div className="grid gap-px border-t border-border bg-border sm:grid-cols-3">
+            <SummaryMetric label="Buzones" value={state.mailboxes.length} />
+            <SummaryMetric label="Carpetas publicas" value={state.folders.filter((folder) => folder.kind === 'custom').length} />
+            <SummaryMetric label="Reglas activas" value={state.rules.filter((rule) => rule.enabled).length} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {editorOpen ? <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setEditorOpen(false)} /> : null}
+      <Card className={cn('fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col rounded-none border-y-0 border-r-0 shadow-2xl', !editorOpen && 'hidden')}>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="text-base">
               {selectedAccount ? 'Modificar buzon IMAP/SMTP' : 'Nuevo buzon IMAP/SMTP'}
             </CardTitle>
             {selectedAccount ? (
-              <Button variant="outline" size="sm" onClick={newAccountForm}>
-                <Plus className="size-4" />
-                Nuevo
+              <Button variant="ghost" size="icon-sm" onClick={() => setEditorOpen(false)} title="Cerrar" aria-label="Cerrar">
+                <X className="size-4" />
               </Button>
             ) : null}
           </div>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
+        <CardContent className="min-h-0 flex-1 overflow-y-auto">
+          <div className="grid gap-4 lg:grid-cols-2">
           <Field label="Etiqueta" value={form.label} onChange={(value) => setForm({ ...form, label: value })} />
           <Field label="Direccion" value={form.email_address} onChange={(value) => setForm({ ...form, email_address: value })} />
           <Field label="IMAP host" value={form.imap_host} onChange={(value) => setForm({ ...form, imap_host: value })} />
@@ -404,17 +451,19 @@ export function EmailAdminSettings() {
               <option value="personal">Personal</option>
             </select>
           </div>
-          <div className="flex justify-end lg:col-span-2">
-            <Button onClick={selectedAccount ? saveSelectedAccount : createAccount} disabled={saving}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-              {selectedAccount ? 'Actualizar buzon' : 'Guardar buzon'}
-            </Button>
+            <div className="flex justify-end gap-2 lg:col-span-2">
+              <Button variant="outline" onClick={() => setEditorOpen(false)}>Cancelar</Button>
+              <Button onClick={selectedAccount ? saveSelectedAccount : createAccount} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                {selectedAccount ? 'Actualizar buzon' : 'Guardar buzon'}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
+      <div className={cn('grid gap-4 lg:grid-cols-2', activeSection === 'rules' && 'hidden')}>
+        <Card className={cn(activeSection === 'permissions' && 'hidden')}>
           <CardHeader>
             <CardTitle className="text-base">Buzones y carpetas</CardTitle>
           </CardHeader>
@@ -445,7 +494,7 @@ export function EmailAdminSettings() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={cn(activeSection !== 'permissions' && 'hidden')}>
           <CardHeader>
             <CardTitle className="text-base">Permisos por grupo</CardTitle>
           </CardHeader>
@@ -468,7 +517,7 @@ export function EmailAdminSettings() {
         </Card>
       </div>
 
-      <Card>
+      <Card className={cn(activeSection !== 'rules' && 'hidden')}>
         <CardHeader>
           <CardTitle className="text-base">Reglas Thunderbird</CardTitle>
         </CardHeader>
@@ -643,6 +692,15 @@ function Field({
     <div className="space-y-1.5">
       <Label>{label}</Label>
       <Input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+    </div>
+  );
+}
+
+function SummaryMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-card px-4 py-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
     </div>
   );
 }
