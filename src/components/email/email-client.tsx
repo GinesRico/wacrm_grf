@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Archive,
+  CheckSquare,
   Download,
   FileIcon,
   FolderPlus,
@@ -17,6 +18,8 @@ import {
   Reply,
   Search,
   Send,
+  Square,
+  Tag,
   Trash2,
   Wand2,
   X,
@@ -103,12 +106,30 @@ interface ComposeState {
   inReplyToMessageId: string | null;
 }
 
+type ActiveFilter = 'all' | 'unread' | 'attachments';
+
+interface RuleDraft {
+  name: string;
+  field: string;
+  operator: string;
+  value: string;
+  targetFolderId: string;
+}
+
 const emptyCompose: ComposeState = {
   to: '',
   cc: '',
   subject: '',
   text: '',
   inReplyToMessageId: null,
+};
+
+const emptyRuleDraft: RuleDraft = {
+  name: '',
+  field: 'from',
+  operator: 'contains',
+  value: '',
+  targetFolderId: '',
 };
 
 function splitRecipients(value: string): string[] {
@@ -173,6 +194,10 @@ export function EmailClient() {
   const [compose, setCompose] = useState<ComposeState>(emptyCompose);
   const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
   const [moveFolderId, setMoveFolderId] = useState('');
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -194,6 +219,12 @@ export function EmailClient() {
 
   const selectedFolder = visibleFolders.find((folder) => folder.id === selectedFolderId) ?? null;
   const unreadCount = messages.filter((message) => !message.is_read).length;
+  const attachmentCount = messages.filter((message) => message.has_attachments).length;
+  const filteredMessages = useMemo(() => {
+    if (activeFilter === 'unread') return messages.filter((message) => !message.is_read);
+    if (activeFilter === 'attachments') return messages.filter((message) => message.has_attachments);
+    return messages;
+  }, [activeFilter, messages]);
 
   const params = useMemo(() => {
     const next = new URLSearchParams();
@@ -227,6 +258,7 @@ export function EmailClient() {
       setMailboxes(nextMailboxes);
       setFolders(nextFolders);
       setMessages(nextMessages);
+      setSelectedMessageIds(new Set());
       setSelectedMailboxId(nextMailboxId);
       setSelectedFolderId(nextFolderId);
       setSelectedMessageId((current) =>
@@ -297,21 +329,60 @@ export function EmailClient() {
     setMoveFolderId(
       visibleFolders.find((folder) => folder.id !== selectedMessage?.folder_id)?.id ?? '',
     );
+    setRuleDraft((current) => ({
+      ...current,
+      targetFolderId:
+        current.targetFolderId && visibleFolders.some((folder) => folder.id === current.targetFolderId)
+          ? current.targetFolderId
+          : visibleFolders.find((folder) => folder.id !== selectedMessage?.folder_id)?.id ?? visibleFolders[0]?.id ?? '',
+    }));
   }, [selectedMessage?.folder_id, visibleFolders]);
 
-  async function patchMessage(body: Record<string, unknown>) {
-    if (!selectedMessage) return;
+  async function patchMessageById(messageId: string, body: Record<string, unknown>, reload = true) {
     const res = await fetch('/api/email/messages', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message_id: selectedMessage.id, ...body }),
+      body: JSON.stringify({ message_id: messageId, ...body }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       toast.error(payload.error || 'No se pudo actualizar');
-      return;
+      return false;
     }
+    if (reload) await load();
+    return true;
+  }
+
+  async function patchMessage(body: Record<string, unknown>) {
+    if (!selectedMessage) return;
+    await patchMessageById(selectedMessage.id, body);
+  }
+
+  async function bulkPatchMessages(body: Record<string, unknown>) {
+    const ids = Array.from(selectedMessageIds);
+    if (ids.length === 0) return;
+    const results = await Promise.all(ids.map((id) => patchMessageById(id, body, false)));
+    const updated = results.filter(Boolean).length;
+    if (updated > 0) toast.success(`${updated} correos actualizados`);
     await load();
+  }
+
+  function toggleMessageSelection(messageId: string) {
+    setSelectedMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }
+
+  function toggleVisibleSelection() {
+    setSelectedMessageIds((current) => {
+      const visibleIds = filteredMessages.map((message) => message.id);
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => current.has(id));
+      if (allSelected) return new Set([...current].filter((id) => !visibleIds.includes(id)));
+      return new Set([...current, ...visibleIds]);
+    });
   }
 
   async function sync() {
@@ -369,6 +440,33 @@ export function EmailClient() {
     }
     toast.success('Regla aplicada');
     await load();
+  }
+
+  async function createRuleFromBuilder() {
+    if (!selectedMailbox || !ruleDraft.value.trim() || !ruleDraft.targetFolderId) return;
+    const res = await fetch('/api/email/rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mailbox_id: selectedMailbox.id,
+        target_folder_id: ruleDraft.targetFolderId,
+        name: ruleDraft.name.trim() || `Regla ${ruleDraft.value.trim()}`,
+        field: ruleDraft.field,
+        operator: ruleDraft.operator,
+        value: ruleDraft.value.trim(),
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudo crear la regla');
+      return;
+    }
+    const nextRule = payload.rule as Rule;
+    setRules((current) => [...current, nextRule]);
+    setSelectedRuleId(nextRule.id);
+    setRuleDraft(emptyRuleDraft);
+    setRuleBuilderOpen(false);
+    toast.success('Regla creada');
   }
 
   function openNewMessage() {
@@ -446,6 +544,13 @@ export function EmailClient() {
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col rounded-lg border border-border bg-background">
       <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <Button size="icon-sm" variant="ghost" onClick={toggleVisibleSelection} disabled={filteredMessages.length === 0} title="Seleccionar correos">
+          {filteredMessages.length > 0 && filteredMessages.every((message) => selectedMessageIds.has(message.id)) ? (
+            <CheckSquare className="size-4" />
+          ) : (
+            <Square className="size-4" />
+          )}
+        </Button>
         <Button onClick={openNewMessage} disabled={!selectedMailbox?.can_send}>
           <PencilLine className="size-4" />
           Nuevo correo
@@ -463,6 +568,28 @@ export function EmailClient() {
           {selectedMessage?.is_read ? <Mail className="size-4" /> : <MailOpen className="size-4" />}
           {selectedMessage?.is_read ? 'No leido' : 'Leido'}
         </Button>
+        {selectedMessageIds.size > 0 ? (
+          <div className="flex items-center gap-2 border-l border-border pl-2">
+            <span className="text-sm text-muted-foreground">{selectedMessageIds.size} seleccionados</span>
+            <Button size="sm" variant="outline" onClick={() => bulkPatchMessages({ is_read: true })}>
+              <MailOpen className="size-4" />
+              Leidos
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => bulkPatchMessages({ is_read: false })}>
+              <Mail className="size-4" />
+              No leidos
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => bulkPatchMessages({ folder_id: moveFolderId })}
+              disabled={!moveFolderId}
+            >
+              <Archive className="size-4" />
+              Mover lote
+            </Button>
+          </div>
+        ) : null}
         <div className="flex min-w-[220px] items-center gap-2">
           <select
             value={moveFolderId}
@@ -489,6 +616,15 @@ export function EmailClient() {
           </Button>
         </div>
         <div className="ml-auto flex min-w-[240px] items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setRuleBuilderOpen((current) => !current)}
+            disabled={!selectedMailbox}
+          >
+            <Tag className="size-4" />
+            Nueva regla
+          </Button>
           <select
             value={selectedRuleId}
             onChange={(event) => setSelectedRuleId(event.target.value)}
@@ -621,28 +757,53 @@ export function EmailClient() {
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
               <span>{unreadCount} no leidos</span>
             </div>
+            <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
+              {[
+                { id: 'all' as const, label: 'Todos', count: messages.length },
+                { id: 'unread' as const, label: 'No leidos', count: unreadCount },
+                { id: 'attachments' as const, label: 'Adjuntos', count: attachmentCount },
+              ].map((filter) => (
+                <button
+                  key={filter.id}
+                  type="button"
+                  onClick={() => setActiveFilter(filter.id)}
+                  className={cn(
+                    'h-7 rounded-md px-2 text-xs font-medium transition-colors',
+                    activeFilter === filter.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {filter.label} {filter.count}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="max-h-[calc(100vh-15rem)] overflow-y-auto">
             {loading ? (
               <div className="flex justify-center py-12">
                 <Loader2 className="size-5 animate-spin text-primary" />
               </div>
-            ) : messages.length === 0 ? (
+            ) : filteredMessages.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">No hay correos en esta vista.</div>
             ) : (
-              messages.map((message) => (
-                <button
+              filteredMessages.map((message) => (
+                <div
                   key={message.id}
-                  type="button"
-                  onClick={() => setSelectedMessageId(message.id)}
                   className={cn(
                     'grid w-full grid-cols-[auto_minmax(0,1fr)] gap-2 border-b border-border p-3 text-left transition-colors hover:bg-muted/60',
                     selectedMessage?.id === message.id && 'bg-muted',
                   )}
                 >
-                  <span className={cn('mt-1 size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
-                  <span className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => toggleMessageSelection(message.id)}
+                    className="mt-0.5 flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+                    title="Seleccionar"
+                  >
+                    {selectedMessageIds.has(message.id) ? <CheckSquare className="size-4" /> : <Square className="size-4" />}
+                  </button>
+                  <button type="button" onClick={() => setSelectedMessageId(message.id)} className="min-w-0 text-left">
                     <span className="flex items-center gap-2">
+                      <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
                       <span className={cn('truncate text-sm', !message.is_read && 'font-semibold')}>
                         {message.from_name || message.from_address}
                       </span>
@@ -653,8 +814,8 @@ export function EmailClient() {
                       <span className="truncate">{message.subject || '(Sin asunto)'}</span>
                     </span>
                     <span className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{message.snippet}</span>
-                  </span>
-                </button>
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -737,6 +898,74 @@ export function EmailClient() {
               <p className="text-sm">Selecciona un correo para leerlo.</p>
             </div>
           )}
+
+          {ruleBuilderOpen ? (
+            <div className="absolute right-4 top-4 z-10 w-[min(460px,calc(100%-2rem))] rounded-lg border border-border bg-background shadow-xl">
+              <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">Nueva regla</p>
+                  <p className="truncate text-xs text-muted-foreground">{selectedMailbox?.address}</p>
+                </div>
+                <Button size="icon-sm" variant="ghost" onClick={() => setRuleBuilderOpen(false)} title="Cerrar">
+                  <X className="size-4" />
+                </Button>
+              </div>
+              <div className="grid gap-3 p-3">
+                <Input
+                  value={ruleDraft.name}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Nombre de la regla"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={ruleDraft.field}
+                    onChange={(event) => setRuleDraft((current) => ({ ...current, field: event.target.value }))}
+                    className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
+                  >
+                    <option value="from">Remitente</option>
+                    <option value="domain">Dominio</option>
+                    <option value="subject">Asunto</option>
+                    <option value="to">Destinatario</option>
+                  </select>
+                  <select
+                    value={ruleDraft.operator}
+                    onChange={(event) => setRuleDraft((current) => ({ ...current, operator: event.target.value }))}
+                    className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
+                  >
+                    <option value="contains">Contiene</option>
+                    <option value="equals">Es igual</option>
+                    <option value="starts_with">Empieza por</option>
+                    <option value="ends_with">Termina por</option>
+                  </select>
+                </div>
+                <Input
+                  value={ruleDraft.value}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, value: event.target.value }))}
+                  placeholder="Valor"
+                />
+                <select
+                  value={ruleDraft.targetFolderId}
+                  onChange={(event) => setRuleDraft((current) => ({ ...current, targetFolderId: event.target.value }))}
+                  className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
+                >
+                  {visibleFolders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      Mover a {folder.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setRuleBuilderOpen(false)}>
+                    Cancelar
+                  </Button>
+                  <Button size="sm" onClick={createRuleFromBuilder} disabled={!ruleDraft.value.trim() || !ruleDraft.targetFolderId}>
+                    <Wand2 className="size-4" />
+                    Crear regla
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           {composeOpen ? (
             <div className="absolute bottom-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(620px,calc(100%-2rem))] flex-col rounded-lg border border-border bg-background shadow-xl">
