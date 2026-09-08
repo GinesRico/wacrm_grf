@@ -11,7 +11,6 @@ import Underline from '@tiptap/extension-underline';
 import {
   Archive,
   Bold,
-  CheckSquare,
   Download,
   FileIcon,
   FolderPlus,
@@ -31,7 +30,6 @@ import {
   Search,
   Send,
   Settings,
-  Square,
   Star,
   Tag,
   Trash2,
@@ -148,6 +146,7 @@ interface ComposeState {
 
 type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
 type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
+type EmailColumnId = 'status' | 'from' | 'subject' | 'labels' | 'received' | 'size';
 type ContextActionId =
   | 'open'
   | 'reply'
@@ -180,6 +179,8 @@ interface ContextActionItem {
   icon: LucideIcon;
 }
 
+type EmailColumnWidths = Record<EmailColumnId, number>;
+
 interface RuleDraft {
   name: string;
   field: string;
@@ -209,10 +210,55 @@ const emptyRuleDraft: RuleDraft = {
 const CONTEXT_MENU_WIDTH = 240;
 const CONTEXT_MENU_HEIGHT = 360;
 const VIEWPORT_GAP = 8;
+const EMAIL_COLUMN_STORAGE_KEY = 'wacrm.email.column-widths.v1';
+const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
+  status: 48,
+  from: 170,
+  subject: 360,
+  labels: 140,
+  received: 96,
+  size: 84,
+};
+const MIN_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
+  status: 44,
+  from: 120,
+  subject: 220,
+  labels: 96,
+  received: 84,
+  size: 70,
+};
 
 function initialSearchParam(name: string) {
   if (typeof window === 'undefined') return null;
   return new URLSearchParams(window.location.search).get(name);
+}
+
+function initialEmailColumnWidths(): EmailColumnWidths {
+  if (typeof window === 'undefined') return DEFAULT_EMAIL_COLUMN_WIDTHS;
+  try {
+    const stored = window.localStorage.getItem(EMAIL_COLUMN_STORAGE_KEY);
+    if (!stored) return DEFAULT_EMAIL_COLUMN_WIDTHS;
+    const parsed = JSON.parse(stored) as Partial<EmailColumnWidths>;
+    return {
+      status: Math.max(parsed.status ?? DEFAULT_EMAIL_COLUMN_WIDTHS.status, MIN_EMAIL_COLUMN_WIDTHS.status),
+      from: Math.max(parsed.from ?? DEFAULT_EMAIL_COLUMN_WIDTHS.from, MIN_EMAIL_COLUMN_WIDTHS.from),
+      subject: Math.max(parsed.subject ?? DEFAULT_EMAIL_COLUMN_WIDTHS.subject, MIN_EMAIL_COLUMN_WIDTHS.subject),
+      labels: Math.max(parsed.labels ?? DEFAULT_EMAIL_COLUMN_WIDTHS.labels, MIN_EMAIL_COLUMN_WIDTHS.labels),
+      received: Math.max(parsed.received ?? DEFAULT_EMAIL_COLUMN_WIDTHS.received, MIN_EMAIL_COLUMN_WIDTHS.received),
+      size: Math.max(parsed.size ?? DEFAULT_EMAIL_COLUMN_WIDTHS.size, MIN_EMAIL_COLUMN_WIDTHS.size),
+    };
+  } catch {
+    return DEFAULT_EMAIL_COLUMN_WIDTHS;
+  }
+}
+
+function emailMessageGridTemplate(widths: EmailColumnWidths) {
+  return `${widths.status}px ${widths.from}px minmax(${widths.subject}px,1fr) ${widths.labels}px ${widths.received}px ${widths.size}px`;
+}
+
+function hasExternalEmailContent(html: string | null) {
+  if (!html) return false;
+  return /\s(?:src|srcset|background)=["']https?:\/\//i.test(html);
 }
 
 function splitRecipients(value: string): string[] {
@@ -302,6 +348,38 @@ function MessageContextMenu({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function ResizableMessageHeader({
+  label,
+  column,
+  sortable,
+  onSort,
+  onResizeStart,
+}: {
+  label: string;
+  column: EmailColumnId;
+  sortable?: boolean;
+  onSort?: () => void;
+  onResizeStart: (column: EmailColumnId, event: MouseEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <div className="relative flex min-w-0 items-center pr-2">
+      {sortable ? (
+        <button type="button" onClick={onSort} className="truncate text-left hover:text-foreground">
+          {label}
+        </button>
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
+      <button
+        type="button"
+        onMouseDown={(event) => onResizeStart(column, event)}
+        className="absolute right-0 top-1/2 h-5 w-2 -translate-y-1/2 cursor-col-resize rounded hover:bg-primary/30"
+        title={`Ajustar columna ${label}`}
+      />
     </div>
   );
 }
@@ -428,7 +506,6 @@ export function EmailClient() {
   const [moveFolderId, setMoveFolderId] = useState('');
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
   const [layout, setLayout] = useState<MailLayout>('three-pane');
-  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -440,6 +517,7 @@ export function EmailClient() {
   const [activeTabId, setActiveTabId] = useState('folder');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [columnWidths, setColumnWidths] = useState<EmailColumnWidths>(() => initialEmailColumnWidths());
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -486,6 +564,9 @@ export function EmailClient() {
 
   const trashFolderId = visibleFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
   const isMessageTabActive = activeTabId !== 'folder';
+  const messageGridTemplate = emailMessageGridTemplate(columnWidths);
+  const messageGridMinWidth = Object.values(columnWidths).reduce((total, width) => total + width, 0);
+  const selectedMessageHasExternalContent = hasExternalEmailContent(selectedMessage?.body_html ?? null);
   const selectedLabel = labels.find((label) => label.id === selectedLabelId) ?? null;
   const activeSearchChips = [
     query.trim() ? { id: 'query', label: `Texto: ${query.trim()}` } : null,
@@ -520,7 +601,6 @@ export function EmailClient() {
       setMailboxes(nextMailboxes);
       setFolders(nextFolders);
       setMessages(nextMessages);
-      setSelectedMessageIds(new Set());
       setSelectedMailboxId(nextMailboxId);
       setSelectedFolderId(nextFolderId);
       setSelectedMessageId((current) =>
@@ -562,6 +642,10 @@ export function EmailClient() {
       window.removeEventListener('scroll', closeMenus, true);
     };
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(EMAIL_COLUMN_STORAGE_KEY, JSON.stringify(columnWidths));
+  }, [columnWidths]);
 
   useEffect(() => {
     if (!selectedMailboxId) {
@@ -701,41 +785,6 @@ export function EmailClient() {
     }
   }
 
-  async function bulkPatchMessages(body: Record<string, unknown>) {
-    const ids = Array.from(selectedMessageIds);
-    if (ids.length === 0) return;
-    const res = await fetch('/api/email/messages/batch', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message_ids: ids, ...body }),
-    });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast.error(payload.error || 'No se pudieron actualizar los correos');
-      return;
-    }
-    toast.success(`${payload.messages?.length ?? ids.length} correos actualizados`);
-    await load();
-  }
-
-  function toggleMessageSelection(messageId: string) {
-    setSelectedMessageIds((current) => {
-      const next = new Set(current);
-      if (next.has(messageId)) next.delete(messageId);
-      else next.add(messageId);
-      return next;
-    });
-  }
-
-  function toggleVisibleSelection() {
-    setSelectedMessageIds((current) => {
-      const visibleIds = filteredMessages.map((message) => message.id);
-      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => current.has(id));
-      if (allSelected) return new Set([...current].filter((id) => !visibleIds.includes(id)));
-      return new Set([...current, ...visibleIds]);
-    });
-  }
-
   function setTableSort(nextSort: 'received' | 'sender' | 'size') {
     setAdvanced((current) => ({
       ...current,
@@ -766,6 +815,25 @@ export function EmailClient() {
     if (chipId === 'filter') setActiveFilter('all');
     if (chipId === 'label') setSelectedLabelId('');
     if (chipId === 'scope') setSearchScope('folder');
+  }
+
+  function startColumnResize(column: EmailColumnId, event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = columnWidths[column];
+    function onPointerMove(moveEvent: globalThis.MouseEvent) {
+      const nextWidth = Math.max(MIN_EMAIL_COLUMN_WIDTHS[column], startWidth + moveEvent.clientX - startX);
+      setColumnWidths((current) => ({
+        ...current,
+        [column]: nextWidth,
+      }));
+    }
+    function onPointerUp() {
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', onPointerUp);
+    }
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
   }
 
   function openMessageContextMenu(event: MouseEvent, message: Message) {
@@ -1254,14 +1322,7 @@ export function EmailClient() {
 
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col rounded-lg border border-border bg-background">
-      <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <Button size="icon-sm" variant="ghost" onClick={toggleVisibleSelection} disabled={filteredMessages.length === 0} title="Seleccionar correos">
-          {filteredMessages.length > 0 && filteredMessages.every((message) => selectedMessageIds.has(message.id)) ? (
-            <CheckSquare className="size-4" />
-          ) : (
-            <Square className="size-4" />
-          )}
-        </Button>
+      <div className="flex min-h-14 items-center gap-2 overflow-x-auto border-b border-border px-3 py-2 whitespace-nowrap">
         <Button onClick={openNewMessage} disabled={!selectedMailbox?.can_send}>
           <PencilLine className="size-4" />
           Nuevo correo
@@ -1288,15 +1349,6 @@ export function EmailClient() {
           <Star className={cn('size-4', selectedMessage?.is_starred && 'fill-amber-400 text-amber-500')} />
           Favorito
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => selectedMessage && void openMessageTab(selectedMessage)}
-          disabled={!selectedMessage}
-        >
-          <MailOpen className="size-4" />
-          Abrir pestana
-        </Button>
         <Button size="sm" variant="outline" onClick={() => openReply()} disabled={!selectedMessage || !selectedMailbox?.can_send}>
           <Reply className="size-4" />
           Responder
@@ -1305,47 +1357,12 @@ export function EmailClient() {
           <Send className="size-4" />
           Reenviar
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => selectedMessage && trashFolderId && patchMessage({ folder_id: trashFolderId })}
-          disabled={!selectedMessage || !trashFolderId}
-        >
-          <Trash2 className="size-4" />
-          Papelera
-        </Button>
-        <Button size="sm" variant="outline" onClick={openSelectedMessageMenu} disabled={!selectedMessage}>
-          <MoreHorizontal className="size-4" />
-          Acciones
-        </Button>
-        {selectedMessageIds.size > 0 ? (
-          <div className="flex items-center gap-2 border-l border-border pl-2">
-            <span className="text-sm text-muted-foreground">{selectedMessageIds.size} seleccionados</span>
-            <Button size="sm" variant="outline" onClick={() => bulkPatchMessages({ is_read: true })}>
-              <MailOpen className="size-4" />
-              Leidos
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => bulkPatchMessages({ is_read: false })}>
-              <Mail className="size-4" />
-              No leidos
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => bulkPatchMessages({ folder_id: moveFolderId })}
-              disabled={!moveFolderId}
-            >
-              <Archive className="size-4" />
-              Mover lote
-            </Button>
-          </div>
-        ) : null}
-        <div className="flex min-w-[220px] items-center gap-2">
+        <div className="flex min-w-[210px] items-center gap-2">
           <select
             value={moveFolderId}
             onChange={(event) => setMoveFolderId(event.target.value)}
             disabled={!selectedMessage}
-            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-card px-2 text-sm"
+            className="h-8 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-sm"
           >
             {visibleFolders
               .filter((folder) => folder.id !== selectedMessage?.folder_id)
@@ -1365,7 +1382,11 @@ export function EmailClient() {
             Mover
           </Button>
         </div>
-        <div className="ml-auto flex min-w-[240px] items-center gap-2">
+        <Button size="sm" variant="outline" onClick={openSelectedMessageMenu} disabled={!selectedMessage}>
+          <MoreHorizontal className="size-4" />
+          Acciones
+        </Button>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <div className="grid grid-cols-3 rounded-lg bg-muted p-1">
             {[
               { id: 'three-pane' as const, label: '3' },
@@ -1390,6 +1411,7 @@ export function EmailClient() {
             variant="outline"
             onClick={() => setRuleBuilderOpen((current) => !current)}
             disabled={!selectedMailbox}
+            className="hidden xl:inline-flex"
           >
             <Tag className="size-4" />
             Nueva regla
@@ -1398,7 +1420,7 @@ export function EmailClient() {
             value={selectedRuleId}
             onChange={(event) => setSelectedRuleId(event.target.value)}
             disabled={!rules.length || !selectedMessage}
-            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-card px-2 text-sm"
+            className="hidden h-8 w-36 rounded-md border border-border bg-card px-2 text-sm xl:block"
           >
             {rules.length === 0 ? <option>Sin reglas</option> : null}
             {rules.map((rule) => (
@@ -1412,6 +1434,7 @@ export function EmailClient() {
             variant="outline"
             onClick={applyRule}
             disabled={!selectedMessage || !selectedRuleId}
+            className="hidden xl:inline-flex"
           >
             <Wand2 className="size-4" />
             Aplicar
@@ -1757,32 +1780,17 @@ export function EmailClient() {
             ) : filteredMessages.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">No hay correos en esta vista.</div>
             ) : (
-              <div className="min-w-[760px]">
-                <div className="sticky top-0 z-10 grid grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={toggleVisibleSelection}
-                    className="flex size-7 items-center justify-center rounded hover:bg-muted hover:text-foreground"
-                    title="Seleccionar todos los visibles"
-                  >
-                    {filteredMessages.length > 0 && filteredMessages.every((message) => selectedMessageIds.has(message.id)) ? (
-                      <CheckSquare className="size-4" />
-                    ) : (
-                      <Square className="size-4" />
-                    )}
-                  </button>
-                  <span>Estado</span>
-                  <button type="button" onClick={() => setTableSort('sender')} className="truncate text-left hover:text-foreground">
-                    De
-                  </button>
-                  <span>Asunto</span>
-                  <span>Categorias</span>
-                  <button type="button" onClick={() => setTableSort('received')} className="truncate text-left hover:text-foreground">
-                    Recibido
-                  </button>
-                  <button type="button" onClick={() => setTableSort('size')} className="truncate text-left hover:text-foreground">
-                    Tamano
-                  </button>
+              <div style={{ minWidth: messageGridMinWidth }}>
+                <div
+                  className="sticky top-0 z-10 grid items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground"
+                  style={{ gridTemplateColumns: messageGridTemplate }}
+                >
+                  <ResizableMessageHeader label="Estado" column="status" onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="De" column="from" sortable onSort={() => setTableSort('sender')} onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="Asunto" column="subject" onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="Categorias" column="labels" onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="Recibido" column="received" sortable onSort={() => setTableSort('received')} onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="Tamano" column="size" sortable onSort={() => setTableSort('size')} onResizeStart={startColumnResize} />
                 </div>
                 {filteredMessages.map((message) => (
                   <div
@@ -1796,23 +1804,13 @@ export function EmailClient() {
                       if (event.key === 'Enter') void selectMessage(message);
                     }}
                     className={cn(
-                      'grid min-h-9 grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
+                      'grid min-h-9 items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
                       selectedMessage?.id === message.id && 'bg-primary/10',
                       !message.is_read && 'font-semibold',
                     )}
+                    style={{ gridTemplateColumns: messageGridTemplate }}
                     title="Doble clic para abrir en pestana. Clic derecho para acciones."
                   >
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleMessageSelection(message.id);
-                      }}
-                      className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-                      title="Seleccionar"
-                    >
-                      {selectedMessageIds.has(message.id) ? <CheckSquare className="size-4" /> : <Square className="size-4" />}
-                    </button>
                     <div className="flex items-center gap-1.5">
                       <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
                       {message.has_attachments ? <Paperclip className="size-3.5 shrink-0 text-muted-foreground" /> : <Mail className="size-3.5 shrink-0 text-muted-foreground" />}
@@ -1968,7 +1966,7 @@ export function EmailClient() {
                   </div>
                 ) : null}
 
-                {selectedMessage.body_html ? (
+                {selectedMessageHasExternalContent ? (
                   <div className="mt-3 flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                     <span>Contenido externo bloqueado</span>
                     <Button
