@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
+import { Menu } from "lucide-react";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
-import { Header } from "@/components/layout/header";
 import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 import { useIncomingMessageAlerts } from "@/hooks/use-incoming-message-alerts";
 import {
@@ -231,7 +231,14 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         onToggleCollapsed={handleToggleSidebarCollapsed}
       />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header onOpenSidebar={() => setSidebarOpen(true)} />
+        <button
+          type="button"
+          onClick={() => setSidebarOpen(true)}
+          aria-label={t("openMenu")}
+          className="fixed left-3 top-3 z-30 flex size-10 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+        >
+          <Menu className="size-5" />
+        </button>
         {/* Thinner horizontal padding on mobile so cards have room to breathe. */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">
           {children}

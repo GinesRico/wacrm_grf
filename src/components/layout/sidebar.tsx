@@ -7,8 +7,11 @@ import { useEffect, useState } from "react";
 import { FaWhatsapp } from "react-icons/fa";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { useTheme } from "@/hooks/use-theme";
+import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
+  Bell,
   Bot,
   CalendarClock,
   CreditCard,
@@ -18,9 +21,11 @@ import {
   LogOut,
   Mail,
   MessageSquare,
+  Moon,
   Radio,
   Settings,
   Shield,
+  Sun,
   User,
   UserCog,
   Users,
@@ -140,8 +145,11 @@ export function Sidebar({
   const pathname = usePathname();
   const { profile, account, accountRole, canEditSettings, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+  const unreadNotifications = useUnreadNotifications();
+  const { mode, toggleMode } = useTheme();
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
+  const ThemeIcon = mode === "dark" ? Sun : Moon;
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -468,6 +476,30 @@ export function Sidebar({
               >
                 <User className="size-4" />
                 {t("menuProfile")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                render={
+                  <Link
+                    href="/notifications"
+                    onClick={onClose}
+                    className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+                  />
+                }
+              >
+                <Bell className="size-4" />
+                <span className="min-w-0 flex-1">{t("menuNotifications")}</span>
+                {unreadNotifications > 0 ? (
+                  <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+                    {unreadNotifications > 9 ? "9+" : unreadNotifications}
+                  </span>
+                ) : null}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={toggleMode}
+                className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+              >
+                <ThemeIcon className="size-4" />
+                {t("menuTheme")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 render={

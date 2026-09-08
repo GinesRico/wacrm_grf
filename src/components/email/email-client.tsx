@@ -1723,7 +1723,7 @@ export function EmailClient() {
   });
 
   return (
-    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-background sm:-m-6">
+    <div className="-m-4 flex h-screen flex-col overflow-hidden bg-background sm:-m-6">
       <div className="flex min-h-10 items-end gap-2 border-b border-border bg-card px-2">
         <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
           <button
