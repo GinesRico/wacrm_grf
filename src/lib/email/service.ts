@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import crypto from 'crypto';
 import { ImapFlow } from 'imapflow';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
@@ -84,7 +84,8 @@ function serializeDate(value: Date | null | undefined) {
   return value?.toISOString() ?? null;
 }
 
-export function serializeEmailMessage(row: typeof emailMessages.$inferSelect) {
+export function serializeEmailMessage(row: typeof emailMessages.$inferSelect, extras?: { isReplied?: boolean } | number) {
+  const flags = typeof extras === 'object' ? extras : undefined;
   return {
     id: row.id,
     account_id: row.accountId,
@@ -102,6 +103,7 @@ export function serializeEmailMessage(row: typeof emailMessages.$inferSelect) {
     body_html: row.bodyHtml,
     is_read: row.isRead,
     is_starred: row.isStarred,
+    is_replied: flags?.isReplied ?? false,
     has_attachments: row.hasAttachments,
     raw_size: row.rawSize,
     created_at: row.createdAt.toISOString(),
@@ -886,10 +888,26 @@ export async function listEmailMessages(args: {
   const filteredRows = args.labelId
     ? rows.filter((row) => labelsByMessage.has(row.id))
     : rows;
+  const repliedMessageIds = new Set<string>();
+  if (filteredRows.length > 0) {
+    const repliedRows = await db
+      .select({ threadKey: emailMessages.threadKey })
+      .from(emailMessages)
+      .where(
+        and(
+          eq(emailMessages.accountId, args.accountId),
+          inArray(emailMessages.threadKey, filteredRows.map((row) => row.id)),
+          isNotNull(emailMessages.sentAt),
+        ),
+      );
+    for (const row of repliedRows) {
+      if (row.threadKey) repliedMessageIds.add(row.threadKey);
+    }
+  }
 
   return {
     messages: filteredRows.map((row) => ({
-      ...serializeEmailMessage(row),
+      ...serializeEmailMessage(row, { isReplied: repliedMessageIds.has(row.id) }),
       labels: labelsByMessage.get(row.id) ?? [],
     })),
     ...workspace,

@@ -11,8 +11,11 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import {
   Archive,
+  ArrowLeft,
+  ArrowRight,
   Bold,
   Check,
+  Columns3,
   Download,
   FileIcon,
   Filter,
@@ -21,12 +24,14 @@ import {
   Info,
   Italic,
   Inbox,
+  LayoutList,
   LinkIcon,
   Loader2,
   Mail,
   MailOpen,
   MoreHorizontal,
   Paperclip,
+  PanelBottom,
   PencilLine,
   Printer,
   RefreshCw,
@@ -47,8 +52,10 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
@@ -86,6 +93,7 @@ interface Message {
   body_html: string | null;
   is_read: boolean;
   is_starred: boolean;
+  is_replied?: boolean;
   has_attachments: boolean;
   raw_size: number | null;
   labels?: EmailLabel[];
@@ -147,6 +155,8 @@ interface ComposeState {
 type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
 type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
 type EmailColumnId = 'status' | 'from' | 'subject' | 'labels' | 'received' | 'size';
+type EmailColumnVisibility = Record<EmailColumnId, boolean>;
+type EmailListTextMode = 'compact' | 'normal' | 'comfortable';
 type ContextActionId =
   | 'open'
   | 'reply'
@@ -173,6 +183,13 @@ interface ContextMenuState {
   messageId: string;
 }
 
+interface AttachmentPreviewState {
+  attachment: Attachment;
+  url: string;
+  x: number;
+  y: number;
+}
+
 interface ContextActionItem {
   id: ContextActionId;
   label: string;
@@ -180,6 +197,11 @@ interface ContextActionItem {
 }
 
 type EmailColumnWidths = Record<EmailColumnId, number>;
+
+interface EmailColumnSettings {
+  order: EmailColumnId[];
+  visibility: EmailColumnVisibility;
+}
 
 interface RuleDraft {
   name: string;
@@ -210,8 +232,29 @@ const emptyRuleDraft: RuleDraft = {
 const CONTEXT_MENU_WIDTH = 240;
 const CONTEXT_MENU_HEIGHT = 360;
 const VIEWPORT_GAP = 8;
+const EMAIL_LAYOUT_STORAGE_KEY = 'wacrm.email.layout.v1';
+const EMAIL_LIST_TEXT_MODE_STORAGE_KEY = 'wacrm.email.list-text-mode.v1';
 const EMAIL_COLUMN_STORAGE_KEY = 'wacrm.email.column-widths.v1';
+const EMAIL_COLUMN_SETTINGS_STORAGE_KEY = 'wacrm.email.column-settings.v1';
 const EMAIL_PANEL_STORAGE_KEY = 'wacrm.email.panel-widths.v1';
+const MAIL_LAYOUT_ORDER: MailLayout[] = ['three-pane', 'focused-list', 'bottom-pane'];
+const DEFAULT_EMAIL_COLUMN_ORDER: EmailColumnId[] = ['status', 'from', 'subject', 'labels', 'received', 'size'];
+const EMAIL_COLUMN_LABELS: Record<EmailColumnId, string> = {
+  status: 'Estado',
+  from: 'De',
+  subject: 'Asunto',
+  labels: 'Categorias',
+  received: 'Recibido',
+  size: 'Tamano',
+};
+const DEFAULT_EMAIL_COLUMN_VISIBILITY: EmailColumnVisibility = {
+  status: true,
+  from: true,
+  subject: true,
+  labels: true,
+  received: true,
+  size: true,
+};
 const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
   status: 48,
   from: 170,
@@ -257,6 +300,18 @@ function initialSearchParam(name: string) {
   return new URLSearchParams(window.location.search).get(name);
 }
 
+function initialMailLayout(): MailLayout {
+  if (typeof window === 'undefined') return 'three-pane';
+  const stored = window.localStorage.getItem(EMAIL_LAYOUT_STORAGE_KEY);
+  return MAIL_LAYOUT_ORDER.includes(stored as MailLayout) ? (stored as MailLayout) : 'three-pane';
+}
+
+function initialEmailListTextMode(): EmailListTextMode {
+  if (typeof window === 'undefined') return 'normal';
+  const stored = window.localStorage.getItem(EMAIL_LIST_TEXT_MODE_STORAGE_KEY);
+  return stored === 'compact' || stored === 'comfortable' || stored === 'normal' ? stored : 'normal';
+}
+
 function initialEmailColumnWidths(): EmailColumnWidths {
   if (typeof window === 'undefined') return DEFAULT_EMAIL_COLUMN_WIDTHS;
   try {
@@ -276,8 +331,35 @@ function initialEmailColumnWidths(): EmailColumnWidths {
   }
 }
 
-function emailMessageGridTemplate(widths: EmailColumnWidths) {
-  return `${widths.status}px ${widths.from}px minmax(${widths.subject}px,1fr) ${widths.labels}px ${widths.received}px ${widths.size}px`;
+function initialEmailColumnSettings(): EmailColumnSettings {
+  if (typeof window === 'undefined') {
+    return { order: DEFAULT_EMAIL_COLUMN_ORDER, visibility: DEFAULT_EMAIL_COLUMN_VISIBILITY };
+  }
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(EMAIL_COLUMN_SETTINGS_STORAGE_KEY) || '{}') as Partial<EmailColumnSettings>;
+    const storedOrder = Array.isArray(stored.order) ? stored.order : [];
+    const order = [
+      ...storedOrder.filter((column): column is EmailColumnId => DEFAULT_EMAIL_COLUMN_ORDER.includes(column as EmailColumnId)),
+      ...DEFAULT_EMAIL_COLUMN_ORDER.filter((column) => !storedOrder.includes(column)),
+    ];
+    return {
+      order,
+      visibility: {
+        ...DEFAULT_EMAIL_COLUMN_VISIBILITY,
+        ...(stored.visibility ?? {}),
+        status: true,
+        subject: true,
+      },
+    };
+  } catch {
+    return { order: DEFAULT_EMAIL_COLUMN_ORDER, visibility: DEFAULT_EMAIL_COLUMN_VISIBILITY };
+  }
+}
+
+function emailMessageGridTemplate(widths: EmailColumnWidths, columns: EmailColumnId[]) {
+  return columns
+    .map((column) => column === 'subject' ? `minmax(${widths.subject}px,1fr)` : `${widths[column]}px`)
+    .join(' ');
 }
 
 function hasExternalEmailContent(html: string | null) {
@@ -324,6 +406,21 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function replyQuote(message: Message) {
+  const date = new Date(message.received_at).toLocaleString('es-ES');
+  const author = message.from_name ? `${message.from_name} <${message.from_address}>` : message.from_address;
+  const quotedText = message.body_text || message.snippet || '';
+  const text = `\n\nEl ${date}, ${author} escribio:\n> ${quotedText.replace(/\n/g, '\n> ')}`;
+  const html = [
+    '<p><br></p>',
+    '<blockquote style="margin:0 0 0 0.75rem;border-left:3px solid #d4d4d8;padding-left:0.75rem;color:#52525b">',
+    `<p>El ${escapeHtml(date)}, ${escapeHtml(author)} escribio:</p>`,
+    `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(quotedText)}</pre>`,
+    '</blockquote>',
+  ].join('');
+  return { text, html };
 }
 
 function contextActions(isRead: boolean): ContextActionItem[] {
@@ -564,7 +661,8 @@ export function EmailClient() {
   const [labels, setLabels] = useState<EmailLabel[]>([]);
   const [selectedLabelId, setSelectedLabelId] = useState('');
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
-  const [layout, setLayout] = useState<MailLayout>('three-pane');
+  const [layout, setLayout] = useState<MailLayout>(() => initialMailLayout());
+  const [listTextMode, setListTextMode] = useState<EmailListTextMode>(() => initialEmailListTextMode());
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -577,7 +675,9 @@ export function EmailClient() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [columnWidths, setColumnWidths] = useState<EmailColumnWidths>(() => initialEmailColumnWidths());
+  const [columnSettings, setColumnSettings] = useState<EmailColumnSettings>(() => initialEmailColumnSettings());
   const [panelWidths, setPanelWidths] = useState<EmailPanelWidths>(() => initialEmailPanelWidths());
+  const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -640,8 +740,9 @@ export function EmailClient() {
   const isBottomReaderLayout = layout === 'bottom-pane' && hasReaderPane && !isContentTabActive;
   const shouldShowMessageList = !isContentTabActive;
   const shouldShowContentPane = composeOpen || hasReaderPane || isMessageTabActive;
-  const messageGridTemplate = emailMessageGridTemplate(columnWidths);
-  const messageGridMinWidth = Object.values(columnWidths).reduce((total, width) => total + width, 0);
+  const visibleMessageColumns = columnSettings.order.filter((column) => columnSettings.visibility[column]);
+  const messageGridTemplate = emailMessageGridTemplate(columnWidths, visibleMessageColumns);
+  const messageGridMinWidth = visibleMessageColumns.reduce((total, column) => total + columnWidths[column], 0);
   const selectedMessageHasExternalContent = hasExternalEmailContent(selectedMessage?.body_html ?? null);
   const selectedLabel = labels.find((label) => label.id === selectedLabelId) ?? null;
   const activeFilterLabel =
@@ -658,6 +759,8 @@ export function EmailClient() {
     { id: 'attachments' as const, label: 'Con adjuntos', count: attachmentCount },
     { id: 'starred' as const, label: 'Favoritos', count: messages.filter((message) => message.is_starred).length },
   ];
+  const LayoutIcon = layout === 'three-pane' ? Columns3 : layout === 'bottom-pane' ? PanelBottom : LayoutList;
+  const layoutLabel = layout === 'three-pane' ? 'Vista de 3 paneles' : layout === 'bottom-pane' ? 'Vista abajo' : 'Vista lista';
   const activeSearchChips = [
     query.trim() ? { id: 'query', label: `Texto: ${query.trim()}` } : null,
     advanced.from.trim() ? { id: 'from', label: `De: ${advanced.from.trim()}` } : null,
@@ -738,6 +841,18 @@ export function EmailClient() {
   }, [columnWidths]);
 
   useEffect(() => {
+    window.localStorage.setItem(EMAIL_COLUMN_SETTINGS_STORAGE_KEY, JSON.stringify(columnSettings));
+  }, [columnSettings]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EMAIL_LIST_TEXT_MODE_STORAGE_KEY, listTextMode);
+  }, [listTextMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EMAIL_LAYOUT_STORAGE_KEY, layout);
+  }, [layout]);
+
+  useEffect(() => {
     window.localStorage.setItem(EMAIL_PANEL_STORAGE_KEY, JSON.stringify(panelWidths));
   }, [panelWidths]);
 
@@ -795,6 +910,7 @@ export function EmailClient() {
   useEffect(() => {
     setAllowExternalContent(false);
     setDetailsOpen(false);
+    setAttachmentPreview(null);
   }, [selectedMessage?.id]);
 
   useEffect(() => {
@@ -917,6 +1033,95 @@ export function EmailClient() {
     if (chipId === 'scope') setSearchScope('folder');
   }
 
+  function cycleLayout() {
+    setLayout((current) => {
+      const currentIndex = MAIL_LAYOUT_ORDER.indexOf(current);
+      return MAIL_LAYOUT_ORDER[(currentIndex + 1) % MAIL_LAYOUT_ORDER.length] ?? 'three-pane';
+    });
+  }
+
+  function toggleMessageColumn(column: EmailColumnId) {
+    if (column === 'status' || column === 'subject') return;
+    setColumnSettings((current) => ({
+      ...current,
+      visibility: {
+        ...current.visibility,
+        [column]: !current.visibility[column],
+      },
+    }));
+  }
+
+  function moveMessageColumn(column: EmailColumnId, direction: -1 | 1) {
+    setColumnSettings((current) => {
+      const index = current.order.indexOf(column);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.order.length) return current;
+      const order = [...current.order];
+      [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
+      return { ...current, order };
+    });
+  }
+
+  function renderMessageCell(message: Message, column: EmailColumnId) {
+    if (column === 'status') {
+      return (
+        <div className="flex items-center gap-1.5">
+          <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
+          {message.is_replied ? (
+            <Reply className="size-3.5 shrink-0 text-primary" aria-label="Respondido" />
+          ) : message.has_attachments ? (
+            <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <Mail className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void patchMessageById(message.id, { is_starred: !message.is_starred });
+            }}
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-amber-500"
+            title={message.is_starred ? 'Quitar favorito' : 'Marcar favorito'}
+          >
+            <Star className={cn('size-3.5', message.is_starred && 'fill-amber-400 text-amber-500')} />
+          </button>
+        </div>
+      );
+    }
+    if (column === 'from') {
+      return <span className="truncate pr-3">{message.from_name || message.from_address}</span>;
+    }
+    if (column === 'subject') {
+      return (
+        <span className="min-w-0 pr-3">
+          <span className="block truncate">{message.subject || '(Sin asunto)'}</span>
+          {listTextMode !== 'compact' && message.snippet ? (
+            <span className="block truncate text-xs font-normal text-muted-foreground">{message.snippet}</span>
+          ) : null}
+        </span>
+      );
+    }
+    if (column === 'labels') {
+      return (
+        <span className="flex min-w-0 gap-1 overflow-hidden pr-2">
+          {message.labels?.slice(0, 2).map((label) => (
+            <span
+              key={label.id}
+              className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-white"
+              style={{ backgroundColor: label.color }}
+            >
+              {label.name}
+            </span>
+          ))}
+        </span>
+      );
+    }
+    if (column === 'received') {
+      return <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatDate(message.received_at)}</span>;
+    }
+    return <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatBytes(message.raw_size)}</span>;
+  }
+
   function startColumnResize(column: EmailColumnId, event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     const startX = event.clientX;
@@ -955,6 +1160,31 @@ export function EmailClient() {
     };
     window.addEventListener('mousemove', onPointerMove);
     window.addEventListener('mouseup', stopResize);
+  }
+
+  function startAttachmentPreviewDrag(event: MouseEvent<HTMLDivElement>) {
+    if (!attachmentPreview) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const originX = attachmentPreview.x;
+    const originY = attachmentPreview.y;
+    const onPointerMove = (moveEvent: globalThis.MouseEvent) => {
+      setAttachmentPreview((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          x: Math.min(Math.max(VIEWPORT_GAP, originX + moveEvent.clientX - startX), window.innerWidth - 360),
+          y: Math.min(Math.max(VIEWPORT_GAP, originY + moveEvent.clientY - startY), window.innerHeight - 220),
+        };
+      });
+    };
+    const stopDrag = () => {
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', stopDrag);
+    };
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', stopDrag);
   }
 
   function openMessageContextMenu(event: MouseEvent, message: Message) {
@@ -1183,6 +1413,7 @@ export function EmailClient() {
   function openReply(source?: Message) {
     const message = source ?? selectedMessage;
     if (!message) return;
+    const quote = replyQuote(message);
     setCurrentDraftId(null);
     setCompose({
       to: message.from_address,
@@ -1191,8 +1422,8 @@ export function EmailClient() {
       subject: message.subject.toLowerCase().startsWith('re:')
         ? message.subject
         : `Re: ${message.subject}`,
-      text: '',
-      html: '',
+      text: quote.text,
+      html: quote.html,
       inReplyToMessageId: message.id,
     });
     setComposeAttachments([]);
@@ -1203,6 +1434,7 @@ export function EmailClient() {
   function openReplyAll(source?: Message) {
     const message = source ?? selectedMessage;
     if (!message || !selectedMailbox) return;
+    const quote = replyQuote(message);
     const recipients = [message.from_address, ...(message.to_addresses ?? [])]
       .filter((address) => address && address !== selectedMailbox.address);
     setCurrentDraftId(null);
@@ -1213,8 +1445,8 @@ export function EmailClient() {
       subject: message.subject.toLowerCase().startsWith('re:')
         ? message.subject
         : `Re: ${message.subject}`,
-      text: '',
-      html: '',
+      text: quote.text,
+      html: quote.html,
       inReplyToMessageId: message.id,
     });
     setComposeAttachments([]);
@@ -1289,14 +1521,33 @@ export function EmailClient() {
     if (!silent) toast.success('Borrador guardado');
   }, [compose, composeAttachments, composeOpen, currentDraftId, selectedMailbox]);
 
-  async function downloadAttachment(attachment: Attachment) {
+  async function getAttachmentUrl(attachment: Attachment) {
     const res = await fetch(`/api/email/attachments/${attachment.id}`, { cache: 'no-store' });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || !payload.url) {
-      toast.error(payload.error || 'No se pudo descargar el adjunto');
-      return;
+      toast.error(payload.error || 'No se pudo abrir el adjunto');
+      return null;
     }
-    window.open(payload.url, '_blank', 'noopener,noreferrer');
+    return String(payload.url);
+  }
+
+  async function openAttachmentPreview(attachment: Attachment) {
+    const url = await getAttachmentUrl(attachment);
+    if (!url) return;
+    setAttachmentPreview({
+      attachment,
+      url,
+      x: Math.max(72, Math.round(window.innerWidth * 0.18)),
+      y: Math.max(72, Math.round(window.innerHeight * 0.12)),
+    });
+  }
+
+  async function downloadAttachment(attachment: Attachment) {
+    const url = attachmentPreview?.attachment.id === attachment.id
+      ? attachmentPreview.url
+      : await getAttachmentUrl(attachment);
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
 
   async function addComposeFiles(files: FileList | null) {
@@ -1332,6 +1583,13 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo enviar');
       toast.success(compose.inReplyToMessageId ? 'Respuesta enviada' : 'Correo enviado');
+      if (compose.inReplyToMessageId) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === compose.inReplyToMessageId ? { ...message, is_replied: true } : message,
+          ),
+        );
+      }
       if (currentDraftId) {
         await fetch(`/api/email/drafts?draft_id=${encodeURIComponent(currentDraftId)}`, {
           method: 'DELETE',
@@ -1403,36 +1661,68 @@ export function EmailClient() {
   });
 
   return (
-    <div className="-m-4 flex min-h-[calc(100vh-3.5rem)] flex-col bg-background sm:-m-6">
-      <div className="flex min-h-14 items-center gap-2 overflow-x-auto border-b border-border px-3 py-2 whitespace-nowrap">
-        <Button onClick={openNewMessage} disabled={!selectedMailbox?.can_send}>
-          <PencilLine className="size-4" />
-          Nuevo correo
-        </Button>
-        <Button size="sm" variant="outline" onClick={sync} disabled={syncing}>
-          {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-          Sincronizar
-        </Button>
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <div className="grid grid-cols-3 rounded-lg bg-muted p-1">
-            {[
-              { id: 'three-pane' as const, label: '3' },
-              { id: 'focused-list' as const, label: 'Lista' },
-              { id: 'bottom-pane' as const, label: 'Abajo' },
-            ].map((item) => (
+    <div className="-m-4 flex h-[calc(100vh-3.5rem)] flex-col overflow-hidden bg-background sm:-m-6">
+      <div className="flex min-h-10 items-end gap-2 border-b border-border bg-card px-2">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTabId('folder');
+              setComposeOpen(false);
+            }}
+            className={cn(
+              'flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
+              activeTabId === 'folder' ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
+            )}
+          >
+            <Inbox className="size-4" />
+            <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
+          </button>
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={cn(
+                'flex h-9 max-w-[260px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
+                activeTabId === tab.id ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
+              )}
+            >
+              {tab.type === 'compose' ? <PencilLine className="size-4 shrink-0" /> : <Mail className="size-4 shrink-0" />}
               <button
-                key={item.id}
                 type="button"
-                onClick={() => setLayout(item.id)}
-                className={cn(
-                  'h-7 min-w-10 rounded-md px-2 text-xs font-medium',
-                  layout === item.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                )}
+                onClick={() => {
+                  setActiveTabId(tab.id);
+                  if (tab.messageId) setSelectedMessageId(tab.messageId);
+                  if (tab.type !== 'compose') setComposeOpen(false);
+                  if (tab.type === 'compose') setComposeOpen(true);
+                }}
+                className="min-w-0 flex-1 truncate text-left"
               >
-                {item.label}
+                {tab.title}
               </button>
-            ))}
-          </div>
+              <button
+                type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                }}
+                className="ml-1 rounded p-0.5 hover:bg-muted"
+                title="Cerrar pestana"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
+          <Button size="icon-sm" onClick={openNewMessage} disabled={!selectedMailbox?.can_send} title="Nuevo correo" aria-label="Nuevo correo">
+            <PencilLine className="size-4" />
+          </Button>
+          <Button size="icon-sm" variant="outline" onClick={sync} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
+            {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          </Button>
+          <Button size="icon-sm" variant="outline" onClick={cycleLayout} title={`${layoutLabel}. Cambiar vista`} aria-label={`${layoutLabel}. Cambiar vista`}>
+            <LayoutIcon className="size-4" />
+          </Button>
           <Button
             size="icon-sm"
             variant="outline"
@@ -1440,61 +1730,11 @@ export function EmailClient() {
               window.location.href = '/settings?tab=email';
             }}
             title="Ajustes de correo"
+            aria-label="Ajustes de correo"
           >
             <Settings className="size-4" />
           </Button>
         </div>
-      </div>
-
-      <div className="flex min-h-10 items-end gap-1 border-b border-border bg-card px-2">
-        <button
-          type="button"
-          onClick={() => {
-            setActiveTabId('folder');
-            setComposeOpen(false);
-          }}
-          className={cn(
-            'flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
-            activeTabId === 'folder' ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
-          )}
-        >
-          <Inbox className="size-4" />
-          <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
-        </button>
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={cn(
-              'flex h-9 max-w-[260px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
-              activeTabId === tab.id ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
-            )}
-          >
-            {tab.type === 'compose' ? <PencilLine className="size-4 shrink-0" /> : <Mail className="size-4 shrink-0" />}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTabId(tab.id);
-                if (tab.messageId) setSelectedMessageId(tab.messageId);
-                if (tab.type !== 'compose') setComposeOpen(false);
-                if (tab.type === 'compose') setComposeOpen(true);
-              }}
-              className="min-w-0 flex-1 truncate text-left"
-            >
-              {tab.title}
-            </button>
-            <button
-              type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  closeTab(tab.id);
-              }}
-              className="ml-1 rounded p-0.5 hover:bg-muted"
-              title="Cerrar pestana"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        ))}
       </div>
 
       <div
@@ -1673,7 +1913,7 @@ export function EmailClient() {
         </aside>
 
         <section className={cn(
-          'relative flex min-w-0 flex-col border-b border-border bg-card lg:border-b-0',
+          'relative flex min-h-0 min-w-0 flex-col overflow-hidden border-b border-border bg-card lg:border-b-0',
           isSplitReaderLayout && 'lg:border-r',
           !shouldShowMessageList && 'hidden',
           isBottomReaderLayout && 'lg:col-start-2 lg:row-start-1',
@@ -1681,7 +1921,7 @@ export function EmailClient() {
           {isSplitReaderLayout ? (
             <PanelResizer label="Ajustar ancho de la lista" onResizeStart={(event) => startPanelResize('list', event)} />
           ) : null}
-          <div className="border-b border-border p-3">
+          <div className="shrink-0 border-b border-border p-3">
             <div className="relative z-20 flex items-center gap-2">
               <div className="relative min-w-0 flex-1">
                 <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1796,6 +2036,60 @@ export function EmailClient() {
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button size="icon-sm" variant="outline" title="Opciones de lista" aria-label="Opciones de lista" />
+                  }
+                >
+                  <MoreHorizontal className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72">
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">Columnas</div>
+                  {columnSettings.order.map((column) => (
+                    <div key={column} className="flex items-center gap-1 px-1">
+                      <DropdownMenuCheckboxItem
+                        checked={columnSettings.visibility[column]}
+                        disabled={column === 'status' || column === 'subject'}
+                        onCheckedChange={() => toggleMessageColumn(column)}
+                        className="min-w-0 flex-1"
+                      >
+                        {EMAIL_COLUMN_LABELS[column]}
+                      </DropdownMenuCheckboxItem>
+                      <button
+                        type="button"
+                        onClick={() => moveMessageColumn(column, -1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                        disabled={columnSettings.order.indexOf(column) === 0}
+                        title="Mover a la izquierda"
+                      >
+                        <ArrowLeft className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveMessageColumn(column, 1)}
+                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                        disabled={columnSettings.order.indexOf(column) === columnSettings.order.length - 1}
+                        title="Mover a la derecha"
+                      >
+                        <ArrowRight className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <div className="px-2 py-1 text-xs font-medium text-muted-foreground">Texto</div>
+                  {[
+                    { id: 'compact' as const, label: 'Compacto' },
+                    { id: 'normal' as const, label: 'Normal' },
+                    { id: 'comfortable' as const, label: 'Comodo' },
+                  ].map((mode) => (
+                    <DropdownMenuItem key={mode.id} onClick={() => setListTextMode(mode.id)}>
+                      <Check className={cn('size-4', listTextMode === mode.id ? 'opacity-100' : 'opacity-0')} />
+                      {mode.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
@@ -1831,12 +2125,21 @@ export function EmailClient() {
                   className="sticky top-0 z-10 grid items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground"
                   style={{ gridTemplateColumns: messageGridTemplate }}
                 >
-                  <ResizableMessageHeader label="Estado" column="status" onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="De" column="from" sortable onSort={() => setTableSort('sender')} onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="Asunto" column="subject" sortable onSort={() => setTableSort('subject')} onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="Categorias" column="labels" onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="Recibido" column="received" sortable onSort={() => setTableSort('received')} onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="Tamano" column="size" sortable onSort={() => setTableSort('size')} onResizeStart={startColumnResize} />
+                  {visibleMessageColumns.map((column) => (
+                    <ResizableMessageHeader
+                      key={column}
+                      label={EMAIL_COLUMN_LABELS[column]}
+                      column={column}
+                      sortable={column === 'from' || column === 'subject' || column === 'received' || column === 'size'}
+                      onSort={() => {
+                        if (column === 'from') setTableSort('sender');
+                        if (column === 'subject') setTableSort('subject');
+                        if (column === 'received') setTableSort('received');
+                        if (column === 'size') setTableSort('size');
+                      }}
+                      onResizeStart={startColumnResize}
+                    />
+                  ))}
                 </div>
                 {filteredMessages.map((message) => (
                   <div
@@ -1850,48 +2153,19 @@ export function EmailClient() {
                       if (event.key === 'Enter') void selectMessage(message);
                     }}
                     className={cn(
-                      'grid min-h-9 items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
+                      'grid items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
+                      listTextMode === 'compact' ? 'min-h-8' : listTextMode === 'comfortable' ? 'min-h-12' : 'min-h-10',
                       selectedMessage?.id === message.id && 'bg-primary/10',
                       !message.is_read && 'font-semibold',
                     )}
                     style={{ gridTemplateColumns: messageGridTemplate }}
                     title="Doble clic para abrir en pestana. Clic derecho para acciones."
                   >
-                    <div className="flex items-center gap-1.5">
-                      <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
-                      {message.has_attachments ? <Paperclip className="size-3.5 shrink-0 text-muted-foreground" /> : <Mail className="size-3.5 shrink-0 text-muted-foreground" />}
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void patchMessageById(message.id, { is_starred: !message.is_starred });
-                        }}
-                        className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-amber-500"
-                        title={message.is_starred ? 'Quitar favorito' : 'Marcar favorito'}
-                      >
-                        <Star className={cn('size-3.5', message.is_starred && 'fill-amber-400 text-amber-500')} />
-                      </button>
-                    </div>
-                    <span className="truncate pr-3">{message.from_name || message.from_address}</span>
-                    <span className="min-w-0 pr-3">
-                      <span className="block truncate">{message.subject || '(Sin asunto)'}</span>
-                      {message.snippet ? (
-                        <span className="block truncate text-xs font-normal text-muted-foreground">{message.snippet}</span>
-                      ) : null}
-                    </span>
-                    <span className="flex min-w-0 gap-1 overflow-hidden pr-2">
-                      {message.labels?.slice(0, 2).map((label) => (
-                        <span
-                          key={label.id}
-                          className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-white"
-                          style={{ backgroundColor: label.color }}
-                        >
-                          {label.name}
-                        </span>
-                      ))}
-                    </span>
-                    <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatDate(message.received_at)}</span>
-                    <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatBytes(message.raw_size)}</span>
+                    {visibleMessageColumns.map((column) => (
+                      <div key={column} className="min-w-0">
+                        {renderMessageCell(message, column)}
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
@@ -1918,7 +2192,7 @@ export function EmailClient() {
 
         <main
           className={cn(
-            'relative min-w-0 bg-card',
+            'relative min-h-0 min-w-0 overflow-hidden bg-card',
             !shouldShowContentPane && 'hidden',
             isSplitReaderLayout && 'lg:col-start-3',
             isBottomReaderLayout && 'lg:col-start-2 lg:row-start-3',
@@ -1926,7 +2200,7 @@ export function EmailClient() {
         >
           {!composeOpen && selectedMessage ? (
             <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-border p-4">
+              <div className="shrink-0 border-b border-border p-4">
                 <div className="flex flex-wrap items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <h1 className="truncate text-xl font-semibold">{selectedMessage.subject || '(Sin asunto)'}</h1>
@@ -2042,27 +2316,49 @@ export function EmailClient() {
                 ) : null}
 
                 {selectedMessage.has_attachments ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-3 flex flex-wrap gap-1.5">
                     {attachmentsLoading ? (
-                      <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Loader2 className="size-4 animate-spin" />
+                      <span className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground">
+                        <Loader2 className="size-3.5 animate-spin" />
                         Cargando adjuntos
                       </span>
                     ) : (
                       attachments.map((attachment) => (
-                        <button
+                        <div
                           key={attachment.id}
-                          type="button"
-                          onClick={() => downloadAttachment(attachment)}
-                          className="flex max-w-[260px] items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-left text-sm hover:bg-muted"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => void openAttachmentPreview(attachment)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void openAttachmentPreview(attachment);
+                          }}
+                          className="group flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-background px-2 text-left text-xs hover:bg-muted"
+                          title="Abrir adjunto"
                         >
-                          <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate">{attachment.file_name}</span>
-                            <span className="block text-xs text-muted-foreground">{formatBytes(attachment.size)}</span>
+                          <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate">
+                            {attachment.file_name}
+                            <span className="ml-1 text-muted-foreground">{formatBytes(attachment.size)}</span>
                           </span>
-                          <Download className="size-4 shrink-0 text-muted-foreground" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void downloadAttachment(attachment);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== 'Enter' && event.key !== ' ') return;
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void downloadAttachment(attachment);
+                            }}
+                            className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                            title="Descargar adjunto"
+                            aria-label="Descargar adjunto"
+                          >
+                            <Download className="size-3.5" />
+                          </button>
+                        </div>
                       ))
                     )}
                   </div>
@@ -2248,6 +2544,62 @@ export function EmailClient() {
           ) : null}
         </main>
       </div>
+
+      {attachmentPreview ? (
+        <div className="pointer-events-none fixed inset-0 z-50">
+          <div
+            className="pointer-events-auto fixed flex h-[min(72vh,620px)] w-[min(78vw,860px)] min-w-[360px] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
+            style={{ left: attachmentPreview.x, top: attachmentPreview.y }}
+          >
+            <div
+              className="flex min-h-10 cursor-move items-center gap-2 border-b border-border bg-card px-3"
+              onMouseDown={startAttachmentPreviewDrag}
+            >
+              <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{attachmentPreview.attachment.file_name}</p>
+                <p className="truncate text-xs text-muted-foreground">{formatBytes(attachmentPreview.attachment.size)}</p>
+              </div>
+              <Button
+                size="icon-sm"
+                variant="outline"
+                onClick={() => void downloadAttachment(attachmentPreview.attachment)}
+                onMouseDown={(event) => event.stopPropagation()}
+                title="Descargar adjunto"
+                aria-label="Descargar adjunto"
+              >
+                <Download className="size-4" />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setAttachmentPreview(null)}
+                onMouseDown={(event) => event.stopPropagation()}
+                title="Cerrar"
+                aria-label="Cerrar"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 bg-muted/20 p-3">
+              {attachmentPreview.attachment.content_type?.startsWith('image/') ? (
+                <div
+                  role="img"
+                  aria-label={attachmentPreview.attachment.file_name}
+                  className="h-full w-full rounded-md border border-border bg-background bg-contain bg-center bg-no-repeat"
+                  style={{ backgroundImage: `url("${attachmentPreview.url}")` }}
+                />
+              ) : (
+                <iframe
+                  title={attachmentPreview.attachment.file_name}
+                  src={attachmentPreview.url}
+                  className="h-full w-full rounded-md border border-border bg-background"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
