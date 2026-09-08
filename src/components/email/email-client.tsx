@@ -11,8 +11,11 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import {
   Archive,
+  ArrowDown,
+  ArrowDownUp,
   ArrowLeft,
   ArrowRight,
+  ArrowUp,
   Bold,
   Check,
   Columns3,
@@ -33,6 +36,7 @@ import {
   Paperclip,
   PanelBottom,
   PencilLine,
+  Plus,
   Printer,
   RefreshCw,
   Reply,
@@ -477,24 +481,63 @@ function ResizableMessageHeader({
   label,
   column,
   sortable,
+  sortDirection,
+  canMoveLeft,
+  canMoveRight,
   onSort,
+  onMoveLeft,
+  onMoveRight,
   onResizeStart,
 }: {
   label: string;
   column: EmailColumnId;
   sortable?: boolean;
+  sortDirection?: 'asc' | 'desc' | null;
+  canMoveLeft: boolean;
+  canMoveRight: boolean;
   onSort?: () => void;
+  onMoveLeft: () => void;
+  onMoveRight: () => void;
   onResizeStart: (column: EmailColumnId, event: MouseEvent<HTMLButtonElement>) => void;
 }) {
+  const SortIcon = sortDirection === 'asc' ? ArrowUp : sortDirection === 'desc' ? ArrowDown : ArrowDownUp;
+
   return (
-    <div className="relative flex min-w-0 items-center pr-2">
+    <div className="group relative flex min-w-0 items-center gap-1 pr-3">
+      <button
+        type="button"
+        onClick={onMoveLeft}
+        disabled={!canMoveLeft}
+        className="hidden rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-0 group-hover:opacity-100 sm:inline-flex"
+        title={`Mover ${label} a la izquierda`}
+        aria-label={`Mover ${label} a la izquierda`}
+      >
+        <ArrowLeft className="size-3" />
+      </button>
       {sortable ? (
-        <button type="button" onClick={onSort} className="truncate text-left hover:text-foreground">
-          {label}
+        <button
+          type="button"
+          onClick={onSort}
+          className="flex min-w-0 items-center gap-1 truncate text-left hover:text-foreground"
+          title={`Ordenar por ${label}`}
+          aria-label={`Ordenar por ${label}`}
+        >
+          <span className="truncate">{label}</span>
+          <SortIcon className={cn('size-3 shrink-0', sortDirection ? 'text-primary' : 'text-muted-foreground/60')} />
         </button>
       ) : (
         <span className="truncate">{label}</span>
       )}
+      <button
+        type="button"
+        onClick={onMoveRight}
+        disabled={!canMoveRight}
+        className="hidden rounded p-0.5 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-0 group-hover:opacity-100 sm:inline-flex"
+        title={`Mover ${label} a la derecha`}
+        aria-label={`Mover ${label} a la derecha`}
+      >
+        <ArrowRight className="size-3" />
+      </button>
       <button
         type="button"
         onMouseDown={(event) => onResizeStart(column, event)}
@@ -1060,6 +1103,25 @@ export function EmailClient() {
       [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
       return { ...current, order };
     });
+  }
+
+  function messageColumnSortDirection(column: EmailColumnId): 'asc' | 'desc' | null {
+    if (column === 'from') return advanced.sort === 'sender' ? 'asc' : null;
+    if (column === 'subject') {
+      if (advanced.sort === 'subject_asc') return 'asc';
+      if (advanced.sort === 'subject_desc') return 'desc';
+      return null;
+    }
+    if (column === 'received') {
+      if (advanced.sort === 'oldest') return 'asc';
+      if (advanced.sort === 'newest') return 'desc';
+      return null;
+    }
+    if (column === 'size') {
+      if (advanced.sort === 'size_asc') return 'asc';
+      if (advanced.sort === 'size_desc') return 'desc';
+    }
+    return null;
   }
 
   function renderMessageCell(message: Message, column: EmailColumnId) {
@@ -1678,6 +1740,16 @@ export function EmailClient() {
             <Inbox className="size-4" />
             <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
           </button>
+          <Button
+            size="icon-sm"
+            className="mb-1"
+            onClick={openNewMessage}
+            disabled={!selectedMailbox?.can_send}
+            title="Nuevo correo"
+            aria-label="Nuevo correo"
+          >
+            <Plus className="size-4" />
+          </Button>
           {tabs.map((tab) => (
             <div
               key={tab.id}
@@ -1701,9 +1773,9 @@ export function EmailClient() {
               </button>
               <button
                 type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTab(tab.id);
+                onClick={(event) => {
+                  event.stopPropagation();
+                  closeTab(tab.id);
                 }}
                 className="ml-1 rounded p-0.5 hover:bg-muted"
                 title="Cerrar pestana"
@@ -1714,9 +1786,6 @@ export function EmailClient() {
           ))}
         </div>
         <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
-          <Button size="icon-sm" onClick={openNewMessage} disabled={!selectedMailbox?.can_send} title="Nuevo correo" aria-label="Nuevo correo">
-            <PencilLine className="size-4" />
-          </Button>
           <Button size="icon-sm" variant="outline" onClick={sync} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
             {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           </Button>
@@ -2125,21 +2194,29 @@ export function EmailClient() {
                   className="sticky top-0 z-10 grid items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground"
                   style={{ gridTemplateColumns: messageGridTemplate }}
                 >
-                  {visibleMessageColumns.map((column) => (
-                    <ResizableMessageHeader
-                      key={column}
-                      label={EMAIL_COLUMN_LABELS[column]}
-                      column={column}
-                      sortable={column === 'from' || column === 'subject' || column === 'received' || column === 'size'}
-                      onSort={() => {
-                        if (column === 'from') setTableSort('sender');
-                        if (column === 'subject') setTableSort('subject');
-                        if (column === 'received') setTableSort('received');
-                        if (column === 'size') setTableSort('size');
-                      }}
-                      onResizeStart={startColumnResize}
-                    />
-                  ))}
+                  {visibleMessageColumns.map((column) => {
+                    const columnIndex = columnSettings.order.indexOf(column);
+                    return (
+                      <ResizableMessageHeader
+                        key={column}
+                        label={EMAIL_COLUMN_LABELS[column]}
+                        column={column}
+                        sortable={column === 'from' || column === 'subject' || column === 'received' || column === 'size'}
+                        sortDirection={messageColumnSortDirection(column)}
+                        canMoveLeft={columnIndex > 0}
+                        canMoveRight={columnIndex >= 0 && columnIndex < columnSettings.order.length - 1}
+                        onSort={() => {
+                          if (column === 'from') setTableSort('sender');
+                          if (column === 'subject') setTableSort('subject');
+                          if (column === 'received') setTableSort('received');
+                          if (column === 'size') setTableSort('size');
+                        }}
+                        onMoveLeft={() => moveMessageColumn(column, -1)}
+                        onMoveRight={() => moveMessageColumn(column, 1)}
+                        onResizeStart={startColumnResize}
+                      />
+                    );
+                  })}
                 </div>
                 {filteredMessages.map((message) => (
                   <div
@@ -2590,11 +2667,26 @@ export function EmailClient() {
                   style={{ backgroundImage: `url("${attachmentPreview.url}")` }}
                 />
               ) : (
-                <iframe
-                  title={attachmentPreview.attachment.file_name}
-                  src={attachmentPreview.url}
-                  className="h-full w-full rounded-md border border-border bg-background"
-                />
+                <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-border bg-background p-6 text-center">
+                  <FileIcon className="mb-3 size-10 text-muted-foreground" />
+                  <p className="max-w-full truncate text-sm font-medium">{attachmentPreview.attachment.file_name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {attachmentPreview.attachment.content_type || 'Archivo adjunto'} · {formatBytes(attachmentPreview.attachment.size)}
+                  </p>
+                  <div className="mt-5 flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => window.open(attachmentPreview.url, '_blank', 'noopener,noreferrer')}
+                    >
+                      Abrir
+                    </Button>
+                    <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.attachment)}>
+                      <Download className="size-4" />
+                      Descargar
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
