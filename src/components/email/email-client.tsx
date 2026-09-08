@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -27,6 +28,7 @@ import {
   Reply,
   Search,
   Send,
+  Settings,
   Square,
   Star,
   Tag,
@@ -144,6 +146,7 @@ interface ComposeState {
 
 type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
 type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
+type ContextActionId = 'open' | 'reply' | 'reply_all' | 'forward' | 'read' | 'unread' | 'trash' | 'star' | 'rule';
 
 interface MailTab {
   id: string;
@@ -156,6 +159,12 @@ interface ContextMenuState {
   x: number;
   y: number;
   messageId: string;
+}
+
+interface ContextActionItem {
+  id: ContextActionId;
+  label: string;
+  icon: LucideIcon;
 }
 
 interface RuleDraft {
@@ -183,6 +192,10 @@ const emptyRuleDraft: RuleDraft = {
   value: '',
   targetFolderId: '',
 };
+
+const CONTEXT_MENU_WIDTH = 240;
+const CONTEXT_MENU_HEIGHT = 288;
+const VIEWPORT_GAP = 8;
 
 function initialSearchParam(name: string) {
   if (typeof window === 'undefined') return null;
@@ -219,6 +232,54 @@ function emailHtml(html: string, allowExternalContent: boolean) {
   return html
     .replace(/\s(src|srcset)=["']https?:\/\/[^"']+["']/gi, ' data-external-content-blocked="true"')
     .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
+}
+
+function contextActions(isRead: boolean): ContextActionItem[] {
+  return [
+    { id: 'open', label: 'Abrir en pestana', icon: MailOpen },
+    { id: 'reply', label: 'Responder', icon: Reply },
+    { id: 'reply_all', label: 'Responder a todos', icon: Reply },
+    { id: 'forward', label: 'Reenviar', icon: Send },
+    { id: isRead ? 'unread' : 'read', label: isRead ? 'Marcar como no leido' : 'Marcar como leido', icon: Mail },
+    { id: 'star', label: 'Alternar favorito', icon: Star },
+    { id: 'rule', label: 'Crear regla desde este correo', icon: Wand2 },
+    { id: 'trash', label: 'Mover a papelera', icon: Trash2 },
+  ];
+}
+
+function MessageContextMenu({
+  x,
+  y,
+  isRead,
+  onAction,
+}: {
+  x: number;
+  y: number;
+  isRead: boolean;
+  onAction: (action: ContextActionId) => void;
+}) {
+  return (
+    <div
+      className="fixed z-50 w-60 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+      style={{ left: x, top: y }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {contextActions(isRead).map((item) => {
+        const Icon = item.icon;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onAction(item.id)}
+            className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+          >
+            <Icon className="size-4" />
+            <span className="truncate">{item.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
@@ -348,6 +409,7 @@ export function EmailClient() {
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
+  const [searchScope, setSearchScope] = useState<'folder' | 'mailbox'>('folder');
   const [editorKey, setEditorKey] = useState(0);
   const [allowExternalContent, setAllowExternalContent] = useState(false);
   const [tabs, setTabs] = useState<MailTab[]>([]);
@@ -385,16 +447,20 @@ export function EmailClient() {
   const params = useMemo(() => {
     const next = new URLSearchParams();
     if (selectedMailboxId) next.set('mailbox_id', selectedMailboxId);
-    if (selectedFolderId) next.set('folder_id', selectedFolderId);
+    if (selectedFolderId && searchScope === 'folder') next.set('folder_id', selectedFolderId);
     if (query.trim()) next.set('q', query.trim());
     if (advanced.from.trim()) next.set('from', advanced.from.trim());
     if (advanced.to.trim()) next.set('to', advanced.to.trim());
     if (advanced.sort !== 'newest') next.set('sort', advanced.sort);
     if (selectedLabelId) next.set('label_id', selectedLabelId);
+    if (activeFilter === 'unread') next.set('unread', 'true');
+    if (activeFilter === 'attachments') next.set('attachments', 'true');
+    if (activeFilter === 'starred') next.set('starred', 'true');
     return next.toString();
-  }, [advanced.from, advanced.sort, advanced.to, query, selectedFolderId, selectedLabelId, selectedMailboxId]);
+  }, [activeFilter, advanced.from, advanced.sort, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
 
   const trashFolderId = visibleFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
+  const isMessageTabActive = activeTabId !== 'folder';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -635,13 +701,39 @@ export function EmailClient() {
     });
   }
 
+  function setTableSort(nextSort: 'received' | 'sender' | 'size') {
+    setAdvanced((current) => ({
+      ...current,
+      sort:
+        nextSort === 'received'
+          ? current.sort === 'newest' ? 'oldest' : 'newest'
+          : nextSort === 'size'
+            ? current.sort === 'size_desc' ? 'size_asc' : 'size_desc'
+            : 'sender',
+    }));
+  }
+
   function openMessageContextMenu(event: MouseEvent, message: Message) {
     event.preventDefault();
     setSelectedMessageId(message.id);
-    setContextMenu({ x: event.clientX, y: event.clientY, messageId: message.id });
+    setContextMenu({
+      x: Math.min(event.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_GAP),
+      y: Math.min(event.clientY, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_GAP),
+      messageId: message.id,
+    });
   }
 
-  async function runContextAction(action: 'open' | 'reply' | 'reply_all' | 'forward' | 'read' | 'unread' | 'trash' | 'star' | 'rule') {
+  function openSelectedMessageMenu(event: MouseEvent<HTMLButtonElement>) {
+    if (!selectedMessage) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({
+      x: Math.max(VIEWPORT_GAP, rect.right - CONTEXT_MENU_WIDTH),
+      y: Math.min(rect.bottom + 6, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_GAP),
+      messageId: selectedMessage.id,
+    });
+  }
+
+  async function runContextAction(action: ContextActionId) {
     const message = messages.find((item) => item.id === contextMenu?.messageId);
     setContextMenu(null);
     if (!message) return;
@@ -1072,6 +1164,36 @@ export function EmailClient() {
           <Star className={cn('size-4', selectedMessage?.is_starred && 'fill-amber-400 text-amber-500')} />
           Favorito
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => selectedMessage && void openMessageTab(selectedMessage)}
+          disabled={!selectedMessage}
+        >
+          <MailOpen className="size-4" />
+          Abrir pestana
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => openReply()} disabled={!selectedMessage || !selectedMailbox?.can_send}>
+          <Reply className="size-4" />
+          Responder
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => openForward()} disabled={!selectedMessage || !selectedMailbox?.can_send}>
+          <Send className="size-4" />
+          Reenviar
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => selectedMessage && trashFolderId && patchMessage({ folder_id: trashFolderId })}
+          disabled={!selectedMessage || !trashFolderId}
+        >
+          <Trash2 className="size-4" />
+          Papelera
+        </Button>
+        <Button size="sm" variant="outline" onClick={openSelectedMessageMenu} disabled={!selectedMessage}>
+          <MoreHorizontal className="size-4" />
+          Acciones
+        </Button>
         {selectedMessageIds.size > 0 ? (
           <div className="flex items-center gap-2 border-l border-border pl-2">
             <span className="text-sm text-muted-foreground">{selectedMessageIds.size} seleccionados</span>
@@ -1170,6 +1292,16 @@ export function EmailClient() {
             <Wand2 className="size-4" />
             Aplicar
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              window.location.href = '/settings?tab=email';
+            }}
+          >
+            <Settings className="size-4" />
+            Ajustes Email
+          </Button>
         </div>
       </div>
 
@@ -1186,44 +1318,44 @@ export function EmailClient() {
           <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
         </button>
         {tabs.map((tab) => (
-          <button
+          <div
             key={tab.id}
-            type="button"
-            onClick={() => {
-              setActiveTabId(tab.id);
-              if (tab.messageId) setSelectedMessageId(tab.messageId);
-            }}
             className={cn(
               'flex h-9 max-w-[260px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
               activeTabId === tab.id ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
             )}
           >
             <Mail className="size-4 shrink-0" />
-            <span className="truncate">{tab.title}</span>
-            <span
-              role="button"
-              tabIndex={0}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTabId(tab.id);
+                if (tab.messageId) setSelectedMessageId(tab.messageId);
+              }}
+              className="min-w-0 flex-1 truncate text-left"
+            >
+              {tab.title}
+            </button>
+            <button
+              type="button"
               onClick={(event) => {
                 event.stopPropagation();
                 closeTab(tab.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') closeTab(tab.id);
               }}
               className="ml-1 rounded p-0.5 hover:bg-muted"
               title="Cerrar pestana"
             >
               <X className="size-3.5" />
-            </span>
-          </button>
+            </button>
+          </div>
         ))}
       </div>
 
       <div
         className={cn(
           'grid min-h-0 flex-1',
-          layout === 'three-pane' && 'lg:grid-cols-[270px_minmax(320px,420px)_minmax(0,1fr)]',
-          layout !== 'three-pane' && 'lg:grid-cols-[270px_minmax(0,1fr)]',
+          layout === 'three-pane' && !isMessageTabActive && 'lg:grid-cols-[270px_minmax(320px,420px)_minmax(0,1fr)]',
+          (layout !== 'three-pane' || isMessageTabActive) && 'lg:grid-cols-[270px_minmax(0,1fr)]',
         )}
       >
         <aside className="min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r">
@@ -1372,7 +1504,7 @@ export function EmailClient() {
           </div>
         </aside>
 
-        <section className="min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r">
+        <section className={cn('min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r', isMessageTabActive && 'hidden')}>
           <div className="border-b border-border p-3">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -1384,33 +1516,72 @@ export function EmailClient() {
               />
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="xs" variant="ghost" onClick={() => setAdvancedOpen((current) => !current)}>
-                Busqueda avanzada
+              <Button size="xs" variant={advancedOpen ? 'secondary' : 'ghost'} onClick={() => setAdvancedOpen((current) => !current)}>
+                <Search className="size-3.5" />
+                Filtro avanzado
               </Button>
               {advancedOpen ? (
-                <>
+                <div className="grid w-full gap-2 rounded-md border border-border bg-background p-2 shadow-sm">
+                  <div className="grid gap-2 sm:grid-cols-3">
                   <Input
                     value={advanced.from}
                     onChange={(event) => setAdvanced((current) => ({ ...current, from: event.target.value }))}
                     placeholder="De"
-                    className="h-7 min-w-32 flex-1"
+                    className="h-8"
                   />
                   <Input
                     value={advanced.to}
                     onChange={(event) => setAdvanced((current) => ({ ...current, to: event.target.value }))}
                     placeholder="Para"
-                    className="h-7 min-w-32 flex-1"
+                    className="h-8"
                   />
                   <select
                     value={advanced.sort}
                     onChange={(event) => setAdvanced((current) => ({ ...current, sort: event.target.value }))}
-                    className="h-7 rounded-lg border border-border bg-card px-2 text-xs"
+                    className="h-8 rounded-md border border-border bg-card px-2 text-xs"
                   >
                     <option value="newest">Recientes</option>
                     <option value="oldest">Antiguos</option>
                     <option value="sender">Remitente</option>
+                    <option value="size_desc">Mas grandes</option>
+                    <option value="size_asc">Mas pequenos</option>
                   </select>
-                </>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-1">
+                      {[
+                        { id: 'folder' as const, label: 'Carpeta actual' },
+                        { id: 'mailbox' as const, label: 'Todo el buzon' },
+                      ].map((scope) => (
+                        <button
+                          key={scope.id}
+                          type="button"
+                          onClick={() => setSearchScope(scope.id)}
+                          className={cn(
+                            'h-7 rounded-md border px-2 text-xs transition-colors',
+                            searchScope === scope.id
+                              ? 'border-primary bg-primary/10 text-primary'
+                              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+                          )}
+                        >
+                          {scope.label}
+                        </button>
+                      ))}
+                    </div>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => {
+                        setQuery('');
+                        setAdvanced({ from: '', to: '', sort: 'newest' });
+                        setActiveFilter('all');
+                        setSelectedLabelId('');
+                      }}
+                    >
+                      Limpiar
+                    </Button>
+                  </div>
+                </div>
               ) : null}
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
@@ -1450,11 +1621,17 @@ export function EmailClient() {
                 <div className="sticky top-0 z-10 grid grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
                   <span />
                   <span>Estado</span>
-                  <span>De</span>
+                  <button type="button" onClick={() => setTableSort('sender')} className="truncate text-left hover:text-foreground">
+                    De
+                  </button>
                   <span>Asunto</span>
                   <span>Categorias</span>
-                  <span>Recibido</span>
-                  <span>Tamano</span>
+                  <button type="button" onClick={() => setTableSort('received')} className="truncate text-left hover:text-foreground">
+                    Recibido
+                  </button>
+                  <button type="button" onClick={() => setTableSort('size')} className="truncate text-left hover:text-foreground">
+                    Tamano
+                  </button>
                 </div>
                 {filteredMessages.map((message) => (
                   <div
@@ -1526,47 +1703,20 @@ export function EmailClient() {
             )}
           </div>
           {contextMenu ? (
-            <div
-              className="fixed z-50 w-60 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
-              style={{ left: contextMenu.x, top: contextMenu.y }}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {[
-                { action: 'open' as const, label: 'Abrir en pestana', icon: MailOpen },
-                { action: 'reply' as const, label: 'Responder', icon: Reply },
-                { action: 'reply_all' as const, label: 'Responder a todos', icon: Reply },
-                { action: 'forward' as const, label: 'Reenviar', icon: Send },
-                {
-                  action: messages.find((item) => item.id === contextMenu.messageId)?.is_read ? 'unread' as const : 'read' as const,
-                  label: messages.find((item) => item.id === contextMenu.messageId)?.is_read ? 'Marcar como no leido' : 'Marcar como leido',
-                  icon: Mail,
-                },
-                { action: 'star' as const, label: 'Alternar favorito', icon: Star },
-                { action: 'rule' as const, label: 'Crear regla desde este correo', icon: Wand2 },
-                { action: 'trash' as const, label: 'Mover a papelera', icon: Trash2 },
-              ].map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button
-                    key={`${item.action}-${item.label}`}
-                    type="button"
-                    onClick={() => void runContextAction(item.action)}
-                    className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
-                  >
-                    <Icon className="size-4" />
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <MessageContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              isRead={messages.find((item) => item.id === contextMenu.messageId)?.is_read ?? true}
+              onAction={(action) => void runContextAction(action)}
+            />
           ) : null}
         </section>
 
         <main
           className={cn(
             'relative min-w-0 bg-card',
-            layout === 'focused-list' && 'hidden',
-            layout === 'bottom-pane' && 'lg:col-start-2 lg:row-start-2',
+            layout === 'focused-list' && !isMessageTabActive && 'hidden',
+            layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-2',
           )}
         >
           {selectedMessage ? (

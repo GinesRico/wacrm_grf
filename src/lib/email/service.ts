@@ -833,6 +833,10 @@ export async function listEmailMessages(args: {
     ? asc(emailMessages.receivedAt)
     : args.sort === 'sender'
       ? asc(emailMessages.fromAddress)
+      : args.sort === 'size_desc'
+        ? desc(emailMessages.rawSize)
+        : args.sort === 'size_asc'
+          ? asc(emailMessages.rawSize)
       : desc(emailMessages.receivedAt);
 
   const rows = await db
