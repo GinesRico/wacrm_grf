@@ -15,6 +15,7 @@ import {
   Download,
   FileIcon,
   FolderPlus,
+  Info,
   Italic,
   Inbox,
   LinkIcon,
@@ -24,6 +25,7 @@ import {
   MoreHorizontal,
   Paperclip,
   PencilLine,
+  Printer,
   RefreshCw,
   Reply,
   Search,
@@ -146,7 +148,18 @@ interface ComposeState {
 
 type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
 type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
-type ContextActionId = 'open' | 'reply' | 'reply_all' | 'forward' | 'read' | 'unread' | 'trash' | 'star' | 'rule';
+type ContextActionId =
+  | 'open'
+  | 'reply'
+  | 'reply_all'
+  | 'forward'
+  | 'read'
+  | 'unread'
+  | 'trash'
+  | 'star'
+  | 'rule'
+  | 'copy_link'
+  | 'print';
 
 interface MailTab {
   id: string;
@@ -194,7 +207,7 @@ const emptyRuleDraft: RuleDraft = {
 };
 
 const CONTEXT_MENU_WIDTH = 240;
-const CONTEXT_MENU_HEIGHT = 288;
+const CONTEXT_MENU_HEIGHT = 360;
 const VIEWPORT_GAP = 8;
 
 function initialSearchParam(name: string) {
@@ -234,6 +247,15 @@ function emailHtml(html: string, allowExternalContent: boolean) {
     .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 function contextActions(isRead: boolean): ContextActionItem[] {
   return [
     { id: 'open', label: 'Abrir en pestana', icon: MailOpen },
@@ -243,6 +265,8 @@ function contextActions(isRead: boolean): ContextActionItem[] {
     { id: isRead ? 'unread' : 'read', label: isRead ? 'Marcar como no leido' : 'Marcar como leido', icon: Mail },
     { id: 'star', label: 'Alternar favorito', icon: Star },
     { id: 'rule', label: 'Crear regla desde este correo', icon: Wand2 },
+    { id: 'copy_link', label: 'Copiar enlace', icon: LinkIcon },
+    { id: 'print', label: 'Imprimir', icon: Printer },
     { id: 'trash', label: 'Mover a papelera', icon: Trash2 },
   ];
 }
@@ -415,6 +439,7 @@ export function EmailClient() {
   const [tabs, setTabs] = useState<MailTab[]>([]);
   const [activeTabId, setActiveTabId] = useState('folder');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -461,6 +486,15 @@ export function EmailClient() {
 
   const trashFolderId = visibleFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
   const isMessageTabActive = activeTabId !== 'folder';
+  const selectedLabel = labels.find((label) => label.id === selectedLabelId) ?? null;
+  const activeSearchChips = [
+    query.trim() ? { id: 'query', label: `Texto: ${query.trim()}` } : null,
+    advanced.from.trim() ? { id: 'from', label: `De: ${advanced.from.trim()}` } : null,
+    advanced.to.trim() ? { id: 'to', label: `Para: ${advanced.to.trim()}` } : null,
+    activeFilter !== 'all' ? { id: 'filter', label: activeFilter === 'unread' ? 'No leidos' : activeFilter === 'attachments' ? 'Con adjuntos' : 'Favoritos' } : null,
+    selectedLabel ? { id: 'label', label: `Etiqueta: ${selectedLabel.name}` } : null,
+    searchScope === 'mailbox' ? { id: 'scope', label: 'Todo el buzon' } : null,
+  ].filter(Boolean) as Array<{ id: string; label: string }>;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -595,6 +629,7 @@ export function EmailClient() {
 
   useEffect(() => {
     setAllowExternalContent(false);
+    setDetailsOpen(false);
   }, [selectedMessage?.id]);
 
   useEffect(() => {
@@ -713,6 +748,26 @@ export function EmailClient() {
     }));
   }
 
+  function selectRelativeMessage(direction: 1 | -1) {
+    if (filteredMessages.length === 0) return;
+    const currentIndex = filteredMessages.findIndex((message) => message.id === selectedMessage?.id);
+    const nextIndex =
+      currentIndex === -1
+        ? direction > 0 ? 0 : filteredMessages.length - 1
+        : Math.min(Math.max(currentIndex + direction, 0), filteredMessages.length - 1);
+    const nextMessage = filteredMessages[nextIndex];
+    if (nextMessage) void selectMessage(nextMessage);
+  }
+
+  function clearSearchChip(chipId: string) {
+    if (chipId === 'query') setQuery('');
+    if (chipId === 'from') setAdvanced((current) => ({ ...current, from: '' }));
+    if (chipId === 'to') setAdvanced((current) => ({ ...current, to: '' }));
+    if (chipId === 'filter') setActiveFilter('all');
+    if (chipId === 'label') setSelectedLabelId('');
+    if (chipId === 'scope') setSearchScope('folder');
+  }
+
   function openMessageContextMenu(event: MouseEvent, message: Message) {
     event.preventDefault();
     setSelectedMessageId(message.id);
@@ -731,6 +786,53 @@ export function EmailClient() {
       y: Math.min(rect.bottom + 6, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_GAP),
       messageId: selectedMessage.id,
     });
+  }
+
+  async function copyMessageLink(message: Message) {
+    const next = new URL(window.location.href);
+    next.pathname = '/email';
+    next.searchParams.set('mailbox_id', message.mailbox_id);
+    next.searchParams.set('folder_id', message.folder_id);
+    next.searchParams.set('message_id', message.id);
+    await navigator.clipboard.writeText(next.toString());
+    toast.success('Enlace del correo copiado');
+  }
+
+  function printMessage(message: Message) {
+    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
+    if (!printWindow) {
+      toast.error('El navegador ha bloqueado la ventana de impresion');
+      return;
+    }
+    const safeBody = message.body_html
+      ? emailHtml(message.body_html, allowExternalContent)
+      : `<pre>${escapeHtml(message.body_text || message.snippet || '')}</pre>`;
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>${escapeHtml(message.subject || 'Correo')}</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #111827; margin: 24px; }
+            h1 { font-size: 20px; margin: 0 0 8px; }
+            .meta { color: #4b5563; font-size: 13px; margin-bottom: 18px; }
+            pre { white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.5; }
+          </style>
+        </head>
+        <body>
+          <h1>${escapeHtml(message.subject || '(Sin asunto)')}</h1>
+          <div class="meta">
+            De: ${escapeHtml(message.from_name ? `${message.from_name} <${message.from_address}>` : message.from_address)}<br />
+            Para: ${escapeHtml(message.to_addresses.join(', '))}<br />
+            Fecha: ${escapeHtml(new Date(message.received_at).toLocaleString('es-ES'))}
+          </div>
+          ${safeBody}
+          <script>window.addEventListener('load', () => window.print());</script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   }
 
   async function runContextAction(action: ContextActionId) {
@@ -753,6 +855,8 @@ export function EmailClient() {
     if (action === 'read') await patchMessageById(message.id, { is_read: true });
     if (action === 'unread') await patchMessageById(message.id, { is_read: false });
     if (action === 'star') await patchMessageById(message.id, { is_starred: !message.is_starred });
+    if (action === 'copy_link') await copyMessageLink(message);
+    if (action === 'print') printMessage(message);
     if (action === 'trash' && trashFolderId) await patchMessageById(message.id, { folder_id: trashFolderId });
     if (action === 'rule') {
       await selectMessage(message);
@@ -1122,6 +1226,26 @@ export function EmailClient() {
       if (event.key.toLowerCase() === 'u' && selectedMessage) {
         event.preventDefault();
         void patchMessage({ is_read: !selectedMessage.is_read });
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        selectRelativeMessage(1);
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        selectRelativeMessage(-1);
+      }
+      if (event.key === 'Enter' && selectedMessage) {
+        event.preventDefault();
+        void openMessageTab(selectedMessage);
+      }
+      if (event.key === 'Delete' && selectedMessage && trashFolderId) {
+        event.preventDefault();
+        void patchMessage({ folder_id: trashFolderId });
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'p' && selectedMessage) {
+        event.preventDefault();
+        printMessage(selectedMessage);
       }
     }
     window.addEventListener('keydown', onKeyDown);
@@ -1608,6 +1732,22 @@ export function EmailClient() {
                 </button>
               ))}
             </div>
+            {activeSearchChips.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {activeSearchChips.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => clearSearchChip(chip.id)}
+                    className="flex h-7 max-w-full items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                    title="Quitar filtro"
+                  >
+                    <span className="truncate">{chip.label}</span>
+                    <X className="size-3" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="max-h-[calc(100vh-15rem)] overflow-auto">
             {loading ? (
@@ -1619,7 +1759,18 @@ export function EmailClient() {
             ) : (
               <div className="min-w-[760px]">
                 <div className="sticky top-0 z-10 grid grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
-                  <span />
+                  <button
+                    type="button"
+                    onClick={toggleVisibleSelection}
+                    className="flex size-7 items-center justify-center rounded hover:bg-muted hover:text-foreground"
+                    title="Seleccionar todos los visibles"
+                  >
+                    {filteredMessages.length > 0 && filteredMessages.every((message) => selectedMessageIds.has(message.id)) ? (
+                      <CheckSquare className="size-4" />
+                    ) : (
+                      <Square className="size-4" />
+                    )}
+                  </button>
                   <span>Estado</span>
                   <button type="button" onClick={() => setTableSort('sender')} className="truncate text-left hover:text-foreground">
                     De
@@ -1748,11 +1899,52 @@ export function EmailClient() {
                       <Send className="size-4" />
                       Reenviar
                     </Button>
-                    <Button variant="ghost" size="icon-sm" title="Mas acciones">
+                    <Button variant="outline" size="sm" onClick={() => copyMessageLink(selectedMessage)}>
+                      <LinkIcon className="size-4" />
+                      Enlace
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => printMessage(selectedMessage)}>
+                      <Printer className="size-4" />
+                      Imprimir
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setDetailsOpen((current) => !current)}>
+                      <Info className="size-4" />
+                      Detalles
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" title="Mas acciones" onClick={openSelectedMessageMenu}>
                       <MoreHorizontal className="size-4" />
                     </Button>
                   </div>
                 </div>
+
+                {detailsOpen ? (
+                  <div className="mt-3 grid gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground sm:grid-cols-2">
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">Buzon: </span>
+                      <span className="break-all">{selectedMailbox?.display_name || selectedMailbox?.address}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">Carpeta: </span>
+                      <span>{selectedFolder?.name ?? 'Sin carpeta'}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">De: </span>
+                      <span className="break-all">{selectedMessage.from_address}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">Para: </span>
+                      <span className="break-all">{selectedMessage.to_addresses.join(', ') || '-'}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">CC: </span>
+                      <span className="break-all">{selectedMessage.cc_addresses?.join(', ') || '-'}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">Tamano: </span>
+                      <span className="tabular-nums">{formatBytes(selectedMessage.raw_size) || '-'}</span>
+                    </div>
+                  </div>
+                ) : null}
 
                 {labels.length > 0 ? (
                   <div className="mt-3 flex flex-wrap gap-1.5">
