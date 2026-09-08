@@ -10,8 +10,11 @@ import {
   emailAccounts,
   emailAttachments,
   emailAuditEvents,
+  emailDrafts,
   emailFolders,
+  emailLabels,
   emailMailboxes,
+  emailMessageLabels,
   emailMessages,
   emailPermissions,
   emailRules,
@@ -98,6 +101,7 @@ export function serializeEmailMessage(row: typeof emailMessages.$inferSelect) {
     body_text: row.bodyText,
     body_html: row.bodyHtml,
     is_read: row.isRead,
+    is_starred: row.isStarred,
     has_attachments: row.hasAttachments,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
@@ -140,6 +144,36 @@ export function serializeEmailAttachment(row: typeof emailAttachments.$inferSele
     size: row.size,
     content_id: row.contentId,
     created_at: row.createdAt.toISOString(),
+  };
+}
+
+export function serializeEmailLabel(row: typeof emailLabels.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    mailbox_id: row.mailboxId,
+    name: row.name,
+    color: row.color,
+    position: row.position,
+  };
+}
+
+export function serializeEmailDraft(row: typeof emailDrafts.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    user_id: row.userId,
+    mailbox_id: row.mailboxId,
+    to_addresses: row.toAddresses,
+    cc_addresses: row.ccAddresses,
+    bcc_addresses: row.bccAddresses,
+    subject: row.subject,
+    body_text: row.bodyText,
+    body_html: row.bodyHtml,
+    attachments: row.attachments,
+    in_reply_to_message_id: row.inReplyToMessageId,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
   };
 }
 
@@ -644,6 +678,13 @@ export async function listEmailMessages(args: {
   mailboxId?: string | null;
   folderId?: string | null;
   q?: string | null;
+  unread?: boolean;
+  attachments?: boolean;
+  starred?: boolean;
+  labelId?: string | null;
+  from?: string | null;
+  to?: string | null;
+  sort?: string | null;
 }) {
   const workspace = await listEmailWorkspace(args);
   const allowedMailboxIds = workspace.mailboxes.map((mailbox) => mailbox.id);
@@ -659,6 +700,8 @@ export async function listEmailMessages(args: {
     ? args.folderId
     : null;
   const q = clean(args.q);
+  const from = clean(args.from);
+  const to = clean(args.to);
 
   const filters = [
     eq(emailMessages.accountId, args.accountId),
@@ -671,16 +714,70 @@ export async function listEmailMessages(args: {
           ilike(emailMessages.bodyText, `%${q}%`),
         )
       : undefined,
+    args.unread ? eq(emailMessages.isRead, false) : undefined,
+    args.attachments ? eq(emailMessages.hasAttachments, true) : undefined,
+    args.starred ? eq(emailMessages.isStarred, true) : undefined,
+    from ? ilike(emailMessages.fromAddress, `%${from}%`) : undefined,
+    to ? sql`${emailMessages.toAddresses}::text ilike ${`%${to}%`}` : undefined,
   ];
+
+  const orderBy = args.sort === 'oldest'
+    ? asc(emailMessages.receivedAt)
+    : args.sort === 'sender'
+      ? asc(emailMessages.fromAddress)
+      : desc(emailMessages.receivedAt);
 
   const rows = await db
     .select()
     .from(emailMessages)
     .where(and(...filters))
-    .orderBy(desc(emailMessages.receivedAt))
-    .limit(100);
+    .orderBy(orderBy)
+    .limit(200);
 
-  return { messages: rows.map(serializeEmailMessage), ...workspace };
+  let labelRows: Array<{
+    messageId: string;
+    label: ReturnType<typeof serializeEmailLabel>;
+  }> = [];
+  if (rows.length > 0) {
+    const joined = await db
+      .select({
+        messageId: emailMessageLabels.messageId,
+        label: emailLabels,
+      })
+      .from(emailMessageLabels)
+      .innerJoin(emailLabels, eq(emailLabels.id, emailMessageLabels.labelId))
+      .where(
+        and(
+          eq(emailMessageLabels.accountId, args.accountId),
+          inArray(emailMessageLabels.messageId, rows.map((row) => row.id)),
+          args.labelId ? eq(emailLabels.id, args.labelId) : undefined,
+        ),
+      );
+    labelRows = joined.map((row) => ({
+      messageId: row.messageId,
+      label: serializeEmailLabel(row.label),
+    }));
+  }
+
+  const labelsByMessage = new Map<string, ReturnType<typeof serializeEmailLabel>[]>();
+  for (const row of labelRows) {
+    labelsByMessage.set(row.messageId, [
+      ...(labelsByMessage.get(row.messageId) ?? []),
+      row.label,
+    ]);
+  }
+
+  const filteredRows = args.labelId
+    ? rows.filter((row) => labelsByMessage.has(row.id))
+    : rows;
+
+  return {
+    messages: filteredRows.map((row) => ({
+      ...serializeEmailMessage(row),
+      labels: labelsByMessage.get(row.id) ?? [],
+    })),
+    ...workspace,
+  };
 }
 
 export async function getEmailMessageForUser(args: {
@@ -712,6 +809,7 @@ export async function updateEmailMessageState(args: {
   role: AccountRole;
   messageId: string;
   isRead?: boolean;
+  isStarred?: boolean;
   folderId?: string;
 }) {
   const current = await getEmailMessageForUser(args);
@@ -724,6 +822,7 @@ export async function updateEmailMessageState(args: {
     .update(emailMessages)
     .set({
       isRead: typeof args.isRead === 'boolean' ? args.isRead : current.message.isRead,
+      isStarred: typeof args.isStarred === 'boolean' ? args.isStarred : current.message.isStarred,
       folderId: args.folderId ?? current.message.folderId,
       updatedAt: new Date(),
     })
@@ -736,10 +835,44 @@ export async function updateEmailMessageState(args: {
     mailboxId: updated.mailboxId,
     folderId: updated.folderId,
     messageId: updated.id,
-    eventType: args.folderId ? 'message.moved' : 'message.read_state_changed',
-    metadata: { is_read: updated.isRead, folder_id: updated.folderId },
+    eventType: args.folderId
+      ? 'message.moved'
+      : typeof args.isStarred === 'boolean'
+        ? 'message.starred_changed'
+        : 'message.read_state_changed',
+    metadata: {
+      is_read: updated.isRead,
+      is_starred: updated.isStarred,
+      folder_id: updated.folderId,
+    },
   });
 
+  return updated;
+}
+
+export async function updateEmailMessagesBatch(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  messageIds: string[];
+  isRead?: boolean;
+  isStarred?: boolean;
+  folderId?: string;
+}) {
+  const updated = [];
+  for (const messageId of [...new Set(args.messageIds)].slice(0, 200)) {
+    updated.push(
+      await updateEmailMessageState({
+        accountId: args.accountId,
+        userId: args.userId,
+        role: args.role,
+        messageId,
+        isRead: args.isRead,
+        isStarred: args.isStarred,
+        folderId: args.folderId,
+      }),
+    );
+  }
   return updated;
 }
 
@@ -796,6 +929,251 @@ export async function getEmailAttachmentDownloadForUser(args: {
     ...serializeEmailAttachment(attachment),
     url: await signedObjectUrl(attachment.storageKey),
   };
+}
+
+export async function listEmailLabelsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId?: string | null;
+}) {
+  const workspace = await listEmailWorkspace(args);
+  const mailboxIds = workspace.mailboxes.map((mailbox) => mailbox.id);
+  if (mailboxIds.length === 0) return [];
+  const effectiveMailboxIds =
+    args.mailboxId && mailboxIds.includes(args.mailboxId)
+      ? [args.mailboxId]
+      : mailboxIds;
+
+  const rows = await db
+    .select()
+    .from(emailLabels)
+    .where(
+      and(
+        eq(emailLabels.accountId, args.accountId),
+        or(
+          inArray(emailLabels.mailboxId, effectiveMailboxIds),
+          sql`${emailLabels.mailboxId} is null`,
+        ),
+      ),
+    )
+    .orderBy(asc(emailLabels.position), asc(emailLabels.name));
+
+  return rows.map(serializeEmailLabel);
+}
+
+export async function createEmailLabelForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId: string;
+  name: string;
+  color?: string;
+}) {
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+  });
+  if (!permission.canClassify) {
+    throw new Error('You do not have permission to create labels for this mailbox.');
+  }
+
+  const [label] = await db
+    .insert(emailLabels)
+    .values({
+      accountId: args.accountId,
+      mailboxId: args.mailboxId,
+      createdBy: args.userId,
+      name: clean(args.name) || 'Etiqueta',
+      color: args.color || '#64748b',
+    })
+    .returning();
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: args.mailboxId,
+    eventType: 'label.created',
+    metadata: { label_id: label.id, name: label.name },
+  });
+
+  return label;
+}
+
+export async function setEmailMessageLabelsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  messageId: string;
+  labelIds: string[];
+}) {
+  const current = await getEmailMessageForUser(args);
+  if (!current) throw new Error('Message not found or not permitted.');
+  if (!current.permission.canClassify) {
+    throw new Error('You do not have permission to label this email.');
+  }
+
+  const requestedIds = [...new Set(args.labelIds)].slice(0, 20);
+  const allowedLabels = requestedIds.length
+    ? await db
+        .select()
+        .from(emailLabels)
+        .where(
+          and(
+            eq(emailLabels.accountId, args.accountId),
+            inArray(emailLabels.id, requestedIds),
+            or(
+              eq(emailLabels.mailboxId, current.message.mailboxId),
+              sql`${emailLabels.mailboxId} is null`,
+            ),
+          ),
+        )
+    : [];
+
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(emailMessageLabels)
+      .where(
+        and(
+          eq(emailMessageLabels.accountId, args.accountId),
+          eq(emailMessageLabels.messageId, args.messageId),
+        ),
+      );
+
+    if (allowedLabels.length > 0) {
+      await tx.insert(emailMessageLabels).values(
+        allowedLabels.map((label) => ({
+          accountId: args.accountId,
+          messageId: args.messageId,
+          labelId: label.id,
+        })),
+      );
+    }
+
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: current.message.mailboxId,
+      folderId: current.message.folderId,
+      messageId: args.messageId,
+      eventType: 'message.labels_changed',
+      metadata: { label_ids: allowedLabels.map((label) => label.id) },
+    });
+  });
+
+  return allowedLabels.map(serializeEmailLabel);
+}
+
+export async function listEmailDraftsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId?: string | null;
+}) {
+  const workspace = await listEmailWorkspace(args);
+  const mailboxIds = workspace.mailboxes
+    .filter((mailbox) => !args.mailboxId || mailbox.id === args.mailboxId)
+    .map((mailbox) => mailbox.id);
+  if (mailboxIds.length === 0) return [];
+
+  const rows = await db
+    .select()
+    .from(emailDrafts)
+    .where(
+      and(
+        eq(emailDrafts.accountId, args.accountId),
+        eq(emailDrafts.userId, args.userId),
+        inArray(emailDrafts.mailboxId, mailboxIds),
+      ),
+    )
+    .orderBy(desc(emailDrafts.updatedAt));
+
+  return rows.map(serializeEmailDraft);
+}
+
+export async function upsertEmailDraftForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  draftId?: string | null;
+  mailboxId: string;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  text?: string;
+  html?: string | null;
+  attachments?: unknown;
+  inReplyToMessageId?: string | null;
+}) {
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+  });
+  if (!permission.canSend) {
+    throw new Error('You do not have permission to draft from this mailbox.');
+  }
+
+  const values = {
+    mailboxId: args.mailboxId,
+    toAddresses: args.to,
+    ccAddresses: args.cc ?? [],
+    bccAddresses: args.bcc ?? [],
+    subject: args.subject ?? '',
+    bodyText: args.text ?? '',
+    bodyHtml: args.html ?? null,
+    attachments: Array.isArray(args.attachments) ? args.attachments : [],
+    inReplyToMessageId: args.inReplyToMessageId ?? null,
+    updatedAt: new Date(),
+  };
+
+  if (args.draftId) {
+    const [draft] = await db
+      .update(emailDrafts)
+      .set(values)
+      .where(
+        and(
+          eq(emailDrafts.accountId, args.accountId),
+          eq(emailDrafts.userId, args.userId),
+          eq(emailDrafts.id, args.draftId),
+        ),
+      )
+      .returning();
+    if (!draft) throw new Error('Draft not found.');
+    return draft;
+  }
+
+  const [draft] = await db
+    .insert(emailDrafts)
+    .values({
+      accountId: args.accountId,
+      userId: args.userId,
+      ...values,
+    })
+    .returning();
+  return draft;
+}
+
+export async function deleteEmailDraftForUser(args: {
+  accountId: string;
+  userId: string;
+  draftId: string;
+}) {
+  const rows = await db
+    .delete(emailDrafts)
+    .where(
+      and(
+        eq(emailDrafts.accountId, args.accountId),
+        eq(emailDrafts.userId, args.userId),
+        eq(emailDrafts.id, args.draftId),
+      ),
+    )
+    .returning();
+  return rows[0] ?? null;
 }
 
 async function rulesFor(accountId: string, mailboxId: string) {
@@ -1017,6 +1395,7 @@ export async function sendEmail(args: {
   mailboxId: string;
   to: string[];
   cc?: string[];
+  bcc?: string[];
   subject: string;
   text: string;
   html?: string;
@@ -1064,6 +1443,7 @@ export async function sendEmail(args: {
     from: mailbox.displayName ? `${mailbox.displayName} <${mailbox.address}>` : mailbox.address,
     to: args.to,
     cc: args.cc,
+    bcc: args.bcc,
     subject: args.subject || '(Sin asunto)',
     text: args.text,
     html: args.html,
@@ -1074,22 +1454,93 @@ export async function sendEmail(args: {
     })),
   });
 
+  const [sentFolder] = await db
+    .select()
+    .from(emailFolders)
+    .where(
+      and(
+        eq(emailFolders.accountId, args.accountId),
+        eq(emailFolders.mailboxId, mailbox.id),
+        eq(emailFolders.kind, 'sent'),
+      ),
+    )
+    .limit(1);
+
+  let sentMessageId: string | null = null;
+  if (sentFolder) {
+    const now = new Date();
+    const localUid = Math.floor(now.getTime() / 1000) + Math.floor(Math.random() * 1000);
+    const [sentMessage] = await db
+      .insert(emailMessages)
+      .values({
+        accountId: args.accountId,
+        emailAccountId: account.id,
+        mailboxId: mailbox.id,
+        folderId: sentFolder.id,
+        imapMailbox: '__sent__',
+        imapUidValidity: 'local',
+        imapUid: localUid,
+        messageId: info.messageId ?? null,
+        threadKey: args.inReplyToMessageId ?? info.messageId ?? null,
+        subject: args.subject || '(Sin asunto)',
+        fromName: mailbox.displayName,
+        fromAddress: mailbox.address,
+        toAddresses: args.to,
+        ccAddresses: args.cc ?? [],
+        bccAddresses: args.bcc ?? [],
+        replyToAddresses: [],
+        receivedAt: now,
+        sentAt: now,
+        snippet: args.text.replace(/\s+/g, ' ').trim().slice(0, 240) || null,
+        bodyText: args.text,
+        bodyHtml: args.html ?? null,
+        isRead: true,
+        hasAttachments: Boolean(args.attachments?.length),
+        rawHeaders: {},
+        rawSize: null,
+      })
+      .returning();
+    sentMessageId = sentMessage.id;
+
+    for (const attachment of args.attachments ?? []) {
+      const fileName = attachment.filename || 'attachment';
+      const storageKey = `email/${args.accountId}/${sentMessage.id}/${crypto.randomUUID()}-${fileName}`;
+      await putObject({
+        key: storageKey,
+        body: Buffer.from(attachment.contentBase64, 'base64'),
+        contentType: attachment.contentType,
+      });
+      await db.insert(emailAttachments).values({
+        accountId: args.accountId,
+        messageId: sentMessage.id,
+        fileName,
+        contentType: attachment.contentType,
+        size: Math.ceil((attachment.contentBase64.length * 3) / 4),
+        storageKey,
+        contentId: null,
+      });
+    }
+  }
+
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
     userId: args.userId,
     mailboxId: mailbox.id,
+    folderId: sentFolder?.id ?? null,
+    messageId: sentMessageId,
     eventType: 'message.sent',
     metadata: {
       smtp_message_id: info.messageId,
       from: mailbox.address,
       to: args.to,
       cc: args.cc ?? [],
+      bcc: args.bcc ?? [],
       attachment_count: args.attachments?.length ?? 0,
       in_reply_to_message_id: args.inReplyToMessageId ?? null,
     },
   });
 
-  return { message_id: info.messageId ?? null };
+  return { message_id: info.messageId ?? null, stored_message_id: sentMessageId };
 }
 
 export async function importThunderbirdRules(args: {

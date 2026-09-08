@@ -239,6 +239,13 @@
       "when": 1788793327000,
       "tag": "0033_email_shared_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788849600000,
+      "tag": "0034_email_webmail_suite",
+      "breakpoints": true
     }
   ]
 }

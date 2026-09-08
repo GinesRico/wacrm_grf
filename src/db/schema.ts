@@ -1447,6 +1447,7 @@ export const emailMessages = pgTable(
     bodyText: text('body_text'),
     bodyHtml: text('body_html'),
     isRead: boolean('is_read').notNull().default(false),
+    isStarred: boolean('is_starred').notNull().default(false),
     hasAttachments: boolean('has_attachments').notNull().default(false),
     rawHeaders: jsonb('raw_headers').notNull().default({}),
     rawSize: integer('raw_size'),
@@ -1502,6 +1503,65 @@ export const emailAttachments = pgTable(
   ]
 );
 
+export const emailLabels = pgTable(
+  'email_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
+    createdBy: text('created_by').references(() => authUser.id, {
+      onDelete: 'set null',
+    }),
+    name: text('name').notNull(),
+    color: text('color').notNull().default('#64748b'),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_labels_mailbox_name_key').on(table.mailboxId, table.name),
+    index('idx_email_labels_account_mailbox').on(table.accountId, table.mailboxId),
+  ]
+);
+
+export const emailMessageLabels = pgTable(
+  'email_message_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => emailMessages.id, { onDelete: 'cascade' }),
+    labelId: uuid('label_id')
+      .notNull()
+      .references(() => emailLabels.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('email_message_labels_message_label_key').on(
+      table.messageId,
+      table.labelId
+    ),
+    index('idx_email_message_labels_account_label').on(
+      table.accountId,
+      table.labelId
+    ),
+  ]
+);
+
 export const emailRules = pgTable(
   'email_rules',
   {
@@ -1538,6 +1598,112 @@ export const emailRules = pgTable(
     check(
       'email_rules_operator_check',
       sql`${table.operator} in ('contains', 'equals', 'starts_with', 'ends_with')`
+    ),
+  ]
+);
+
+export const emailDrafts = pgTable(
+  'email_drafts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id')
+      .notNull()
+      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    toAddresses: text('to_addresses').array().notNull().default([]),
+    ccAddresses: text('cc_addresses').array().notNull().default([]),
+    bccAddresses: text('bcc_addresses').array().notNull().default([]),
+    subject: text('subject').notNull().default(''),
+    bodyText: text('body_text').notNull().default(''),
+    bodyHtml: text('body_html'),
+    attachments: jsonb('attachments').notNull().default([]),
+    inReplyToMessageId: uuid('in_reply_to_message_id').references(
+      () => emailMessages.id,
+      { onDelete: 'set null' }
+    ),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('idx_email_drafts_account_user_updated').on(
+      table.accountId,
+      table.userId,
+      table.updatedAt
+    ),
+    index('idx_email_drafts_mailbox').on(table.mailboxId),
+  ]
+);
+
+export const emailTrustedSenders = pgTable(
+  'email_trusted_senders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    senderAddress: text('sender_address').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('email_trusted_senders_user_sender_key').on(
+      table.accountId,
+      table.userId,
+      table.senderAddress
+    ),
+  ]
+);
+
+export const emailUserPreferences = pgTable(
+  'email_user_preferences',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    layout: text('layout').notNull().default('three-pane'),
+    readingPane: text('reading_pane').notNull().default('right'),
+    blockExternalContent: boolean('block_external_content')
+      .notNull()
+      .default(true),
+    plainTextComposer: boolean('plain_text_composer').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_user_preferences_account_user_key').on(
+      table.accountId,
+      table.userId
+    ),
+    check(
+      'email_user_preferences_layout_check',
+      sql`${table.layout} in ('three-pane', 'focused-list', 'bottom-pane')`
+    ),
+    check(
+      'email_user_preferences_reading_pane_check',
+      sql`${table.readingPane} in ('right', 'bottom')`
     ),
   ]
 );

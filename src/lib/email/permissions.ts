@@ -39,6 +39,20 @@ export async function resolveEmailPermission(args: {
 }): Promise<EmailPermissionSet> {
   if (hasMinRole(args.role, 'admin')) return FULL_ACCESS;
 
+  const [ownedMailbox] = await db
+    .select({ id: emailMailboxes.id })
+    .from(emailMailboxes)
+    .where(
+      and(
+        eq(emailMailboxes.accountId, args.accountId),
+        eq(emailMailboxes.id, args.mailboxId),
+        eq(emailMailboxes.kind, 'personal'),
+        eq(emailMailboxes.ownerUserId, args.userId),
+      ),
+    )
+    .limit(1);
+  if (ownedMailbox) return FULL_ACCESS;
+
   const departments = await getUserDepartmentIds(args.accountId, args.userId);
   if (departments.length === 0) {
     return { canRead: false, canMove: false, canClassify: false, canSend: false };
@@ -87,9 +101,19 @@ export async function listAccessibleMailboxes(args: {
   }
 
   const departments = await getUserDepartmentIds(args.accountId, args.userId);
-  if (departments.length === 0) return [];
+  const ownedPersonalMailboxes = await db
+    .select()
+    .from(emailMailboxes)
+    .where(
+      and(
+        eq(emailMailboxes.accountId, args.accountId),
+        eq(emailMailboxes.kind, 'personal'),
+        eq(emailMailboxes.ownerUserId, args.userId),
+      ),
+    );
+  if (departments.length === 0) return ownedPersonalMailboxes;
 
-  return db
+  const sharedMailboxes = await db
     .selectDistinct({
       id: emailMailboxes.id,
       accountId: emailMailboxes.accountId,
@@ -112,6 +136,13 @@ export async function listAccessibleMailboxes(args: {
         eq(emailPermissions.canRead, true),
       ),
     );
+
+  const seen = new Set<string>();
+  return [...ownedPersonalMailboxes, ...sharedMailboxes].filter((mailbox) => {
+    if (seen.has(mailbox.id)) return false;
+    seen.add(mailbox.id);
+    return true;
+  });
 }
 
 export async function listAccessibleFolders(args: {
@@ -134,9 +165,22 @@ export async function listAccessibleFolders(args: {
   }
 
   const departments = await getUserDepartmentIds(args.accountId, args.userId);
-  if (departments.length === 0) return [];
+  const ownedFolderRows = await db
+    .select()
+    .from(emailFolders)
+    .innerJoin(emailMailboxes, eq(emailMailboxes.id, emailFolders.mailboxId))
+    .where(
+      and(
+        eq(emailFolders.accountId, args.accountId),
+        inArray(emailFolders.mailboxId, args.mailboxIds),
+        eq(emailMailboxes.kind, 'personal'),
+        eq(emailMailboxes.ownerUserId, args.userId),
+      ),
+    );
+  const ownedFolders = ownedFolderRows.map((row) => row.email_folders);
+  if (departments.length === 0) return ownedFolders;
 
-  return db
+  const sharedFolders = await db
     .selectDistinct({
       id: emailFolders.id,
       accountId: emailFolders.accountId,
@@ -159,4 +203,11 @@ export async function listAccessibleFolders(args: {
         or(isNull(emailPermissions.folderId), eq(emailPermissions.folderId, emailFolders.id)),
       ),
     );
+
+  const seen = new Set<string>();
+  return [...ownedFolders, ...sharedFolders].filter((folder) => {
+    if (seen.has(folder.id)) return false;
+    seen.add(folder.id);
+    return true;
+  });
 }

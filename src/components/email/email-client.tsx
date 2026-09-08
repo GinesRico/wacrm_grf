@@ -1,13 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { EditorContent, useEditor } from '@tiptap/react';
+import Link from '@tiptap/extension-link';
+import Placeholder from '@tiptap/extension-placeholder';
+import StarterKit from '@tiptap/starter-kit';
+import Underline from '@tiptap/extension-underline';
 import {
   Archive,
+  Bold,
   CheckSquare,
   Download,
   FileIcon,
   FolderPlus,
+  Italic,
   Inbox,
+  LinkIcon,
   Loader2,
   Mail,
   MailOpen,
@@ -19,8 +27,10 @@ import {
   Search,
   Send,
   Square,
+  Star,
   Tag,
   Trash2,
+  UnderlineIcon,
   Wand2,
   X,
 } from 'lucide-react';
@@ -28,7 +38,6 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 interface Mailbox {
@@ -62,7 +71,9 @@ interface Message {
   body_text: string | null;
   body_html: string | null;
   is_read: boolean;
+  is_starred: boolean;
   has_attachments: boolean;
+  labels?: EmailLabel[];
 }
 
 interface MessagesResponse {
@@ -91,6 +102,27 @@ interface Attachment {
   content_id: string | null;
 }
 
+interface EmailLabel {
+  id: string;
+  mailbox_id: string | null;
+  name: string;
+  color: string;
+}
+
+interface Draft {
+  id: string;
+  mailbox_id: string;
+  to_addresses: string[];
+  cc_addresses: string[];
+  bcc_addresses: string[];
+  subject: string;
+  body_text: string;
+  body_html: string | null;
+  attachments: unknown;
+  in_reply_to_message_id: string | null;
+  updated_at: string;
+}
+
 interface ComposeAttachment {
   filename: string;
   content_type?: string;
@@ -101,12 +133,15 @@ interface ComposeAttachment {
 interface ComposeState {
   to: string;
   cc: string;
+  bcc: string;
   subject: string;
   text: string;
+  html: string;
   inReplyToMessageId: string | null;
 }
 
-type ActiveFilter = 'all' | 'unread' | 'attachments';
+type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
+type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
 
 interface RuleDraft {
   name: string;
@@ -119,8 +154,10 @@ interface RuleDraft {
 const emptyCompose: ComposeState = {
   to: '',
   cc: '',
+  bcc: '',
   subject: '',
   text: '',
+  html: '',
   inReplyToMessageId: null,
 };
 
@@ -131,6 +168,11 @@ const emptyRuleDraft: RuleDraft = {
   value: '',
   targetFolderId: '',
 };
+
+function initialSearchParam(name: string) {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get(name);
+}
 
 function splitRecipients(value: string): string[] {
   return value
@@ -157,6 +199,13 @@ function formatBytes(value: number | null) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function emailHtml(html: string, allowExternalContent: boolean) {
+  if (allowExternalContent) return html;
+  return html
+    .replace(/\s(src|srcset)=["']https?:\/\/[^"']+["']/gi, ' data-external-content-blocked="true"')
+    .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
+}
+
 function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -175,13 +224,92 @@ function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
   });
 }
 
+function RichTextEditor({
+  initialHtml,
+  onChange,
+}: {
+  initialHtml: string;
+  onChange: (html: string, text: string) => void;
+}) {
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Underline,
+      Link.configure({
+        openOnClick: false,
+      }),
+      Placeholder.configure({
+        placeholder: 'Escribe el mensaje',
+      }),
+    ],
+    content: initialHtml,
+    immediatelyRender: false,
+    onUpdate: ({ editor: activeEditor }) => {
+      onChange(activeEditor.getHTML(), activeEditor.getText());
+    },
+    editorProps: {
+      attributes: {
+        class:
+          'min-h-56 px-3 py-3 text-sm leading-6 outline-none prose prose-sm max-w-none dark:prose-invert',
+      },
+    },
+  });
+
+  return (
+    <div className="min-h-64 flex-1">
+      <div className="flex min-h-9 items-center gap-1 border-b border-border px-2">
+        <Button
+          type="button"
+          size="icon-xs"
+          variant={editor?.isActive('bold') ? 'secondary' : 'ghost'}
+          onClick={() => editor?.chain().focus().toggleBold().run()}
+          title="Negrita"
+        >
+          <Bold className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant={editor?.isActive('italic') ? 'secondary' : 'ghost'}
+          onClick={() => editor?.chain().focus().toggleItalic().run()}
+          title="Cursiva"
+        >
+          <Italic className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant={editor?.isActive('underline') ? 'secondary' : 'ghost'}
+          onClick={() => editor?.chain().focus().toggleUnderline().run()}
+          title="Subrayado"
+        >
+          <UnderlineIcon className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          onClick={() => {
+            const href = window.prompt('URL del enlace');
+            if (href) editor?.chain().focus().setLink({ href }).run();
+          }}
+          title="Enlace"
+        >
+          <LinkIcon className="size-3.5" />
+        </Button>
+      </div>
+      <EditorContent editor={editor} />
+    </div>
+  );
+}
+
 export function EmailClient() {
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedMailboxId, setSelectedMailboxId] = useState<string | null>(null);
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [selectedMailboxId, setSelectedMailboxId] = useState<string | null>(() => initialSearchParam('mailbox_id'));
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() => initialSearchParam('folder_id'));
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(() => initialSearchParam('message_id'));
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -193,11 +321,20 @@ export function EmailClient() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [compose, setCompose] = useState<ComposeState>(emptyCompose);
   const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [labels, setLabels] = useState<EmailLabel[]>([]);
+  const [selectedLabelId, setSelectedLabelId] = useState('');
   const [moveFolderId, setMoveFolderId] = useState('');
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
+  const [layout, setLayout] = useState<MailLayout>('three-pane');
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
+  const [editorKey, setEditorKey] = useState(0);
+  const [allowExternalContent, setAllowExternalContent] = useState(false);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -223,6 +360,7 @@ export function EmailClient() {
   const filteredMessages = useMemo(() => {
     if (activeFilter === 'unread') return messages.filter((message) => !message.is_read);
     if (activeFilter === 'attachments') return messages.filter((message) => message.has_attachments);
+    if (activeFilter === 'starred') return messages.filter((message) => message.is_starred);
     return messages;
   }, [activeFilter, messages]);
 
@@ -231,8 +369,12 @@ export function EmailClient() {
     if (selectedMailboxId) next.set('mailbox_id', selectedMailboxId);
     if (selectedFolderId) next.set('folder_id', selectedFolderId);
     if (query.trim()) next.set('q', query.trim());
+    if (advanced.from.trim()) next.set('from', advanced.from.trim());
+    if (advanced.to.trim()) next.set('to', advanced.to.trim());
+    if (advanced.sort !== 'newest') next.set('sort', advanced.sort);
+    if (selectedLabelId) next.set('label_id', selectedLabelId);
     return next.toString();
-  }, [query, selectedFolderId, selectedMailboxId]);
+  }, [advanced.from, advanced.sort, advanced.to, query, selectedFolderId, selectedLabelId, selectedMailboxId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -278,25 +420,53 @@ export function EmailClient() {
   }, [load]);
 
   useEffect(() => {
+    const next = new URLSearchParams(window.location.search);
+    if (selectedMailboxId) next.set('mailbox_id', selectedMailboxId);
+    else next.delete('mailbox_id');
+    if (selectedFolderId) next.set('folder_id', selectedFolderId);
+    else next.delete('folder_id');
+    if (selectedMessageId) next.set('message_id', selectedMessageId);
+    else next.delete('message_id');
+    const queryString = next.toString();
+    window.history.replaceState(null, '', queryString ? `/email?${queryString}` : '/email');
+  }, [selectedFolderId, selectedMailboxId, selectedMessageId]);
+
+  useEffect(() => {
     if (!selectedMailboxId) {
       setRules([]);
       setSelectedRuleId('');
+      setLabels([]);
+      setDrafts([]);
       return;
     }
     let cancelled = false;
     void (async () => {
-      const res = await fetch(`/api/email/rules?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
-        cache: 'no-store',
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!cancelled && res.ok) {
-        const nextRules = (payload.rules ?? []) as Rule[];
+      const [rulesRes, labelsRes, draftsRes] = await Promise.all([
+        fetch(`/api/email/rules?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
+          cache: 'no-store',
+        }),
+        fetch(`/api/email/labels?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
+          cache: 'no-store',
+        }),
+        fetch(`/api/email/drafts?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
+          cache: 'no-store',
+        }),
+      ]);
+      const [rulesPayload, labelsPayload, draftsPayload] = await Promise.all([
+        rulesRes.json().catch(() => ({})),
+        labelsRes.json().catch(() => ({})),
+        draftsRes.json().catch(() => ({})),
+      ]);
+      if (!cancelled) {
+        const nextRules = rulesRes.ok ? ((rulesPayload.rules ?? []) as Rule[]) : [];
         setRules(nextRules);
         setSelectedRuleId((current) =>
           current && nextRules.some((rule) => rule.id === current)
             ? current
             : nextRules[0]?.id ?? '',
         );
+        setLabels(labelsRes.ok ? (labelsPayload.labels ?? []) : []);
+        setDrafts(draftsRes.ok ? (draftsPayload.drafts ?? []) : []);
       }
     })();
     return () => {
@@ -324,6 +494,10 @@ export function EmailClient() {
       cancelled = true;
     };
   }, [selectedMessage?.id, selectedMessage?.has_attachments]);
+
+  useEffect(() => {
+    setAllowExternalContent(false);
+  }, [selectedMessage?.id]);
 
   useEffect(() => {
     setMoveFolderId(
@@ -361,9 +535,17 @@ export function EmailClient() {
   async function bulkPatchMessages(body: Record<string, unknown>) {
     const ids = Array.from(selectedMessageIds);
     if (ids.length === 0) return;
-    const results = await Promise.all(ids.map((id) => patchMessageById(id, body, false)));
-    const updated = results.filter(Boolean).length;
-    if (updated > 0) toast.success(`${updated} correos actualizados`);
+    const res = await fetch('/api/email/messages/batch', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message_ids: ids, ...body }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudieron actualizar los correos');
+      return;
+    }
+    toast.success(`${payload.messages?.length ?? ids.length} correos actualizados`);
     await load();
   }
 
@@ -469,26 +651,186 @@ export function EmailClient() {
     toast.success('Regla creada');
   }
 
+  async function createLabel() {
+    if (!selectedMailbox) return;
+    const name = window.prompt('Nombre de la etiqueta');
+    if (!name?.trim()) return;
+    const colors = ['#2563eb', '#16a34a', '#d97706', '#dc2626', '#7c3aed', '#0891b2'];
+    const color = colors[labels.length % colors.length];
+    const res = await fetch('/api/email/labels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mailbox_id: selectedMailbox.id, name, color }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudo crear la etiqueta');
+      return;
+    }
+    setLabels((current) => [...current, payload.label]);
+    toast.success('Etiqueta creada');
+  }
+
+  async function setMessageLabels(labelIds: string[]) {
+    if (!selectedMessage) return;
+    const res = await fetch('/api/email/labels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'set_message_labels',
+        message_id: selectedMessage.id,
+        label_ids: labelIds,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudieron asignar etiquetas');
+      return;
+    }
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === selectedMessage.id ? { ...message, labels: payload.labels ?? [] } : message,
+      ),
+    );
+  }
+
+  async function toggleLabel(labelId: string) {
+    const currentLabels = selectedMessage?.labels?.map((label) => label.id) ?? [];
+    const nextLabels = currentLabels.includes(labelId)
+      ? currentLabels.filter((id) => id !== labelId)
+      : [...currentLabels, labelId];
+    await setMessageLabels(nextLabels);
+  }
+
+  function openDraft(draft: Draft) {
+    setCurrentDraftId(draft.id);
+    setCompose({
+      to: draft.to_addresses.join(', '),
+      cc: draft.cc_addresses.join(', '),
+      bcc: draft.bcc_addresses.join(', '),
+      subject: draft.subject,
+      text: draft.body_text,
+      html: draft.body_html ?? draft.body_text,
+      inReplyToMessageId: draft.in_reply_to_message_id,
+    });
+    setComposeAttachments([]);
+    setEditorKey((current) => current + 1);
+    setComposeOpen(true);
+  }
+
   function openNewMessage() {
+    setCurrentDraftId(null);
     setCompose(emptyCompose);
     setComposeAttachments([]);
+    setEditorKey((current) => current + 1);
     setComposeOpen(true);
   }
 
   function openReply() {
     if (!selectedMessage) return;
+    setCurrentDraftId(null);
     setCompose({
       to: selectedMessage.from_address,
       cc: '',
+      bcc: '',
       subject: selectedMessage.subject.toLowerCase().startsWith('re:')
         ? selectedMessage.subject
         : `Re: ${selectedMessage.subject}`,
       text: '',
+      html: '',
       inReplyToMessageId: selectedMessage.id,
     });
     setComposeAttachments([]);
+    setEditorKey((current) => current + 1);
     setComposeOpen(true);
   }
+
+  function openReplyAll() {
+    if (!selectedMessage || !selectedMailbox) return;
+    const recipients = [selectedMessage.from_address, ...(selectedMessage.to_addresses ?? [])]
+      .filter((address) => address && address !== selectedMailbox.address);
+    setCurrentDraftId(null);
+    setCompose({
+      to: [...new Set(recipients)].join(', '),
+      cc: (selectedMessage.cc_addresses ?? []).join(', '),
+      bcc: '',
+      subject: selectedMessage.subject.toLowerCase().startsWith('re:')
+        ? selectedMessage.subject
+        : `Re: ${selectedMessage.subject}`,
+      text: '',
+      html: '',
+      inReplyToMessageId: selectedMessage.id,
+    });
+    setComposeAttachments([]);
+    setEditorKey((current) => current + 1);
+    setComposeOpen(true);
+  }
+
+  function openForward() {
+    if (!selectedMessage) return;
+    setCurrentDraftId(null);
+    setCompose({
+      to: '',
+      cc: '',
+      bcc: '',
+      subject: selectedMessage.subject.toLowerCase().startsWith('fw:')
+        ? selectedMessage.subject
+        : `Fw: ${selectedMessage.subject}`,
+      text: `\n\n---------- Mensaje reenviado ----------\nDe: ${selectedMessage.from_address}\nFecha: ${new Date(selectedMessage.received_at).toLocaleString('es-ES')}\nAsunto: ${selectedMessage.subject}\n\n${selectedMessage.body_text ?? selectedMessage.snippet ?? ''}`,
+      html: '',
+      inReplyToMessageId: null,
+    });
+    setComposeAttachments([]);
+    setEditorKey((current) => current + 1);
+    setComposeOpen(true);
+  }
+
+  const saveDraft = useCallback(async (silent = false) => {
+    if (!selectedMailbox || !composeOpen) return;
+    const hasContent =
+      compose.to.trim() ||
+      compose.cc.trim() ||
+      compose.bcc.trim() ||
+      compose.subject.trim() ||
+      compose.text.trim() ||
+      composeAttachments.length > 0;
+    if (!hasContent) return;
+
+    const res = await fetch('/api/email/drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        draft_id: currentDraftId,
+        mailbox_id: selectedMailbox.id,
+        to: splitRecipients(compose.to),
+        cc: splitRecipients(compose.cc),
+        bcc: splitRecipients(compose.bcc),
+        subject: compose.subject,
+        text: compose.text,
+        html: compose.html,
+        attachments: composeAttachments.map(({ filename, content_type, size }) => ({
+          filename,
+          content_type,
+          size,
+        })),
+        in_reply_to_message_id: compose.inReplyToMessageId,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (!silent) toast.error(payload.error || 'No se pudo guardar el borrador');
+      return;
+    }
+    const savedDraft = payload.draft as Draft | undefined;
+    setCurrentDraftId(savedDraft?.id ?? null);
+    if (savedDraft) {
+      setDrafts((current) => {
+        const others = current.filter((draft) => draft.id !== savedDraft.id);
+        return [savedDraft, ...others].slice(0, 20);
+      });
+    }
+    if (!silent) toast.success('Borrador guardado');
+  }, [compose, composeAttachments, composeOpen, currentDraftId, selectedMailbox]);
 
   async function downloadAttachment(attachment: Attachment) {
     const res = await fetch(`/api/email/attachments/${attachment.id}`, { cache: 'no-store' });
@@ -522,8 +864,10 @@ export function EmailClient() {
           mailbox_id: selectedMailbox.id,
           to: splitRecipients(compose.to),
           cc: splitRecipients(compose.cc),
+          bcc: splitRecipients(compose.bcc),
           subject: compose.subject,
           text: compose.text,
+          html: compose.html,
           in_reply_to_message_id: compose.inReplyToMessageId,
           attachments: composeAttachments,
         }),
@@ -531,7 +875,14 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo enviar');
       toast.success(compose.inReplyToMessageId ? 'Respuesta enviada' : 'Correo enviado');
+      if (currentDraftId) {
+        await fetch(`/api/email/drafts?draft_id=${encodeURIComponent(currentDraftId)}`, {
+          method: 'DELETE',
+        }).catch(() => undefined);
+        setDrafts((current) => current.filter((draft) => draft.id !== currentDraftId));
+      }
       setComposeOpen(false);
+      setCurrentDraftId(null);
       setCompose(emptyCompose);
       setComposeAttachments([]);
     } catch (error) {
@@ -540,6 +891,39 @@ export function EmailClient() {
       setSending(false);
     }
   }
+
+  useEffect(() => {
+    if (!composeOpen) return;
+    const timeout = window.setTimeout(() => {
+      void saveDraft(true);
+    }, 1800);
+    return () => window.clearTimeout(timeout);
+  }, [compose, composeAttachments, composeOpen, currentDraftId, saveDraft, selectedMailbox?.id]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTyping =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable;
+      if (isTyping) return;
+      if (event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        openNewMessage();
+      }
+      if (event.key.toLowerCase() === 'r' && selectedMessage) {
+        event.preventDefault();
+        openReply();
+      }
+      if (event.key.toLowerCase() === 'u' && selectedMessage) {
+        event.preventDefault();
+        void patchMessage({ is_read: !selectedMessage.is_read });
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   return (
     <div className="flex min-h-[calc(100vh-7rem)] flex-col rounded-lg border border-border bg-background">
@@ -567,6 +951,15 @@ export function EmailClient() {
         >
           {selectedMessage?.is_read ? <Mail className="size-4" /> : <MailOpen className="size-4" />}
           {selectedMessage?.is_read ? 'No leido' : 'Leido'}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => patchMessage({ is_starred: !selectedMessage?.is_starred })}
+          disabled={!selectedMessage}
+        >
+          <Star className={cn('size-4', selectedMessage?.is_starred && 'fill-amber-400 text-amber-500')} />
+          Favorito
         </Button>
         {selectedMessageIds.size > 0 ? (
           <div className="flex items-center gap-2 border-l border-border pl-2">
@@ -616,6 +1009,25 @@ export function EmailClient() {
           </Button>
         </div>
         <div className="ml-auto flex min-w-[240px] items-center gap-2">
+          <div className="grid grid-cols-3 rounded-lg bg-muted p-1">
+            {[
+              { id: 'three-pane' as const, label: '3' },
+              { id: 'focused-list' as const, label: 'Lista' },
+              { id: 'bottom-pane' as const, label: 'Abajo' },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setLayout(item.id)}
+                className={cn(
+                  'h-7 min-w-10 rounded-md px-2 text-xs font-medium',
+                  layout === item.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <Button
             size="sm"
             variant="outline"
@@ -650,7 +1062,13 @@ export function EmailClient() {
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[270px_minmax(320px,420px)_minmax(0,1fr)]">
+      <div
+        className={cn(
+          'grid min-h-0 flex-1',
+          layout === 'three-pane' && 'lg:grid-cols-[270px_minmax(320px,420px)_minmax(0,1fr)]',
+          layout !== 'three-pane' && 'lg:grid-cols-[270px_minmax(0,1fr)]',
+        )}
+      >
         <aside className="min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r">
           <div className="border-b border-border p-3">
             <div className="flex items-center justify-between">
@@ -739,6 +1157,59 @@ export function EmailClient() {
                 })}
               </div>
             </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between px-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Etiquetas</p>
+                <Button size="icon-xs" variant="ghost" onClick={createLabel} disabled={!selectedMailbox} title="Crear etiqueta">
+                  <Tag className="size-3.5" />
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedLabelId('')}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
+                    !selectedLabelId ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  <Tag className="size-4" />
+                  Todas
+                </button>
+                {labels.map((label) => (
+                  <button
+                    key={label.id}
+                    type="button"
+                    onClick={() => setSelectedLabelId(label.id)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
+                      selectedLabelId === label.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    <span className="size-2.5 rounded-full" style={{ backgroundColor: label.color }} />
+                    <span className="truncate">{label.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {drafts.length > 0 ? (
+              <div>
+                <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Borradores</p>
+                <div className="space-y-1">
+                  {drafts.slice(0, 6).map((draft) => (
+                    <button
+                      key={draft.id}
+                      type="button"
+                      onClick={() => openDraft(draft)}
+                      className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <span className="block truncate">{draft.subject || '(Sin asunto)'}</span>
+                      <span className="block truncate text-xs">{formatDate(draft.updated_at)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </aside>
 
@@ -753,15 +1224,46 @@ export function EmailClient() {
                 className="pl-8"
               />
             </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="xs" variant="ghost" onClick={() => setAdvancedOpen((current) => !current)}>
+                Busqueda avanzada
+              </Button>
+              {advancedOpen ? (
+                <>
+                  <Input
+                    value={advanced.from}
+                    onChange={(event) => setAdvanced((current) => ({ ...current, from: event.target.value }))}
+                    placeholder="De"
+                    className="h-7 min-w-32 flex-1"
+                  />
+                  <Input
+                    value={advanced.to}
+                    onChange={(event) => setAdvanced((current) => ({ ...current, to: event.target.value }))}
+                    placeholder="Para"
+                    className="h-7 min-w-32 flex-1"
+                  />
+                  <select
+                    value={advanced.sort}
+                    onChange={(event) => setAdvanced((current) => ({ ...current, sort: event.target.value }))}
+                    className="h-7 rounded-lg border border-border bg-card px-2 text-xs"
+                  >
+                    <option value="newest">Recientes</option>
+                    <option value="oldest">Antiguos</option>
+                    <option value="sender">Remitente</option>
+                  </select>
+                </>
+              ) : null}
+            </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
               <span>{unreadCount} no leidos</span>
             </div>
-            <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
+            <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-muted p-1">
               {[
                 { id: 'all' as const, label: 'Todos', count: messages.length },
                 { id: 'unread' as const, label: 'No leidos', count: unreadCount },
                 { id: 'attachments' as const, label: 'Adjuntos', count: attachmentCount },
+                { id: 'starred' as const, label: 'Fav', count: messages.filter((message) => message.is_starred).length },
               ].map((filter) => (
                 <button
                   key={filter.id}
@@ -804,6 +1306,7 @@ export function EmailClient() {
                   <button type="button" onClick={() => setSelectedMessageId(message.id)} className="min-w-0 text-left">
                     <span className="flex items-center gap-2">
                       <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
+                      {message.is_starred ? <Star className="size-3.5 fill-amber-400 text-amber-500" /> : null}
                       <span className={cn('truncate text-sm', !message.is_read && 'font-semibold')}>
                         {message.from_name || message.from_address}
                       </span>
@@ -814,6 +1317,19 @@ export function EmailClient() {
                       <span className="truncate">{message.subject || '(Sin asunto)'}</span>
                     </span>
                     <span className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{message.snippet}</span>
+                    {message.labels?.length ? (
+                      <span className="mt-2 flex flex-wrap gap-1">
+                        {message.labels.slice(0, 3).map((label) => (
+                          <span
+                            key={label.id}
+                            className="rounded px-1.5 py-0.5 text-[11px] text-white"
+                            style={{ backgroundColor: label.color }}
+                          >
+                            {label.name}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
                   </button>
                 </div>
               ))
@@ -821,7 +1337,13 @@ export function EmailClient() {
           </div>
         </section>
 
-        <main className="relative min-w-0 bg-card">
+        <main
+          className={cn(
+            'relative min-w-0 bg-card',
+            layout === 'focused-list' && 'hidden',
+            layout === 'bottom-pane' && 'lg:col-start-2 lg:row-start-2',
+          )}
+        >
           {selectedMessage ? (
             <div className="flex h-full min-h-[620px] flex-col">
               <div className="border-b border-border p-4">
@@ -843,11 +1365,54 @@ export function EmailClient() {
                       <Reply className="size-4" />
                       Responder
                     </Button>
+                    <Button variant="outline" size="sm" onClick={openReplyAll} disabled={!selectedMailbox?.can_send}>
+                      <Reply className="size-4" />
+                      Todos
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={openForward} disabled={!selectedMailbox?.can_send}>
+                      <Send className="size-4" />
+                      Reenviar
+                    </Button>
                     <Button variant="ghost" size="icon-sm" title="Mas acciones">
                       <MoreHorizontal className="size-4" />
                     </Button>
                   </div>
                 </div>
+
+                {labels.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {labels.map((label) => {
+                      const active = selectedMessage.labels?.some((item) => item.id === label.id);
+                      return (
+                        <button
+                          key={label.id}
+                          type="button"
+                          onClick={() => toggleLabel(label.id)}
+                          className={cn(
+                            'rounded-md border px-2 py-1 text-xs transition-colors',
+                            active ? 'border-transparent text-white' : 'border-border text-muted-foreground hover:bg-muted',
+                          )}
+                          style={active ? { backgroundColor: label.color } : undefined}
+                        >
+                          {label.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {selectedMessage.body_html ? (
+                  <div className="mt-3 flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    <span>Contenido externo bloqueado</span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setAllowExternalContent((current) => !current)}
+                    >
+                      {allowExternalContent ? 'Ocultar externo' : 'Mostrar externo'}
+                    </Button>
+                  </div>
+                ) : null}
 
                 {selectedMessage.has_attachments ? (
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -882,7 +1447,7 @@ export function EmailClient() {
                   <iframe
                     title="Contenido del correo"
                     sandbox=""
-                    srcDoc={selectedMessage.body_html}
+                    srcDoc={emailHtml(selectedMessage.body_html, allowExternalContent)}
                     className="h-[560px] w-full rounded-md border border-border bg-background"
                   />
                 ) : (
@@ -923,7 +1488,7 @@ export function EmailClient() {
                     className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
                   >
                     <option value="from">Remitente</option>
-                    <option value="domain">Dominio</option>
+                    <option value="from_domain">Dominio</option>
                     <option value="subject">Asunto</option>
                     <option value="to">Destinatario</option>
                   </select>
@@ -992,16 +1557,20 @@ export function EmailClient() {
                   placeholder="Cc"
                 />
                 <Input
+                  value={compose.bcc}
+                  onChange={(event) => setCompose((current) => ({ ...current, bcc: event.target.value }))}
+                  placeholder="Bcc"
+                />
+                <Input
                   value={compose.subject}
                   onChange={(event) => setCompose((current) => ({ ...current, subject: event.target.value }))}
                   placeholder="Asunto"
                 />
               </div>
-              <Textarea
-                value={compose.text}
-                onChange={(event) => setCompose((current) => ({ ...current, text: event.target.value }))}
-                placeholder="Escribe el mensaje"
-                className="min-h-56 flex-1 rounded-none border-0 focus-visible:ring-0"
+              <RichTextEditor
+                key={editorKey}
+                initialHtml={compose.html || compose.text}
+                onChange={(html, text) => setCompose((current) => ({ ...current, html, text }))}
               />
               {composeAttachments.length > 0 ? (
                 <div className="flex flex-wrap gap-2 border-t border-border p-3">
@@ -1025,19 +1594,24 @@ export function EmailClient() {
                 </div>
               ) : null}
               <div className="flex items-center justify-between border-t border-border p-3">
-                <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted">
-                  <Paperclip className="size-4" />
-                  Adjuntar
-                  <input
-                    type="file"
-                    multiple
-                    className="sr-only"
-                    onChange={(event) => {
-                      void addComposeFiles(event.target.files);
-                      event.currentTarget.value = '';
-                    }}
-                  />
-                </label>
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted">
+                    <Paperclip className="size-4" />
+                    Adjuntar
+                    <input
+                      type="file"
+                      multiple
+                      className="sr-only"
+                      onChange={(event) => {
+                        void addComposeFiles(event.target.files);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </label>
+                  <Button size="sm" variant="outline" onClick={() => saveDraft(false)}>
+                    Guardar
+                  </Button>
+                </div>
                 <Button onClick={sendCurrentMessage} disabled={sending || !compose.to.trim() || !selectedMailbox?.can_send}>
                   {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
                   Enviar

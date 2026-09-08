@@ -48,6 +48,7 @@ export async function POST(request: Request) {
       mailboxId: body.mailbox_id,
       to,
       cc: list(body?.cc),
+      bcc: list(body?.bcc),
       subject: typeof body?.subject === 'string' ? body.subject : '',
       text: typeof body?.text === 'string' ? body.text : '',
       html: typeof body?.html === 'string' ? body.html : undefined,

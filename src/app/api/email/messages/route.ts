@@ -20,6 +20,13 @@ export async function GET(request: Request) {
         mailboxId: url.searchParams.get('mailbox_id'),
         folderId: url.searchParams.get('folder_id'),
         q: url.searchParams.get('q'),
+        unread: url.searchParams.get('unread') === 'true',
+        attachments: url.searchParams.get('attachments') === 'true',
+        starred: url.searchParams.get('starred') === 'true',
+        labelId: url.searchParams.get('label_id'),
+        from: url.searchParams.get('from'),
+        to: url.searchParams.get('to'),
+        sort: url.searchParams.get('sort'),
       }),
     );
   } catch (err) {
@@ -40,6 +47,7 @@ export async function PATCH(request: Request) {
       role: ctx.role,
       messageId: body.message_id,
       isRead: typeof body?.is_read === 'boolean' ? body.is_read : undefined,
+      isStarred: typeof body?.is_starred === 'boolean' ? body.is_starred : undefined,
       folderId: typeof body?.folder_id === 'string' ? body.folder_id : undefined,
     });
     return NextResponse.json({ message: serializeEmailMessage(updated) });
