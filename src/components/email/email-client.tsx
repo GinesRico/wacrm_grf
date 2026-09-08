@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { MouseEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { EditorContent, useEditor } from '@tiptap/react';
@@ -15,6 +16,7 @@ import {
   Download,
   FileIcon,
   FolderPlus,
+  GripVertical,
   Info,
   Italic,
   Inbox,
@@ -201,6 +203,7 @@ const CONTEXT_MENU_WIDTH = 240;
 const CONTEXT_MENU_HEIGHT = 360;
 const VIEWPORT_GAP = 8;
 const EMAIL_COLUMN_STORAGE_KEY = 'wacrm.email.column-widths.v1';
+const EMAIL_PANEL_STORAGE_KEY = 'wacrm.email.panel-widths.v1';
 const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
   status: 48,
   from: 170,
@@ -217,6 +220,27 @@ const MIN_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
   received: 84,
   size: 70,
 };
+
+interface EmailPanelWidths {
+  sidebar: number;
+  list: number;
+}
+
+const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390 };
+const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300 };
+
+function initialEmailPanelWidths(): EmailPanelWidths {
+  if (typeof window === 'undefined') return DEFAULT_EMAIL_PANEL_WIDTHS;
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(EMAIL_PANEL_STORAGE_KEY) || '{}') as Partial<EmailPanelWidths>;
+    return {
+      sidebar: Math.max(MIN_EMAIL_PANEL_WIDTHS.sidebar, Number(stored.sidebar) || DEFAULT_EMAIL_PANEL_WIDTHS.sidebar),
+      list: Math.max(MIN_EMAIL_PANEL_WIDTHS.list, Number(stored.list) || DEFAULT_EMAIL_PANEL_WIDTHS.list),
+    };
+  } catch {
+    return DEFAULT_EMAIL_PANEL_WIDTHS;
+  }
+}
 
 function initialSearchParam(name: string) {
   if (typeof window === 'undefined') return null;
@@ -374,6 +398,26 @@ function ResizableMessageHeader({
   );
 }
 
+function PanelResizer({
+  label,
+  onResizeStart,
+}: {
+  label: string;
+  onResizeStart: (event: MouseEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onMouseDown={onResizeStart}
+      className="group relative z-20 hidden w-2 shrink-0 cursor-col-resize items-center justify-center bg-border/40 hover:bg-primary/30 lg:flex"
+      title={label}
+    >
+      <GripVertical className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
+    </button>
+  );
+}
+
 function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -505,6 +549,7 @@ export function EmailClient() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [columnWidths, setColumnWidths] = useState<EmailColumnWidths>(() => initialEmailColumnWidths());
+  const [panelWidths, setPanelWidths] = useState<EmailPanelWidths>(() => initialEmailPanelWidths());
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -644,6 +689,10 @@ export function EmailClient() {
   }, [columnWidths]);
 
   useEffect(() => {
+    window.localStorage.setItem(EMAIL_PANEL_STORAGE_KEY, JSON.stringify(panelWidths));
+  }, [panelWidths]);
+
+  useEffect(() => {
     if (!selectedMailboxId) {
       setLabels([]);
       setDrafts([]);
@@ -762,7 +811,16 @@ export function EmailClient() {
     setTabs((current) => current.filter((tab) => tab.id !== tabId));
     if (activeTabId === tabId) {
       setActiveTabId('folder');
+      setSelectedMessageId(null);
     }
+  }
+
+  function closeMessageView() {
+    if (activeTabId !== 'folder') {
+      setTabs((current) => current.filter((tab) => tab.id !== activeTabId));
+    }
+    setSelectedMessageId(null);
+    setActiveTabId('folder');
   }
 
   function setTableSort(nextSort: 'received' | 'sender' | 'subject' | 'size') {
@@ -816,6 +874,25 @@ export function EmailClient() {
     }
     window.addEventListener('mousemove', onPointerMove);
     window.addEventListener('mouseup', onPointerUp);
+  }
+
+  function startPanelResize(panel: keyof EmailPanelWidths, event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidths[panel];
+    const onPointerMove = (moveEvent: globalThis.MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      setPanelWidths((current) => ({
+        ...current,
+        [panel]: Math.max(MIN_EMAIL_PANEL_WIDTHS[panel], startWidth + delta),
+      }));
+    };
+    const stopResize = () => {
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', stopResize);
+    };
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', stopResize);
   }
 
   function openMessageContextMenu(event: MouseEvent, message: Message) {
@@ -1356,11 +1433,20 @@ export function EmailClient() {
       <div
         className={cn(
           'grid min-h-0 flex-1',
-          layout === 'three-pane' && !isMessageTabActive && 'lg:grid-cols-[270px_minmax(320px,420px)_minmax(0,1fr)]',
-          (layout !== 'three-pane' || isMessageTabActive) && 'lg:grid-cols-[270px_minmax(0,1fr)]',
+          layout === 'three-pane' && !isMessageTabActive && 'lg:grid-cols-[var(--mail-sidebar)_var(--mail-list)_minmax(0,1fr)]',
+          (layout !== 'three-pane' || isMessageTabActive) && 'lg:grid-cols-[var(--mail-sidebar)_minmax(0,1fr)]',
+          layout === 'bottom-pane' && !isMessageTabActive && 'lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]',
         )}
+        style={{
+          '--mail-sidebar': `${panelWidths.sidebar}px`,
+          '--mail-list': `${panelWidths.list}px`,
+        } as CSSProperties}
       >
-        <aside className="min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r">
+        <aside className={cn(
+          'relative min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r',
+          layout === 'bottom-pane' && !isMessageTabActive && 'lg:row-span-2',
+        )}>
+          <PanelResizer label="Ajustar ancho del buzón" onResizeStart={(event) => startPanelResize('sidebar', event)} />
           <div className="border-b border-border p-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-semibold">
@@ -1515,7 +1601,12 @@ export function EmailClient() {
           </div>
         </aside>
 
-        <section className={cn('min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r', isMessageTabActive && 'hidden')}>
+        <section className={cn(
+          'relative min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r',
+          isMessageTabActive && 'hidden',
+          layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-1',
+        )}>
+          <PanelResizer label="Ajustar ancho de la lista" onResizeStart={(event) => startPanelResize('list', event)} />
           <div className="border-b border-border p-3">
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -1724,7 +1815,7 @@ export function EmailClient() {
         <main
           className={cn(
             'relative min-w-0 bg-card',
-            layout === 'focused-list' && !isMessageTabActive && 'hidden',
+            layout === 'focused-list' && !isMessageTabActive && !composeOpen && 'hidden',
             layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-2',
           )}
         >
@@ -1745,7 +1836,7 @@ export function EmailClient() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => openReply()} disabled={!selectedMailbox?.can_send}>
+                    <Button size="sm" onClick={() => openReply()} disabled={!selectedMailbox?.can_send}>
                       <Reply className="size-4" />
                       Responder
                     </Button>
@@ -1757,20 +1848,26 @@ export function EmailClient() {
                       <Send className="size-4" />
                       Reenviar
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => copyMessageLink(selectedMessage)}>
+                    <Button variant="outline" size="icon-sm" onClick={() => copyMessageLink(selectedMessage)} title="Copiar enlace" aria-label="Copiar enlace">
                       <LinkIcon className="size-4" />
-                      Enlace
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => printMessage(selectedMessage)}>
+                    <Button variant="outline" size="icon-sm" onClick={() => printMessage(selectedMessage)} title="Imprimir" aria-label="Imprimir">
                       <Printer className="size-4" />
-                      Imprimir
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setDetailsOpen((current) => !current)}>
+                    <Button variant="outline" size="icon-sm" onClick={() => setDetailsOpen((current) => !current)} title="Detalles" aria-label="Detalles">
                       <Info className="size-4" />
-                      Detalles
                     </Button>
                     <Button variant="ghost" size="icon-sm" title="Mas acciones" onClick={openSelectedMessageMenu}>
                       <MoreHorizontal className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      title="Cerrar mensaje"
+                      aria-label="Cerrar mensaje"
+                      onClick={closeMessageView}
+                    >
+                      <X className="size-4" />
                     </Button>
                   </div>
                 </div>
@@ -1958,7 +2055,7 @@ export function EmailClient() {
           ) : null}
 
           {composeOpen ? (
-            <div className="absolute bottom-4 right-4 z-10 flex max-h-[calc(100%-2rem)] w-[min(620px,calc(100%-2rem))] flex-col rounded-lg border border-border bg-background shadow-xl">
+            <div className="fixed inset-4 z-40 flex h-[calc(100vh-2rem)] flex-col rounded-lg border border-border bg-background shadow-2xl">
               <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">
