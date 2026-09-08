@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { MouseEvent } from 'react';
+import type { DragEvent, MouseEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import Link from '@tiptap/extension-link';
@@ -803,6 +803,7 @@ export function EmailClient() {
   const [columnSettings, setColumnSettings] = useState<EmailColumnSettings>(() => initialEmailColumnSettings());
   const [panelWidths, setPanelWidths] = useState<EmailPanelWidths>(() => initialEmailPanelWidths());
   const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
+  const attachmentUrlsRef = useRef(new Map<string, string>());
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -1666,13 +1667,31 @@ export function EmailClient() {
   }, [compose, composeAttachments, composeOpen, currentDraftId, selectedMailbox]);
 
   async function getAttachmentUrl(attachment: Attachment) {
+    const cachedUrl = attachmentUrlsRef.current.get(attachment.id);
+    if (cachedUrl) return cachedUrl;
     const res = await fetch(`/api/email/attachments/${attachment.id}`, { cache: 'no-store' });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok || !payload.url) {
       toast.error(payload.error || 'No se pudo abrir el adjunto');
       return null;
     }
-    return String(payload.url);
+    const url = String(payload.url);
+    attachmentUrlsRef.current.set(attachment.id, url);
+    return url;
+  }
+
+  async function prepareAttachmentDrag(attachment: Attachment, event: DragEvent<HTMLDivElement>) {
+    event.dataTransfer.effectAllowed = 'copy';
+    const url = await getAttachmentUrl(attachment);
+    if (!url) return;
+
+    // Chromium exposes DownloadURL to the desktop/file manager, which is the
+    // same interaction users expect from a native webmail attachment.
+    event.dataTransfer.setData(
+      'DownloadURL',
+      `${attachment.content_type || 'application/octet-stream'}:${attachment.file_name}:${url}`,
+    );
+    event.dataTransfer.setData('text/uri-list', url);
   }
 
   async function openAttachmentPreview(attachment: Attachment) {
@@ -2542,7 +2561,10 @@ export function EmailClient() {
                           key={attachment.id}
                           role="button"
                           tabIndex={0}
+                          draggable
                           onClick={() => void openAttachmentPreview(attachment)}
+                          onDragStart={(event) => void prepareAttachmentDrag(attachment, event)}
+                          onMouseEnter={() => void getAttachmentUrl(attachment)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter') void openAttachmentPreview(attachment);
                           }}
