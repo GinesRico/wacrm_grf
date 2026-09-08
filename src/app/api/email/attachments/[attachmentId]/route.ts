@@ -2,15 +2,38 @@ import { NextResponse } from 'next/server';
 
 import { requireDbRole } from '@/lib/auth/current-account';
 import { toErrorResponse } from '@/lib/auth/errors';
-import { getEmailAttachmentDownloadForUser } from '@/lib/email/service';
+import {
+  getEmailAttachmentDownloadForUser,
+  getEmailAttachmentFileForUser,
+} from '@/lib/email/service';
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ attachmentId: string }> },
 ) {
   try {
     const ctx = await requireDbRole('viewer');
     const { attachmentId } = await context.params;
+    const url = new URL(request.url);
+    if (url.searchParams.get('raw') === '1') {
+      const attachment = await getEmailAttachmentFileForUser({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        role: ctx.role,
+        attachmentId,
+      });
+      const body = new ArrayBuffer(attachment.bytes.byteLength);
+      new Uint8Array(body).set(attachment.bytes);
+      return new Response(body, {
+        headers: {
+          'Content-Type': attachment.content_type || 'application/octet-stream',
+          'Content-Length': String(attachment.bytes.byteLength),
+          'Content-Disposition': `inline; filename="${attachment.file_name.replaceAll('"', '')}"`,
+          'Cache-Control': 'private, max-age=300',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
     const attachment = await getEmailAttachmentDownloadForUser({
       accountId: ctx.accountId,
       userId: ctx.userId,

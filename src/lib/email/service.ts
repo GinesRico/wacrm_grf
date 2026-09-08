@@ -19,7 +19,7 @@ import {
   emailPermissions,
   emailRules,
 } from '@/db/schema';
-import { putObject, signedObjectUrl } from '@/lib/storage/alarik';
+import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
 import { resolveEmailPermission } from './permissions';
 import { resolveRuleTargetFolder } from './rules';
@@ -1062,6 +1062,38 @@ export async function getEmailAttachmentDownloadForUser(args: {
   return {
     ...serializeEmailAttachment(attachment),
     url: await signedObjectUrl(attachment.storageKey),
+  };
+}
+
+export async function getEmailAttachmentFileForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  attachmentId: string;
+}) {
+  const [attachment] = await db
+    .select()
+    .from(emailAttachments)
+    .where(
+      and(
+        eq(emailAttachments.accountId, args.accountId),
+        eq(emailAttachments.id, args.attachmentId),
+      ),
+    )
+    .limit(1);
+  if (!attachment) throw new Error('Attachment not found.');
+
+  const current = await getEmailMessageForUser({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    messageId: attachment.messageId,
+  });
+  if (!current) throw new Error('Message not found or not permitted.');
+
+  return {
+    ...serializeEmailAttachment(attachment),
+    bytes: await getObjectBytes(attachment.storageKey),
   };
 }
 

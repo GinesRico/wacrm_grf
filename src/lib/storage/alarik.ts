@@ -51,6 +51,18 @@ export async function putObject(input: {
   );
 }
 
+export async function getObjectBytes(key: string): Promise<Uint8Array> {
+  const response = await getObjectStorageClient().send(
+    new GetObjectCommand({
+      Bucket: storageBucket(),
+      Key: key,
+    }),
+  );
+
+  if (!response.Body) return new Uint8Array();
+  return response.Body.transformToByteArray();
+}
+
 export async function deleteObject(key: string) {
   await getObjectStorageClient().send(
     new DeleteObjectCommand({

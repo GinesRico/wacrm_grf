@@ -9,6 +9,7 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
+import * as XLSX from 'xlsx';
 import {
   Archive,
   ArrowDown,
@@ -21,12 +22,14 @@ import {
   Columns3,
   Download,
   FileIcon,
+  FileSpreadsheet,
   Filter,
   FolderPlus,
   GripVertical,
   Info,
   Italic,
   Inbox,
+  ImageIcon,
   LayoutList,
   LinkIcon,
   Loader2,
@@ -50,6 +53,8 @@ import {
   UnderlineIcon,
   Wand2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -187,11 +192,28 @@ interface ContextMenuState {
   messageId: string;
 }
 
+type AttachmentPreviewKind = 'image' | 'pdf' | 'spreadsheet' | 'file';
+
+interface SpreadsheetPreview {
+  sheetNames: string[];
+  activeSheet: string;
+  rows: string[][];
+  truncated: boolean;
+  maxRows: number;
+  maxColumns: number;
+}
+
 interface AttachmentPreviewState {
   attachment: Attachment;
   url: string;
+  rawUrl: string;
+  kind: AttachmentPreviewKind;
   x: number;
   y: number;
+  zoom: number;
+  spreadsheet?: SpreadsheetPreview;
+  loading?: boolean;
+  error?: string | null;
 }
 
 interface ContextActionItem {
@@ -284,6 +306,62 @@ interface EmailPanelWidths {
 
 const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390, bottomList: 360 };
 const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300, bottomList: 180 };
+const SPREADSHEET_PREVIEW_MAX_ROWS = 5000;
+const SPREADSHEET_PREVIEW_MAX_COLUMNS = 10;
+const SPREADSHEET_EXTENSIONS = new Set(['xls', 'xlsx', 'csv']);
+const SPREADSHEET_MIME_TYPES = new Set([
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/csv',
+]);
+
+function attachmentExtension(attachment: Attachment) {
+  return attachment.file_name.split('.').pop()?.toLowerCase() ?? '';
+}
+
+function attachmentMime(attachment: Attachment) {
+  return attachment.content_type?.toLowerCase().split(';')[0].trim() ?? '';
+}
+
+function previewKindForAttachment(attachment: Attachment): AttachmentPreviewKind {
+  const mime = attachmentMime(attachment);
+  const extension = attachmentExtension(attachment);
+  if (mime.startsWith('image/')) return 'image';
+  if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
+  if (SPREADSHEET_MIME_TYPES.has(mime) || SPREADSHEET_EXTENSIONS.has(extension)) return 'spreadsheet';
+  return 'file';
+}
+
+function spreadsheetRowsForSheet(workbook: XLSX.WorkBook, sheetName: string): SpreadsheetPreview {
+  const worksheet = workbook.Sheets[sheetName];
+  const rawRows = worksheet
+    ? XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+        header: 1,
+        blankrows: false,
+        defval: '',
+      })
+    : [];
+  const rows = rawRows
+    .slice(0, SPREADSHEET_PREVIEW_MAX_ROWS)
+    .map((row) =>
+      Array.from({ length: SPREADSHEET_PREVIEW_MAX_COLUMNS }, (_, index) => {
+        const value = row[index];
+        if (value === null || value === undefined) return '';
+        return String(value);
+      }),
+    );
+
+  return {
+    sheetNames: workbook.SheetNames,
+    activeSheet: sheetName,
+    rows,
+    truncated:
+      rawRows.length > SPREADSHEET_PREVIEW_MAX_ROWS ||
+      rawRows.some((row) => row.length > SPREADSHEET_PREVIEW_MAX_COLUMNS),
+    maxRows: SPREADSHEET_PREVIEW_MAX_ROWS,
+    maxColumns: SPREADSHEET_PREVIEW_MAX_COLUMNS,
+  };
+}
 
 function initialEmailPanelWidths(): EmailPanelWidths {
   if (typeof window === 'undefined') return DEFAULT_EMAIL_PANEL_WIDTHS;
@@ -541,9 +619,13 @@ function ResizableMessageHeader({
       <button
         type="button"
         onMouseDown={(event) => onResizeStart(column, event)}
-        className="absolute right-0 top-1/2 h-5 w-2 -translate-y-1/2 cursor-col-resize rounded hover:bg-primary/30"
+        className="group/column-resizer absolute right-0 top-0 h-full w-2 cursor-col-resize rounded bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         title={`Ajustar columna ${label}`}
-      />
+        aria-label={`Ajustar ancho de columna ${label}`}
+      >
+        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border transition-[background-color,box-shadow] duration-150 group-hover/column-resizer:bg-primary group-focus-visible/column-resizer:bg-primary group-hover/column-resizer:shadow-[0_0_0_2px_hsl(var(--primary)/0.12)]" />
+        <GripVertical className="pointer-events-none absolute left-1/2 top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 text-primary opacity-0 transition-opacity group-hover/column-resizer:opacity-100 group-focus-visible/column-resizer:opacity-100" />
+      </button>
     </div>
   );
 }
@@ -565,7 +647,7 @@ function PanelResizer({
       aria-label={label}
       onMouseDown={onResizeStart}
       className={cn(
-        'group z-20 hidden shrink-0 items-center justify-center bg-border/70 transition-colors hover:bg-primary/40 lg:flex',
+        'group z-20 hidden shrink-0 items-center justify-center bg-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 lg:flex',
         orientation === 'vertical'
           ? 'absolute -right-1 top-0 h-full w-2 cursor-col-resize'
           : 'h-2 w-full cursor-row-resize',
@@ -575,12 +657,12 @@ function PanelResizer({
     >
       <span
         className={cn(
-          'rounded-full bg-muted-foreground/35 transition-colors group-hover:bg-primary',
-          orientation === 'vertical' ? 'h-10 w-1' : 'h-1 w-10',
+          'rounded-full bg-border transition-[background-color,box-shadow] duration-150 group-hover:bg-primary group-focus-visible:bg-primary group-hover:shadow-[0_0_0_2px_hsl(var(--primary)/0.12)]',
+          orientation === 'vertical' ? 'h-full w-px' : 'h-px w-full',
         )}
       />
       {orientation === 'vertical' ? (
-        <GripVertical className="absolute size-3 text-background/80 opacity-0 group-hover:opacity-100" />
+        <GripVertical className="pointer-events-none absolute size-3 text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
       ) : null}
     </button>
   );
@@ -1596,12 +1678,67 @@ export function EmailClient() {
   async function openAttachmentPreview(attachment: Attachment) {
     const url = await getAttachmentUrl(attachment);
     if (!url) return;
+    const rawUrl = `/api/email/attachments/${attachment.id}?raw=1`;
+    const kind = previewKindForAttachment(attachment);
     setAttachmentPreview({
       attachment,
       url,
+      rawUrl,
+      kind,
       x: Math.max(72, Math.round(window.innerWidth * 0.18)),
       y: Math.max(72, Math.round(window.innerHeight * 0.12)),
+      zoom: 1,
+      loading: kind === 'spreadsheet',
+      error: null,
     });
+    if (kind !== 'spreadsheet') return;
+
+    try {
+      const response = await fetch(rawUrl, { cache: 'no-store' });
+      if (!response.ok) throw new Error('No se pudo cargar la vista previa.');
+      const workbook = XLSX.read(await response.arrayBuffer(), { type: 'array' });
+      const firstSheet = workbook.SheetNames[0];
+      if (!firstSheet) throw new Error('El archivo no contiene hojas visibles.');
+      const spreadsheet = spreadsheetRowsForSheet(workbook, firstSheet);
+      setAttachmentPreview((current) => {
+        if (!current || current.attachment.id !== attachment.id) return current;
+        return { ...current, spreadsheet, loading: false };
+      });
+    } catch (error) {
+      setAttachmentPreview((current) => {
+        if (!current || current.attachment.id !== attachment.id) return current;
+        return {
+          ...current,
+          loading: false,
+          error: error instanceof Error ? error.message : 'No se pudo cargar la vista previa.',
+        };
+      });
+    }
+  }
+
+  async function selectSpreadsheetSheet(sheetName: string) {
+    if (!attachmentPreview || attachmentPreview.kind !== 'spreadsheet') return;
+    const { attachment, rawUrl } = attachmentPreview;
+    setAttachmentPreview((current) => current ? { ...current, loading: true, error: null } : current);
+    try {
+      const response = await fetch(rawUrl, { cache: 'no-store' });
+      if (!response.ok) throw new Error('No se pudo cargar la hoja.');
+      const workbook = XLSX.read(await response.arrayBuffer(), { type: 'array' });
+      const spreadsheet = spreadsheetRowsForSheet(workbook, sheetName);
+      setAttachmentPreview((current) => {
+        if (!current || current.attachment.id !== attachment.id) return current;
+        return { ...current, spreadsheet, loading: false };
+      });
+    } catch (error) {
+      setAttachmentPreview((current) => {
+        if (!current || current.attachment.id !== attachment.id) return current;
+        return {
+          ...current,
+          loading: false,
+          error: error instanceof Error ? error.message : 'No se pudo cargar la hoja.',
+        };
+      });
+    }
   }
 
   async function downloadAttachment(attachment: Attachment) {
@@ -2623,62 +2760,173 @@ export function EmailClient() {
       </div>
 
       {attachmentPreview ? (
-        <div className="pointer-events-none fixed inset-0 z-50">
+        <div className="pointer-events-none fixed inset-0 z-50 bg-black/35">
           <div
-            className="pointer-events-auto fixed flex h-[min(72vh,620px)] w-[min(78vw,860px)] min-w-[360px] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
+            className="pointer-events-auto fixed flex h-[min(86vh,820px)] w-[min(88vw,1040px)] min-w-[380px] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl"
             style={{ left: attachmentPreview.x, top: attachmentPreview.y }}
           >
             <div
-              className="flex min-h-10 cursor-move items-center gap-2 border-b border-border bg-card px-3"
+              className="flex min-h-10 cursor-move items-center gap-2 bg-background px-3"
               onMouseDown={startAttachmentPreviewDrag}
             >
-              <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+              {attachmentPreview.kind === 'spreadsheet' ? (
+                <FileSpreadsheet className="size-4 shrink-0 text-muted-foreground" />
+              ) : attachmentPreview.kind === 'image' ? (
+                <ImageIcon className="size-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+              )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{attachmentPreview.attachment.file_name}</p>
-                <p className="truncate text-xs text-muted-foreground">{formatBytes(attachmentPreview.attachment.size)}</p>
+                <p className="truncate text-sm font-semibold">{attachmentPreview.attachment.file_name}</p>
               </div>
-              <Button
-                size="icon-sm"
-                variant="outline"
-                onClick={() => void downloadAttachment(attachmentPreview.attachment)}
-                onMouseDown={(event) => event.stopPropagation()}
-                title="Descargar adjunto"
-                aria-label="Descargar adjunto"
-              >
-                <Download className="size-4" />
-              </Button>
-              <Button
-                size="icon-sm"
-                variant="ghost"
+              <button
+                type="button"
                 onClick={() => setAttachmentPreview(null)}
                 onMouseDown={(event) => event.stopPropagation()}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                 title="Cerrar"
                 aria-label="Cerrar"
               >
                 <X className="size-4" />
-              </Button>
+              </button>
             </div>
-            <div className="min-h-0 flex-1 bg-muted/20 p-3">
-              {attachmentPreview.attachment.content_type?.startsWith('image/') ? (
-                <div
-                  role="img"
+            <div className="flex min-h-9 items-center justify-end gap-1 border-y border-zinc-700 bg-zinc-800 px-3 text-zinc-100">
+              <span className="mr-auto truncate text-xs text-zinc-300">
+                {attachmentPreview.attachment.content_type || 'Archivo adjunto'} · {formatBytes(attachmentPreview.attachment.size)}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setAttachmentPreview((current) =>
+                    current ? { ...current, zoom: Math.max(0.5, Number((current.zoom - 0.1).toFixed(2))) } : current,
+                  )
+                }
+                className="rounded p-1 hover:bg-white/10"
+                title="Reducir zoom"
+                aria-label="Reducir zoom"
+              >
+                <ZoomOut className="size-4" />
+              </button>
+              <span className="min-w-16 rounded bg-zinc-700 px-2 py-1 text-center text-xs">
+                {Math.round(attachmentPreview.zoom * 100)}%
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setAttachmentPreview((current) =>
+                    current ? { ...current, zoom: Math.min(2, Number((current.zoom + 0.1).toFixed(2))) } : current,
+                  )
+                }
+                className="rounded p-1 hover:bg-white/10"
+                title="Aumentar zoom"
+                aria-label="Aumentar zoom"
+              >
+                <ZoomIn className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => window.open(attachmentPreview.rawUrl, '_blank', 'noopener,noreferrer')}
+                className="rounded p-1 hover:bg-white/10"
+                title="Abrir en pestana"
+                aria-label="Abrir en pestana"
+              >
+                <ArrowRight className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void downloadAttachment(attachmentPreview.attachment)}
+                className="rounded p-1 hover:bg-white/10"
+                title="Descargar adjunto"
+                aria-label="Descargar adjunto"
+              >
+                <Download className="size-4" />
+              </button>
+            </div>
+            {attachmentPreview.kind === 'spreadsheet' && attachmentPreview.spreadsheet ? (
+              <div className="flex min-h-9 items-center gap-1 border-b border-border bg-muted/50 px-3">
+                {attachmentPreview.spreadsheet.sheetNames.map((sheetName) => (
+                  <button
+                    key={sheetName}
+                    type="button"
+                    onClick={() => void selectSpreadsheetSheet(sheetName)}
+                    className={cn(
+                      'h-7 rounded-t border border-b-0 px-3 text-xs font-medium',
+                      attachmentPreview.spreadsheet?.activeSheet === sheetName
+                        ? 'bg-background text-foreground'
+                        : 'bg-muted text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {sheetName}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-3">
+              {attachmentPreview.kind === 'image' ? (
+                <div className="flex min-h-full items-center justify-center">
+                  <img
+                    src={attachmentPreview.rawUrl}
+                    alt={attachmentPreview.attachment.file_name}
+                    className="max-h-none max-w-none rounded border border-zinc-700 bg-white"
+                    style={{ transform: `scale(${attachmentPreview.zoom})`, transformOrigin: 'center top' }}
+                  />
+                </div>
+              ) : attachmentPreview.kind === 'pdf' ? (
+                <object
+                  data={attachmentPreview.rawUrl}
+                  type="application/pdf"
+                  className="h-full min-h-[620px] w-full rounded bg-white"
                   aria-label={attachmentPreview.attachment.file_name}
-                  className="h-full w-full rounded-md border border-border bg-background bg-contain bg-center bg-no-repeat"
-                  style={{ backgroundImage: `url("${attachmentPreview.url}")` }}
-                />
+                >
+                  <div className="flex h-full flex-col items-center justify-center rounded bg-background p-6 text-center text-foreground">
+                    <FileIcon className="mb-3 size-10 text-muted-foreground" />
+                    <p className="text-sm font-medium">No se pudo mostrar el PDF dentro del navegador.</p>
+                    <Button className="mt-4" size="sm" onClick={() => window.open(attachmentPreview.rawUrl, '_blank', 'noopener,noreferrer')}>
+                      Abrir PDF
+                    </Button>
+                  </div>
+                </object>
+              ) : attachmentPreview.kind === 'spreadsheet' ? (
+                <div className="min-h-full rounded bg-white p-3 text-black">
+                  {attachmentPreview.loading ? (
+                    <div className="flex h-48 items-center justify-center">
+                      <Loader2 className="size-5 animate-spin text-primary" />
+                    </div>
+                  ) : attachmentPreview.error ? (
+                    <div className="flex h-48 flex-col items-center justify-center text-center text-sm text-muted-foreground">
+                      <FileSpreadsheet className="mb-3 size-10" />
+                      {attachmentPreview.error}
+                    </div>
+                  ) : attachmentPreview.spreadsheet ? (
+                    <div style={{ transform: `scale(${attachmentPreview.zoom})`, transformOrigin: 'top left' }}>
+                      {attachmentPreview.spreadsheet.truncated ? (
+                        <div className="mb-2 border border-yellow-300 bg-yellow-50 px-3 py-2 text-center text-xs text-yellow-900">
+                          Vista previa truncada a {attachmentPreview.spreadsheet.maxRows} filas x {attachmentPreview.spreadsheet.maxColumns} columnas.
+                        </div>
+                      ) : null}
+                      <table className="border-collapse text-xs">
+                        <tbody>
+                          {attachmentPreview.spreadsheet.rows.map((row, rowIndex) => (
+                            <tr key={rowIndex}>
+                              {row.map((cell, cellIndex) => (
+                                <td key={cellIndex} className="min-w-36 max-w-72 border border-zinc-300 px-2 py-1 align-top">
+                                  <span className="block truncate" title={cell}>{cell}</span>
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
               ) : (
-                <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-border bg-background p-6 text-center">
+                <div className="flex h-full min-h-[360px] flex-col items-center justify-center rounded bg-background p-6 text-center">
                   <FileIcon className="mb-3 size-10 text-muted-foreground" />
                   <p className="max-w-full truncate text-sm font-medium">{attachmentPreview.attachment.file_name}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {attachmentPreview.attachment.content_type || 'Archivo adjunto'} · {formatBytes(attachmentPreview.attachment.size)}
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">Este tipo de archivo no tiene vista previa interna.</p>
                   <div className="mt-5 flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => window.open(attachmentPreview.url, '_blank', 'noopener,noreferrer')}
-                    >
+                    <Button size="sm" variant="outline" onClick={() => window.open(attachmentPreview.rawUrl, '_blank', 'noopener,noreferrer')}>
                       Abrir
                     </Button>
                     <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.attachment)}>
