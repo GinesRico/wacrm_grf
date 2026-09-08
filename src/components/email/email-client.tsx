@@ -12,9 +12,10 @@ import Underline from '@tiptap/extension-underline';
 import {
   Archive,
   Bold,
-  ChevronDown,
+  Check,
   Download,
   FileIcon,
+  Filter,
   FolderPlus,
   GripVertical,
   Info,
@@ -33,6 +34,7 @@ import {
   Search,
   Send,
   Settings,
+  SlidersHorizontal,
   Star,
   Tag,
   Trash2,
@@ -43,6 +45,12 @@ import {
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
@@ -224,10 +232,11 @@ const MIN_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
 interface EmailPanelWidths {
   sidebar: number;
   list: number;
+  bottomList: number;
 }
 
-const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390 };
-const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300 };
+const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390, bottomList: 360 };
+const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300, bottomList: 180 };
 
 function initialEmailPanelWidths(): EmailPanelWidths {
   if (typeof window === 'undefined') return DEFAULT_EMAIL_PANEL_WIDTHS;
@@ -236,6 +245,7 @@ function initialEmailPanelWidths(): EmailPanelWidths {
     return {
       sidebar: Math.max(MIN_EMAIL_PANEL_WIDTHS.sidebar, Number(stored.sidebar) || DEFAULT_EMAIL_PANEL_WIDTHS.sidebar),
       list: Math.max(MIN_EMAIL_PANEL_WIDTHS.list, Number(stored.list) || DEFAULT_EMAIL_PANEL_WIDTHS.list),
+      bottomList: Math.max(MIN_EMAIL_PANEL_WIDTHS.bottomList, Number(stored.bottomList) || DEFAULT_EMAIL_PANEL_WIDTHS.bottomList),
     };
   } catch {
     return DEFAULT_EMAIL_PANEL_WIDTHS;
@@ -400,9 +410,13 @@ function ResizableMessageHeader({
 
 function PanelResizer({
   label,
+  className,
+  orientation = 'vertical',
   onResizeStart,
 }: {
   label: string;
+  className?: string;
+  orientation?: 'vertical' | 'horizontal';
   onResizeStart: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
@@ -410,10 +424,24 @@ function PanelResizer({
       type="button"
       aria-label={label}
       onMouseDown={onResizeStart}
-      className="group relative z-20 hidden w-2 shrink-0 cursor-col-resize items-center justify-center bg-border/40 hover:bg-primary/30 lg:flex"
+      className={cn(
+        'group z-20 hidden shrink-0 items-center justify-center bg-border/70 transition-colors hover:bg-primary/40 lg:flex',
+        orientation === 'vertical'
+          ? 'absolute -right-1 top-0 h-full w-2 cursor-col-resize'
+          : 'h-2 w-full cursor-row-resize',
+        className,
+      )}
       title={label}
     >
-      <GripVertical className="size-3 text-muted-foreground opacity-0 group-hover:opacity-100" />
+      <span
+        className={cn(
+          'rounded-full bg-muted-foreground/35 transition-colors group-hover:bg-primary',
+          orientation === 'vertical' ? 'h-10 w-1' : 'h-1 w-10',
+        )}
+      />
+      {orientation === 'vertical' ? (
+        <GripVertical className="absolute size-3 text-background/80 opacity-0 group-hover:opacity-100" />
+      ) : null}
     </button>
   );
 }
@@ -574,7 +602,7 @@ export function EmailClient() {
   const visibleFolders = mailboxFolders;
 
   const selectedMessage = useMemo(
-    () => messages.find((message) => message.id === selectedMessageId) ?? messages[0] ?? null,
+    () => messages.find((message) => message.id === selectedMessageId) ?? null,
     [messages, selectedMessageId],
   );
 
@@ -604,11 +632,32 @@ export function EmailClient() {
   }, [activeFilter, advanced.from, advanced.sort, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
 
   const trashFolderId = mailboxFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
-  const isMessageTabActive = activeTabId !== 'folder';
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const isMessageTabActive = activeTab?.type === 'message';
+  const isContentTabActive = Boolean(activeTab);
+  const hasReaderPane = !composeOpen && Boolean(selectedMessage);
+  const isSplitReaderLayout = layout === 'three-pane' && hasReaderPane && !isContentTabActive;
+  const isBottomReaderLayout = layout === 'bottom-pane' && hasReaderPane && !isContentTabActive;
+  const shouldShowMessageList = !isContentTabActive;
+  const shouldShowContentPane = composeOpen || hasReaderPane || isMessageTabActive;
   const messageGridTemplate = emailMessageGridTemplate(columnWidths);
   const messageGridMinWidth = Object.values(columnWidths).reduce((total, width) => total + width, 0);
   const selectedMessageHasExternalContent = hasExternalEmailContent(selectedMessage?.body_html ?? null);
   const selectedLabel = labels.find((label) => label.id === selectedLabelId) ?? null;
+  const activeFilterLabel =
+    activeFilter === 'unread'
+      ? 'No leidos'
+      : activeFilter === 'attachments'
+        ? 'Con adjuntos'
+        : activeFilter === 'starred'
+          ? 'Favoritos'
+          : 'Todos';
+  const quickFilterOptions = [
+    { id: 'all' as const, label: 'Todos', count: messages.length },
+    { id: 'unread' as const, label: 'No leidos', count: unreadCount },
+    { id: 'attachments' as const, label: 'Con adjuntos', count: attachmentCount },
+    { id: 'starred' as const, label: 'Favoritos', count: messages.filter((message) => message.is_starred).length },
+  ];
   const activeSearchChips = [
     query.trim() ? { id: 'query', label: `Texto: ${query.trim()}` } : null,
     advanced.from.trim() ? { id: 'from', label: `De: ${advanced.from.trim()}` } : null,
@@ -791,6 +840,7 @@ export function EmailClient() {
 
   async function openMessageTab(message: Message) {
     await selectMessage(message);
+    setComposeOpen(false);
     setTabs((current) =>
       current.some((tab) => tab.id === message.id)
         ? current
@@ -888,10 +938,12 @@ export function EmailClient() {
 
   function startPanelResize(panel: keyof EmailPanelWidths, event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
-    const startX = event.clientX;
+    const isVerticalResize = panel === 'bottomList';
+    const startPosition = isVerticalResize ? event.clientY : event.clientX;
     const startWidth = panelWidths[panel];
     const onPointerMove = (moveEvent: globalThis.MouseEvent) => {
-      const delta = moveEvent.clientX - startX;
+      const nextPosition = isVerticalResize ? moveEvent.clientY : moveEvent.clientX;
+      const delta = nextPosition - startPosition;
       setPanelWidths((current) => ({
         ...current,
         [panel]: Math.max(MIN_EMAIL_PANEL_WIDTHS[panel], startWidth + delta),
@@ -1397,7 +1449,10 @@ export function EmailClient() {
       <div className="flex min-h-10 items-end gap-1 border-b border-border bg-card px-2">
         <button
           type="button"
-          onClick={() => setActiveTabId('folder')}
+          onClick={() => {
+            setActiveTabId('folder');
+            setComposeOpen(false);
+          }}
           className={cn(
             'flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
             activeTabId === 'folder' ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
@@ -1420,6 +1475,7 @@ export function EmailClient() {
               onClick={() => {
                 setActiveTabId(tab.id);
                 if (tab.messageId) setSelectedMessageId(tab.messageId);
+                if (tab.type !== 'compose') setComposeOpen(false);
                 if (tab.type === 'compose') setComposeOpen(true);
               }}
               className="min-w-0 flex-1 truncate text-left"
@@ -1444,18 +1500,19 @@ export function EmailClient() {
       <div
         className={cn(
           'grid min-h-0 flex-1',
-          layout === 'three-pane' && !isMessageTabActive && 'lg:grid-cols-[var(--mail-sidebar)_var(--mail-list)_minmax(0,1fr)]',
-          (layout !== 'three-pane' || isMessageTabActive) && 'lg:grid-cols-[var(--mail-sidebar)_minmax(0,1fr)]',
-          layout === 'bottom-pane' && !isMessageTabActive && 'lg:grid-rows-[minmax(0,1fr)_minmax(0,1fr)]',
+          isSplitReaderLayout && 'lg:grid-cols-[var(--mail-sidebar)_var(--mail-list)_minmax(0,1fr)]',
+          !isSplitReaderLayout && 'lg:grid-cols-[var(--mail-sidebar)_minmax(0,1fr)]',
+          isBottomReaderLayout && 'lg:grid-rows-[var(--mail-bottom-list)_8px_minmax(0,1fr)]',
         )}
         style={{
           '--mail-sidebar': `${panelWidths.sidebar}px`,
           '--mail-list': `${panelWidths.list}px`,
+          '--mail-bottom-list': `${panelWidths.bottomList}px`,
         } as CSSProperties}
       >
         <aside className={cn(
-          'relative min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r',
-          layout === 'bottom-pane' && !isMessageTabActive && 'lg:row-span-2',
+          'relative flex min-w-0 flex-col border-b border-border bg-card lg:border-b-0 lg:border-r',
+          isBottomReaderLayout && 'lg:row-span-3',
         )}>
           <PanelResizer label="Ajustar ancho del buzón" onResizeStart={(event) => startPanelResize('sidebar', event)} />
           <div className="border-b border-border p-3">
@@ -1469,7 +1526,7 @@ export function EmailClient() {
               </Button>
             </div>
           </div>
-          <div className="max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
             <div>
               <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Buzones</p>
               {mailboxes.length === 0 ? (
@@ -1488,6 +1545,7 @@ export function EmailClient() {
                           setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
                           setSelectedMessageId(null);
                           setActiveTabId('folder');
+                          setComposeOpen(false);
                         }}
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors',
@@ -1515,6 +1573,7 @@ export function EmailClient() {
                                 setSelectedFolderId(folder.id);
                                 setSelectedMessageId(null);
                                 setActiveTabId('folder');
+                                setComposeOpen(false);
                               }}
                               className={cn(
                                 'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
@@ -1552,6 +1611,7 @@ export function EmailClient() {
                         setSelectedFolderId(folder.id);
                         setSelectedMessageId(null);
                         setActiveTabId('folder');
+                        setComposeOpen(false);
                       }}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
@@ -1613,109 +1673,133 @@ export function EmailClient() {
         </aside>
 
         <section className={cn(
-          'relative min-w-0 border-b border-border bg-card lg:border-b-0 lg:border-r',
-          isMessageTabActive && 'hidden',
-          layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-1',
+          'relative flex min-w-0 flex-col border-b border-border bg-card lg:border-b-0',
+          isSplitReaderLayout && 'lg:border-r',
+          !shouldShowMessageList && 'hidden',
+          isBottomReaderLayout && 'lg:col-start-2 lg:row-start-1',
         )}>
-          <PanelResizer label="Ajustar ancho de la lista" onResizeStart={(event) => startPanelResize('list', event)} />
+          {isSplitReaderLayout ? (
+            <PanelResizer label="Ajustar ancho de la lista" onResizeStart={(event) => startPanelResize('list', event)} />
+          ) : null}
           <div className="border-b border-border p-3">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Buscar correo"
-                className="pl-8"
-              />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="xs" variant={advancedOpen ? 'secondary' : 'ghost'} onClick={() => setAdvancedOpen((current) => !current)}>
-                <Search className="size-3.5" />
-                Filtros
-                <ChevronDown className={cn('size-3.5 transition-transform', advancedOpen && 'rotate-180')} />
-              </Button>
-              {advancedOpen ? (
-                <div className="grid w-full gap-2 rounded-md border border-border bg-background p-2 shadow-sm">
-                  <div className="grid gap-2 sm:grid-cols-3">
-                  <Input
-                    value={advanced.from}
-                    onChange={(event) => setAdvanced((current) => ({ ...current, from: event.target.value }))}
-                    placeholder="De"
-                    className="h-8"
-                  />
-                  <Input
-                    value={advanced.to}
-                    onChange={(event) => setAdvanced((current) => ({ ...current, to: event.target.value }))}
-                    placeholder="Para"
-                    className="h-8"
-                  />
-                  <select
-                    value={advanced.sort}
-                    onChange={(event) => setAdvanced((current) => ({ ...current, sort: event.target.value }))}
-                    className="h-8 rounded-md border border-border bg-card px-2 text-xs"
-                  >
-                    <option value="newest">Recientes</option>
-                    <option value="oldest">Antiguos</option>
-                    <option value="sender">Remitente</option>
-                    <option value="subject_asc">Asunto A-Z</option>
-                    <option value="subject_desc">Asunto Z-A</option>
-                    <option value="size_desc">Mas grandes</option>
-                    <option value="size_asc">Mas pequenos</option>
-                  </select>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap gap-1">
-                      {[
-                        { id: 'folder' as const, label: 'Carpeta actual' },
-                        { id: 'mailbox' as const, label: 'Todo el buzon' },
-                      ].map((scope) => (
-                        <button
-                          key={scope.id}
-                          type="button"
-                          onClick={() => setSearchScope(scope.id)}
-                          className={cn(
-                            'h-7 rounded-md border px-2 text-xs transition-colors',
-                            searchScope === scope.id
-                              ? 'border-primary bg-primary/10 text-primary'
-                              : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
-                          )}
-                        >
-                          {scope.label}
-                        </button>
-                      ))}
+            <div className="relative z-20 flex items-center gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Buscar correo"
+                  className="h-9 pl-8 pr-10"
+                />
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant={advancedOpen ? 'secondary' : 'ghost'}
+                  onClick={() => setAdvancedOpen((current) => !current)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2"
+                  title="Busqueda avanzada"
+                  aria-label="Busqueda avanzada"
+                >
+                  <SlidersHorizontal className="size-3.5" />
+                </Button>
+                {advancedOpen ? (
+                  <div className="absolute left-0 right-0 top-[calc(100%+0.375rem)] z-30 grid gap-2 rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg">
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      <Input
+                        value={advanced.from}
+                        onChange={(event) => setAdvanced((current) => ({ ...current, from: event.target.value }))}
+                        placeholder="De"
+                        className="h-8"
+                      />
+                      <Input
+                        value={advanced.to}
+                        onChange={(event) => setAdvanced((current) => ({ ...current, to: event.target.value }))}
+                        placeholder="Para"
+                        className="h-8"
+                      />
+                      <select
+                        value={advanced.sort}
+                        onChange={(event) => setAdvanced((current) => ({ ...current, sort: event.target.value }))}
+                        className="h-8 rounded-md border border-border bg-card px-2 text-xs"
+                      >
+                        <option value="newest">Recientes</option>
+                        <option value="oldest">Antiguos</option>
+                        <option value="sender">Remitente</option>
+                        <option value="subject_asc">Asunto A-Z</option>
+                        <option value="subject_desc">Asunto Z-A</option>
+                        <option value="size_desc">Mas grandes</option>
+                        <option value="size_asc">Mas pequenos</option>
+                      </select>
                     </div>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => {
-                        setQuery('');
-                        setAdvanced({ from: '', to: '', sort: 'newest' });
-                        setActiveFilter('all');
-                        setSelectedLabelId('');
-                      }}
-                    >
-                      Limpiar
-                    </Button>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        {[
+                          { id: 'folder' as const, label: 'Carpeta actual' },
+                          { id: 'mailbox' as const, label: 'Todo el buzon' },
+                        ].map((scope) => (
+                          <button
+                            key={scope.id}
+                            type="button"
+                            onClick={() => setSearchScope(scope.id)}
+                            className={cn(
+                              'h-7 rounded-md border px-2 text-xs transition-colors',
+                              searchScope === scope.id
+                                ? 'border-primary bg-primary/10 text-primary'
+                                : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground',
+                            )}
+                          >
+                            {scope.label}
+                          </button>
+                        ))}
+                      </div>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => {
+                          setQuery('');
+                          setAdvanced({ from: '', to: '', sort: 'newest' });
+                          setActiveFilter('all');
+                          setSelectedLabelId('');
+                          setAdvancedOpen(false);
+                        }}
+                      >
+                        Limpiar
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      size="icon-sm"
+                      variant={activeFilter === 'all' ? 'outline' : 'secondary'}
+                      title={`Filtro: ${activeFilterLabel}`}
+                      aria-label={`Filtro: ${activeFilterLabel}`}
+                    />
+                  }
+                >
+                  <Filter className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  {quickFilterOptions.map((filter) => (
+                    <DropdownMenuItem
+                      key={filter.id}
+                      onClick={() => setActiveFilter(filter.id)}
+                      className={cn(activeFilter === filter.id && 'text-primary')}
+                    >
+                      <Check className={cn('size-4', activeFilter === filter.id ? 'opacity-100' : 'opacity-0')} />
+                      <span className="flex-1">{filter.label}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">{filter.count}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
               <span>{unreadCount} no leidos</span>
-            </div>
-            <div className="mt-3">
-              <select
-                value={activeFilter}
-                onChange={(event) => setActiveFilter(event.target.value as ActiveFilter)}
-                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-                aria-label="Filtrar mensajes"
-              >
-                <option value="all">Todos ({messages.length})</option>
-                <option value="unread">No leídos ({unreadCount})</option>
-                <option value="attachments">Con adjuntos ({attachmentCount})</option>
-                <option value="starred">Favoritos ({messages.filter((message) => message.is_starred).length})</option>
-              </select>
             </div>
             {activeSearchChips.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1734,7 +1818,7 @@ export function EmailClient() {
               </div>
             ) : null}
           </div>
-          <div className="max-h-[calc(100vh-15rem)] overflow-auto">
+          <div className="min-h-0 flex-1 overflow-auto">
             {loading ? (
               <div className="flex justify-center py-12">
                 <Loader2 className="size-5 animate-spin text-primary" />
@@ -1823,15 +1907,25 @@ export function EmailClient() {
           ) : null}
         </section>
 
+        {isBottomReaderLayout ? (
+          <PanelResizer
+            label="Ajustar alto entre lista y lector"
+            orientation="horizontal"
+            className="lg:col-start-2 lg:row-start-2"
+            onResizeStart={(event) => startPanelResize('bottomList', event)}
+          />
+        ) : null}
+
         <main
           className={cn(
             'relative min-w-0 bg-card',
-            layout === 'focused-list' && !isMessageTabActive && !composeOpen && 'hidden',
-            layout === 'bottom-pane' && !isMessageTabActive && 'lg:col-start-2 lg:row-start-2',
+            !shouldShowContentPane && 'hidden',
+            isSplitReaderLayout && 'lg:col-start-3',
+            isBottomReaderLayout && 'lg:col-start-2 lg:row-start-3',
           )}
         >
           {!composeOpen && selectedMessage ? (
-            <div className="flex h-full min-h-[620px] flex-col">
+            <div className="flex h-full min-h-0 flex-col">
               <div className="border-b border-border p-4">
                 <div className="flex flex-wrap items-start gap-3">
                   <div className="min-w-0 flex-1">
@@ -1981,7 +2075,7 @@ export function EmailClient() {
                     title="Contenido del correo"
                     sandbox=""
                     srcDoc={emailHtml(selectedMessage.body_html, allowExternalContent)}
-                    className="h-[560px] w-full rounded-md border border-border bg-background"
+                    className="h-full min-h-[420px] w-full rounded-md border border-border bg-background"
                   />
                 ) : (
                   <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
@@ -1991,7 +2085,7 @@ export function EmailClient() {
               </article>
             </div>
           ) : !composeOpen ? (
-            <div className="flex min-h-[620px] flex-col items-center justify-center gap-2 text-muted-foreground">
+            <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 text-muted-foreground">
               <MailOpen className="size-9" />
               <p className="text-sm">Selecciona un correo para leerlo.</p>
             </div>
