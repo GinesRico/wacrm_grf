@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { FolderPlus, Loader2, Plus, Save, ShieldCheck, Upload } from 'lucide-react';
+import { Edit2, FolderPlus, Loader2, Plus, Save, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -34,7 +34,16 @@ interface AdminState {
   folders: Array<{ id: string; mailbox_id: string; name: string; kind: string }>;
   permissions: Array<{ id: string; department_id: string; mailbox_id: string; folder_id: string | null; can_read: boolean; can_move: boolean; can_classify: boolean; can_send: boolean }>;
   departments: Array<{ id: string; name: string; color: string }>;
-  rules: Array<{ id: string; name: string; value: string; field: string; enabled: boolean }>;
+  rules: Array<{
+    id: string;
+    mailbox_id: string;
+    target_folder_id: string;
+    name: string;
+    value: string;
+    field: string;
+    operator: string;
+    enabled: boolean;
+  }>;
   audit_events: Array<{ id: string; event_type: string; created_at: string; metadata: unknown }>;
 }
 
@@ -52,6 +61,16 @@ export function EmailAdminSettings() {
   const [state, setState] = useState<AdminState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingRuleId, setSavingRuleId] = useState('');
+  const [editingRuleId, setEditingRuleId] = useState('');
+  const [ruleEdits, setRuleEdits] = useState<Record<string, {
+    name: string;
+    field: string;
+    operator: string;
+    value: string;
+    target_folder_id: string;
+    enabled: boolean;
+  }>>({});
   const [rulesSource, setRulesSource] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [form, setForm] = useState({
@@ -74,6 +93,21 @@ export function EmailAdminSettings() {
   const firstMailboxId = state.mailboxes[0]?.id ?? '';
   const firstDepartmentId = state.departments[0]?.id ?? '';
   const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId) ?? null;
+  const mailboxName = (mailboxId: string) => {
+    const mailbox = state.mailboxes.find((item) => item.id === mailboxId);
+    return mailbox?.display_name || mailbox?.address || 'Buzon';
+  };
+  const folderName = (folderId: string) => state.folders.find((item) => item.id === folderId)?.name ?? 'Carpeta';
+  const foldersForMailbox = (mailboxId: string) => state.folders.filter((folder) => folder.mailbox_id === mailboxId);
+  const ruleDraft = (rule: AdminState['rules'][number]) =>
+    ruleEdits[rule.id] ?? {
+      name: rule.name,
+      field: rule.field,
+      operator: rule.operator,
+      value: rule.value,
+      target_folder_id: rule.target_folder_id,
+      enabled: rule.enabled,
+    };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -237,6 +271,87 @@ export function EmailAdminSettings() {
     }
   }
 
+  function startEditRule(rule: AdminState['rules'][number]) {
+    setEditingRuleId(rule.id);
+    setRuleEdits((current) => ({
+      ...current,
+      [rule.id]: {
+        name: rule.name,
+        field: rule.field,
+        operator: rule.operator,
+        value: rule.value,
+        target_folder_id: rule.target_folder_id,
+        enabled: rule.enabled,
+      },
+    }));
+  }
+
+  function updateRuleDraft(ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) {
+    const rule = state.rules.find((item) => item.id === ruleId);
+    if (!rule) return;
+    setRuleEdits((current) => ({
+      ...current,
+      [ruleId]: {
+        ...ruleDraft(rule),
+        ...patch,
+      },
+    }));
+  }
+
+  async function saveRule(rule: AdminState['rules'][number]) {
+    const draft = ruleDraft(rule);
+    if (!draft.name.trim() || !draft.value.trim() || !draft.target_folder_id) return;
+    setSavingRuleId(rule.id);
+    try {
+      const res = await fetch('/api/email/rules', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rule_id: rule.id,
+          name: draft.name.trim(),
+          field: draft.field,
+          operator: draft.operator,
+          value: draft.value.trim(),
+          target_folder_id: draft.target_folder_id,
+          enabled: draft.enabled,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudo actualizar la regla');
+      toast.success('Regla actualizada');
+      setEditingRuleId('');
+      setRuleEdits((current) => {
+        const next = { ...current };
+        delete next[rule.id];
+        return next;
+      });
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo actualizar la regla');
+    } finally {
+      setSavingRuleId('');
+    }
+  }
+
+  async function deleteRule(ruleId: string) {
+    if (!window.confirm('Borrar esta regla?')) return;
+    setSavingRuleId(ruleId);
+    try {
+      const res = await fetch(`/api/email/rules?rule_id=${encodeURIComponent(ruleId)}`, {
+        method: 'DELETE',
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudo borrar la regla');
+      toast.success('Regla borrada');
+      if (editingRuleId === ruleId) setEditingRuleId('');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo borrar la regla');
+    } finally {
+      setSavingRuleId('');
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -370,7 +485,143 @@ export function EmailAdminSettings() {
               Importar reglas
             </Button>
           </div>
-          <p className="text-sm text-muted-foreground">{state.rules.length} reglas guardadas.</p>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Reglas guardadas</h3>
+              <span className="text-xs text-muted-foreground">{state.rules.length} reglas</span>
+            </div>
+            {state.rules.length === 0 ? (
+              <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                Aun no hay reglas importadas o creadas.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-md border border-border">
+                <div className="min-w-[920px]">
+                  <div className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_132px] items-center border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+                    <span>Buzon</span>
+                    <span>Nombre</span>
+                    <span>Campo</span>
+                    <span>Operador</span>
+                    <span>Valor</span>
+                    <span>Destino</span>
+                    <span>Activa</span>
+                    <span className="text-right">Acciones</span>
+                  </div>
+                  {state.rules.map((rule) => {
+                    const editing = editingRuleId === rule.id;
+                    const draft = ruleDraft(rule);
+                    const folderOptions = foldersForMailbox(rule.mailbox_id);
+                    return (
+                      <div
+                        key={rule.id}
+                        className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_132px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0"
+                      >
+                        <span className="truncate text-muted-foreground">{mailboxName(rule.mailbox_id)}</span>
+                        {editing ? (
+                          <>
+                            <Input
+                              value={draft.name}
+                              onChange={(event) => updateRuleDraft(rule.id, { name: event.target.value })}
+                              className="h-8"
+                            />
+                            <select
+                              value={draft.field}
+                              onChange={(event) => updateRuleDraft(rule.id, { field: event.target.value })}
+                              className="h-8 rounded-md border border-border bg-card px-2"
+                            >
+                              <option value="from">De</option>
+                              <option value="domain">Dominio</option>
+                              <option value="to">Para</option>
+                              <option value="subject">Asunto</option>
+                              <option value="body">Cuerpo</option>
+                            </select>
+                            <select
+                              value={draft.operator}
+                              onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })}
+                              className="h-8 rounded-md border border-border bg-card px-2"
+                            >
+                              <option value="contains">Contiene</option>
+                              <option value="equals">Igual</option>
+                              <option value="starts_with">Empieza por</option>
+                              <option value="ends_with">Termina por</option>
+                            </select>
+                            <Input
+                              value={draft.value}
+                              onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })}
+                              className="h-8"
+                            />
+                            <select
+                              value={draft.target_folder_id}
+                              onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value })}
+                              className="h-8 rounded-md border border-border bg-card px-2"
+                            >
+                              {folderOptions.map((folder) => (
+                                <option key={folder.id} value={folder.id}>
+                                  {folder.name}
+                                </option>
+                              ))}
+                            </select>
+                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <input
+                                type="checkbox"
+                                checked={draft.enabled}
+                                onChange={(event) => updateRuleDraft(rule.id, { enabled: event.target.checked })}
+                              />
+                              Si
+                            </label>
+                            <div className="flex justify-end gap-1">
+                              <Button size="icon-sm" variant="ghost" onClick={() => saveRule(rule)} disabled={savingRuleId === rule.id}>
+                                {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingRuleId('');
+                                  setRuleEdits((current) => {
+                                    const next = { ...current };
+                                    delete next[rule.id];
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <X className="size-4" />
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <span className="truncate font-medium">{rule.name}</span>
+                            <span className="truncate text-muted-foreground">{rule.field}</span>
+                            <span className="truncate text-muted-foreground">{rule.operator}</span>
+                            <span className="truncate">{rule.value}</span>
+                            <span className="truncate text-muted-foreground">{folderName(rule.target_folder_id)}</span>
+                            <span className={rule.enabled ? 'text-emerald-600' : 'text-muted-foreground'}>
+                              {rule.enabled ? 'Si' : 'No'}
+                            </span>
+                            <div className="flex justify-end gap-1">
+                              <Button size="icon-sm" variant="ghost" onClick={() => startEditRule(rule)} title="Editar regla">
+                                <Edit2 className="size-4" />
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                onClick={() => deleteRule(rule.id)}
+                                disabled={savingRuleId === rule.id}
+                                title="Borrar regla"
+                              >
+                                {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                              </Button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
     </section>

@@ -103,6 +103,7 @@ export function serializeEmailMessage(row: typeof emailMessages.$inferSelect) {
     is_read: row.isRead,
     is_starred: row.isStarred,
     has_attachments: row.hasAttachments,
+    raw_size: row.rawSize,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
@@ -420,7 +421,17 @@ export async function listEmailAdminState(accountId: string) {
       can_send: row.canSend,
     })),
     departments: departmentRows,
-    rules: ruleRows,
+    rules: ruleRows.map((row) => ({
+      id: row.id,
+      mailbox_id: row.mailboxId,
+      target_folder_id: row.targetFolderId,
+      name: row.name,
+      field: row.field,
+      operator: row.operator,
+      value: row.value,
+      enabled: row.enabled,
+      position: row.position,
+    })),
     audit_events: auditRows.map((row) => ({
       id: row.id,
       user_id: row.userId,
@@ -608,6 +619,103 @@ export async function createEmailRule(args: {
     metadata: { rule_id: rule.id, name: rule.name },
   });
   return rule;
+}
+
+export async function updateEmailRuleForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  ruleId: string;
+  targetFolderId: string;
+  name: string;
+  field: string;
+  operator: string;
+  value: string;
+  enabled: boolean;
+}) {
+  const [existing] = await db
+    .select()
+    .from(emailRules)
+    .where(and(eq(emailRules.accountId, args.accountId), eq(emailRules.id, args.ruleId)))
+    .limit(1);
+  if (!existing?.mailboxId) throw new Error('Rule not found.');
+
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: existing.mailboxId,
+    folderId: args.targetFolderId,
+  });
+  if (!permission.canClassify) {
+    throw new Error('You do not have permission to update rules for this mailbox.');
+  }
+
+  const [rule] = await db
+    .update(emailRules)
+    .set({
+      targetFolderId: args.targetFolderId,
+      name: clean(args.name) || existing.name,
+      field: args.field,
+      operator: args.operator,
+      value: clean(args.value),
+      enabled: args.enabled,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(emailRules.accountId, args.accountId), eq(emailRules.id, args.ruleId)))
+    .returning();
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: existing.mailboxId,
+    folderId: args.targetFolderId,
+    eventType: 'rule.updated',
+    metadata: { rule_id: rule.id, name: rule.name },
+  });
+
+  return rule;
+}
+
+export async function deleteEmailRuleForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  ruleId: string;
+}) {
+  const [existing] = await db
+    .select()
+    .from(emailRules)
+    .where(and(eq(emailRules.accountId, args.accountId), eq(emailRules.id, args.ruleId)))
+    .limit(1);
+  if (!existing?.mailboxId) throw new Error('Rule not found.');
+
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: existing.mailboxId,
+    folderId: existing.targetFolderId,
+  });
+  if (!permission.canClassify) {
+    throw new Error('You do not have permission to delete rules for this mailbox.');
+  }
+
+  const [deleted] = await db
+    .delete(emailRules)
+    .where(and(eq(emailRules.accountId, args.accountId), eq(emailRules.id, args.ruleId)))
+    .returning();
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: existing.mailboxId,
+    folderId: existing.targetFolderId,
+    eventType: 'rule.deleted',
+    metadata: { rule_id: existing.id, name: existing.name },
+  });
+
+  return deleted;
 }
 
 export async function applyEmailRuleToMessage(args: {

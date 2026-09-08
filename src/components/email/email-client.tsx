@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { MouseEvent } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -73,6 +74,7 @@ interface Message {
   is_read: boolean;
   is_starred: boolean;
   has_attachments: boolean;
+  raw_size: number | null;
   labels?: EmailLabel[];
 }
 
@@ -142,6 +144,19 @@ interface ComposeState {
 
 type ActiveFilter = 'all' | 'unread' | 'attachments' | 'starred';
 type MailLayout = 'three-pane' | 'focused-list' | 'bottom-pane';
+
+interface MailTab {
+  id: string;
+  type: 'folder' | 'message';
+  title: string;
+  messageId?: string;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  messageId: string;
+}
 
 interface RuleDraft {
   name: string;
@@ -335,6 +350,9 @@ export function EmailClient() {
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
   const [editorKey, setEditorKey] = useState(0);
   const [allowExternalContent, setAllowExternalContent] = useState(false);
+  const [tabs, setTabs] = useState<MailTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState('folder');
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -375,6 +393,8 @@ export function EmailClient() {
     if (selectedLabelId) next.set('label_id', selectedLabelId);
     return next.toString();
   }, [advanced.from, advanced.sort, advanced.to, query, selectedFolderId, selectedLabelId, selectedMailboxId]);
+
+  const trashFolderId = visibleFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -430,6 +450,18 @@ export function EmailClient() {
     const queryString = next.toString();
     window.history.replaceState(null, '', queryString ? `/email?${queryString}` : '/email');
   }, [selectedFolderId, selectedMailboxId, selectedMessageId]);
+
+  useEffect(() => {
+    function closeMenus() {
+      setContextMenu(null);
+    }
+    window.addEventListener('click', closeMenus);
+    window.addEventListener('scroll', closeMenus, true);
+    return () => {
+      window.removeEventListener('click', closeMenus);
+      window.removeEventListener('scroll', closeMenus, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedMailboxId) {
@@ -532,6 +564,42 @@ export function EmailClient() {
     await patchMessageById(selectedMessage.id, body);
   }
 
+  async function selectMessage(message: Message) {
+    setSelectedMessageId(message.id);
+    setActiveTabId((current) => current || 'folder');
+    if (!message.is_read) {
+      setMessages((current) =>
+        current.map((item) => (item.id === message.id ? { ...item, is_read: true } : item)),
+      );
+      await patchMessageById(message.id, { is_read: true }, false);
+    }
+  }
+
+  async function openMessageTab(message: Message) {
+    await selectMessage(message);
+    setTabs((current) =>
+      current.some((tab) => tab.id === message.id)
+        ? current
+        : [
+            ...current,
+            {
+              id: message.id,
+              type: 'message' as const,
+              title: message.subject || '(Sin asunto)',
+              messageId: message.id,
+            },
+          ].slice(-8),
+    );
+    setActiveTabId(message.id);
+  }
+
+  function closeTab(tabId: string) {
+    setTabs((current) => current.filter((tab) => tab.id !== tabId));
+    if (activeTabId === tabId) {
+      setActiveTabId('folder');
+    }
+  }
+
   async function bulkPatchMessages(body: Record<string, unknown>) {
     const ids = Array.from(selectedMessageIds);
     if (ids.length === 0) return;
@@ -565,6 +633,46 @@ export function EmailClient() {
       if (allSelected) return new Set([...current].filter((id) => !visibleIds.includes(id)));
       return new Set([...current, ...visibleIds]);
     });
+  }
+
+  function openMessageContextMenu(event: MouseEvent, message: Message) {
+    event.preventDefault();
+    setSelectedMessageId(message.id);
+    setContextMenu({ x: event.clientX, y: event.clientY, messageId: message.id });
+  }
+
+  async function runContextAction(action: 'open' | 'reply' | 'reply_all' | 'forward' | 'read' | 'unread' | 'trash' | 'star' | 'rule') {
+    const message = messages.find((item) => item.id === contextMenu?.messageId);
+    setContextMenu(null);
+    if (!message) return;
+    if (action === 'open') await openMessageTab(message);
+    if (action === 'reply') {
+      await selectMessage(message);
+      openReply(message);
+    }
+    if (action === 'reply_all') {
+      await selectMessage(message);
+      openReplyAll(message);
+    }
+    if (action === 'forward') {
+      await selectMessage(message);
+      openForward(message);
+    }
+    if (action === 'read') await patchMessageById(message.id, { is_read: true });
+    if (action === 'unread') await patchMessageById(message.id, { is_read: false });
+    if (action === 'star') await patchMessageById(message.id, { is_starred: !message.is_starred });
+    if (action === 'trash' && trashFolderId) await patchMessageById(message.id, { folder_id: trashFolderId });
+    if (action === 'rule') {
+      await selectMessage(message);
+      setRuleBuilderOpen(true);
+      setRuleDraft((current) => ({
+        ...current,
+        name: `Mover ${message.from_name || message.from_address}`,
+        field: 'from',
+        operator: 'contains',
+        value: message.from_address,
+      }));
+    }
   }
 
   async function sync() {
@@ -726,57 +834,60 @@ export function EmailClient() {
     setComposeOpen(true);
   }
 
-  function openReply() {
-    if (!selectedMessage) return;
+  function openReply(source?: Message) {
+    const message = source ?? selectedMessage;
+    if (!message) return;
     setCurrentDraftId(null);
     setCompose({
-      to: selectedMessage.from_address,
+      to: message.from_address,
       cc: '',
       bcc: '',
-      subject: selectedMessage.subject.toLowerCase().startsWith('re:')
-        ? selectedMessage.subject
-        : `Re: ${selectedMessage.subject}`,
+      subject: message.subject.toLowerCase().startsWith('re:')
+        ? message.subject
+        : `Re: ${message.subject}`,
       text: '',
       html: '',
-      inReplyToMessageId: selectedMessage.id,
+      inReplyToMessageId: message.id,
     });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
     setComposeOpen(true);
   }
 
-  function openReplyAll() {
-    if (!selectedMessage || !selectedMailbox) return;
-    const recipients = [selectedMessage.from_address, ...(selectedMessage.to_addresses ?? [])]
+  function openReplyAll(source?: Message) {
+    const message = source ?? selectedMessage;
+    if (!message || !selectedMailbox) return;
+    const recipients = [message.from_address, ...(message.to_addresses ?? [])]
       .filter((address) => address && address !== selectedMailbox.address);
     setCurrentDraftId(null);
     setCompose({
       to: [...new Set(recipients)].join(', '),
-      cc: (selectedMessage.cc_addresses ?? []).join(', '),
+      cc: (message.cc_addresses ?? []).join(', '),
       bcc: '',
-      subject: selectedMessage.subject.toLowerCase().startsWith('re:')
-        ? selectedMessage.subject
-        : `Re: ${selectedMessage.subject}`,
+      subject: message.subject.toLowerCase().startsWith('re:')
+        ? message.subject
+        : `Re: ${message.subject}`,
       text: '',
       html: '',
-      inReplyToMessageId: selectedMessage.id,
+      inReplyToMessageId: message.id,
     });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
     setComposeOpen(true);
   }
 
-  function openForward() {
-    if (!selectedMessage) return;
+  function openForward(source?: Message) {
+    const message = source ?? selectedMessage;
+    if (!message) return;
     setCurrentDraftId(null);
     setCompose({
       to: '',
       cc: '',
       bcc: '',
-      subject: selectedMessage.subject.toLowerCase().startsWith('fw:')
-        ? selectedMessage.subject
-        : `Fw: ${selectedMessage.subject}`,
-      text: `\n\n---------- Mensaje reenviado ----------\nDe: ${selectedMessage.from_address}\nFecha: ${new Date(selectedMessage.received_at).toLocaleString('es-ES')}\nAsunto: ${selectedMessage.subject}\n\n${selectedMessage.body_text ?? selectedMessage.snippet ?? ''}`,
+      subject: message.subject.toLowerCase().startsWith('fw:')
+        ? message.subject
+        : `Fw: ${message.subject}`,
+      text: `\n\n---------- Mensaje reenviado ----------\nDe: ${message.from_address}\nFecha: ${new Date(message.received_at).toLocaleString('es-ES')}\nAsunto: ${message.subject}\n\n${message.body_text ?? message.snippet ?? ''}`,
       html: '',
       inReplyToMessageId: null,
     });
@@ -1062,6 +1173,52 @@ export function EmailClient() {
         </div>
       </div>
 
+      <div className="flex min-h-10 items-end gap-1 border-b border-border bg-card px-2">
+        <button
+          type="button"
+          onClick={() => setActiveTabId('folder')}
+          className={cn(
+            'flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
+            activeTabId === 'folder' ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
+          )}
+        >
+          <Inbox className="size-4" />
+          <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
+        </button>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => {
+              setActiveTabId(tab.id);
+              if (tab.messageId) setSelectedMessageId(tab.messageId);
+            }}
+            className={cn(
+              'flex h-9 max-w-[260px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
+              activeTabId === tab.id ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
+            )}
+          >
+            <Mail className="size-4 shrink-0" />
+            <span className="truncate">{tab.title}</span>
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.stopPropagation();
+                closeTab(tab.id);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') closeTab(tab.id);
+              }}
+              className="ml-1 rounded p-0.5 hover:bg-muted"
+              title="Cerrar pestana"
+            >
+              <X className="size-3.5" />
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div
         className={cn(
           'grid min-h-0 flex-1',
@@ -1099,6 +1256,7 @@ export function EmailClient() {
                         setSelectedMailboxId(mailbox.id);
                         setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
                         setSelectedMessageId(null);
+                        setActiveTabId('folder');
                       }}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors',
@@ -1135,6 +1293,7 @@ export function EmailClient() {
                       onClick={() => {
                         setSelectedFolderId(folder.id);
                         setSelectedMessageId(null);
+                        setActiveTabId('folder');
                       }}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
@@ -1279,7 +1438,7 @@ export function EmailClient() {
               ))}
             </div>
           </div>
-          <div className="max-h-[calc(100vh-15rem)] overflow-y-auto">
+          <div className="max-h-[calc(100vh-15rem)] overflow-auto">
             {loading ? (
               <div className="flex justify-center py-12">
                 <Loader2 className="size-5 animate-spin text-primary" />
@@ -1287,54 +1446,120 @@ export function EmailClient() {
             ) : filteredMessages.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">No hay correos en esta vista.</div>
             ) : (
-              filteredMessages.map((message) => (
-                <div
-                  key={message.id}
-                  className={cn(
-                    'grid w-full grid-cols-[auto_minmax(0,1fr)] gap-2 border-b border-border p-3 text-left transition-colors hover:bg-muted/60',
-                    selectedMessage?.id === message.id && 'bg-muted',
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => toggleMessageSelection(message.id)}
-                    className="mt-0.5 flex size-5 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-                    title="Seleccionar"
-                  >
-                    {selectedMessageIds.has(message.id) ? <CheckSquare className="size-4" /> : <Square className="size-4" />}
-                  </button>
-                  <button type="button" onClick={() => setSelectedMessageId(message.id)} className="min-w-0 text-left">
-                    <span className="flex items-center gap-2">
-                      <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
-                      {message.is_starred ? <Star className="size-3.5 fill-amber-400 text-amber-500" /> : null}
-                      <span className={cn('truncate text-sm', !message.is_read && 'font-semibold')}>
-                        {message.from_name || message.from_address}
-                      </span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">{formatDate(message.received_at)}</span>
-                    </span>
-                    <span className={cn('mt-1 flex items-center gap-1 truncate text-sm', !message.is_read && 'font-semibold')}>
-                      {message.has_attachments ? <Paperclip className="size-3.5 shrink-0 text-muted-foreground" /> : null}
-                      <span className="truncate">{message.subject || '(Sin asunto)'}</span>
-                    </span>
-                    <span className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{message.snippet}</span>
-                    {message.labels?.length ? (
-                      <span className="mt-2 flex flex-wrap gap-1">
-                        {message.labels.slice(0, 3).map((label) => (
-                          <span
-                            key={label.id}
-                            className="rounded px-1.5 py-0.5 text-[11px] text-white"
-                            style={{ backgroundColor: label.color }}
-                          >
-                            {label.name}
-                          </span>
-                        ))}
-                      </span>
-                    ) : null}
-                  </button>
+              <div className="min-w-[760px]">
+                <div className="sticky top-0 z-10 grid grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border bg-card px-2 py-2 text-[11px] font-semibold uppercase text-muted-foreground">
+                  <span />
+                  <span>Estado</span>
+                  <span>De</span>
+                  <span>Asunto</span>
+                  <span>Categorias</span>
+                  <span>Recibido</span>
+                  <span>Tamano</span>
                 </div>
-              ))
+                {filteredMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => void selectMessage(message)}
+                    onDoubleClick={() => void openMessageTab(message)}
+                    onContextMenu={(event) => openMessageContextMenu(event, message)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void selectMessage(message);
+                    }}
+                    className={cn(
+                      'grid min-h-9 grid-cols-[34px_46px_minmax(120px,0.9fr)_minmax(240px,1.8fr)_140px_96px_80px] items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
+                      selectedMessage?.id === message.id && 'bg-primary/10',
+                      !message.is_read && 'font-semibold',
+                    )}
+                    title="Doble clic para abrir en pestana. Clic derecho para acciones."
+                  >
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleMessageSelection(message.id);
+                      }}
+                      className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                      title="Seleccionar"
+                    >
+                      {selectedMessageIds.has(message.id) ? <CheckSquare className="size-4" /> : <Square className="size-4" />}
+                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
+                      {message.has_attachments ? <Paperclip className="size-3.5 shrink-0 text-muted-foreground" /> : <Mail className="size-3.5 shrink-0 text-muted-foreground" />}
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void patchMessageById(message.id, { is_starred: !message.is_starred });
+                        }}
+                        className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-amber-500"
+                        title={message.is_starred ? 'Quitar favorito' : 'Marcar favorito'}
+                      >
+                        <Star className={cn('size-3.5', message.is_starred && 'fill-amber-400 text-amber-500')} />
+                      </button>
+                    </div>
+                    <span className="truncate pr-3">{message.from_name || message.from_address}</span>
+                    <span className="min-w-0 pr-3">
+                      <span className="block truncate">{message.subject || '(Sin asunto)'}</span>
+                      {message.snippet ? (
+                        <span className="block truncate text-xs font-normal text-muted-foreground">{message.snippet}</span>
+                      ) : null}
+                    </span>
+                    <span className="flex min-w-0 gap-1 overflow-hidden pr-2">
+                      {message.labels?.slice(0, 2).map((label) => (
+                        <span
+                          key={label.id}
+                          className="max-w-28 truncate rounded px-1.5 py-0.5 text-[11px] font-medium text-white"
+                          style={{ backgroundColor: label.color }}
+                        >
+                          {label.name}
+                        </span>
+                      ))}
+                    </span>
+                    <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatDate(message.received_at)}</span>
+                    <span className="truncate text-xs font-normal text-muted-foreground tabular-nums">{formatBytes(message.raw_size)}</span>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
+          {contextMenu ? (
+            <div
+              className="fixed z-50 w-60 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {[
+                { action: 'open' as const, label: 'Abrir en pestana', icon: MailOpen },
+                { action: 'reply' as const, label: 'Responder', icon: Reply },
+                { action: 'reply_all' as const, label: 'Responder a todos', icon: Reply },
+                { action: 'forward' as const, label: 'Reenviar', icon: Send },
+                {
+                  action: messages.find((item) => item.id === contextMenu.messageId)?.is_read ? 'unread' as const : 'read' as const,
+                  label: messages.find((item) => item.id === contextMenu.messageId)?.is_read ? 'Marcar como no leido' : 'Marcar como leido',
+                  icon: Mail,
+                },
+                { action: 'star' as const, label: 'Alternar favorito', icon: Star },
+                { action: 'rule' as const, label: 'Crear regla desde este correo', icon: Wand2 },
+                { action: 'trash' as const, label: 'Mover a papelera', icon: Trash2 },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={`${item.action}-${item.label}`}
+                    type="button"
+                    onClick={() => void runContextAction(item.action)}
+                    className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+                  >
+                    <Icon className="size-4" />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </section>
 
         <main
@@ -1361,15 +1586,15 @@ export function EmailClient() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={openReply} disabled={!selectedMailbox?.can_send}>
+                    <Button variant="outline" size="sm" onClick={() => openReply()} disabled={!selectedMailbox?.can_send}>
                       <Reply className="size-4" />
                       Responder
                     </Button>
-                    <Button variant="outline" size="sm" onClick={openReplyAll} disabled={!selectedMailbox?.can_send}>
+                    <Button variant="outline" size="sm" onClick={() => openReplyAll()} disabled={!selectedMailbox?.can_send}>
                       <Reply className="size-4" />
                       Todos
                     </Button>
-                    <Button variant="outline" size="sm" onClick={openForward} disabled={!selectedMailbox?.can_send}>
+                    <Button variant="outline" size="sm" onClick={() => openForward()} disabled={!selectedMailbox?.can_send}>
                       <Send className="size-4" />
                       Reenviar
                     </Button>

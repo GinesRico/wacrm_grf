@@ -5,8 +5,10 @@ import { toErrorResponse } from '@/lib/auth/errors';
 import {
   applyEmailRuleToMessage,
   createEmailRule,
+  deleteEmailRuleForUser,
   listEmailRulesForUser,
   serializeEmailMessage,
+  updateEmailRuleForUser,
 } from '@/lib/email/service';
 
 function serializeRule(row: {
@@ -92,6 +94,60 @@ export async function POST(request: Request) {
       value: String(body.value ?? ''),
     });
     return NextResponse.json({ rule: serializeRule(rule) });
+  } catch (err) {
+    if (err instanceof Error) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    return toErrorResponse(err);
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const ctx = await requireDbRole('agent');
+    const body = await request.json().catch(() => ({}));
+    if (typeof body?.rule_id !== 'string' || typeof body?.target_folder_id !== 'string') {
+      return NextResponse.json(
+        { error: 'rule_id and target_folder_id are required.' },
+        { status: 400 },
+      );
+    }
+    const rule = await updateEmailRuleForUser({
+      accountId: ctx.accountId,
+      userId: ctx.userId,
+      role: ctx.role,
+      ruleId: body.rule_id,
+      targetFolderId: body.target_folder_id,
+      name: String(body.name ?? ''),
+      field: String(body.field ?? 'from'),
+      operator: String(body.operator ?? 'contains'),
+      value: String(body.value ?? ''),
+      enabled: typeof body.enabled === 'boolean' ? body.enabled : true,
+    });
+    return NextResponse.json({ rule: serializeRule(rule) });
+  } catch (err) {
+    if (err instanceof Error) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    return toErrorResponse(err);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const ctx = await requireDbRole('agent');
+    const url = new URL(request.url);
+    const ruleId = url.searchParams.get('rule_id');
+    if (!ruleId) {
+      return NextResponse.json({ error: 'rule_id is required.' }, { status: 400 });
+    }
+    const rule = await deleteEmailRuleForUser({
+      accountId: ctx.accountId,
+      userId: ctx.userId,
+      role: ctx.role,
+      ruleId,
+    });
+    return NextResponse.json({ rule: rule ? serializeRule(rule) : null });
   } catch (err) {
     if (err instanceof Error) {
       return NextResponse.json({ error: err.message }, { status: 400 });
