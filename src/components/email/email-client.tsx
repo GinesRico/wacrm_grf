@@ -11,6 +11,7 @@ import Underline from '@tiptap/extension-underline';
 import {
   Archive,
   Bold,
+  ChevronDown,
   Download,
   FileIcon,
   FolderPlus,
@@ -84,17 +85,6 @@ interface MessagesResponse {
   mailboxes: Mailbox[];
   folders: Folder[];
   messages: Message[];
-}
-
-interface Rule {
-  id: string;
-  mailbox_id: string;
-  target_folder_id: string;
-  name: string;
-  field: string;
-  operator: string;
-  value: string;
-  enabled: boolean;
 }
 
 interface Attachment {
@@ -492,18 +482,15 @@ export function EmailClient() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [sending, setSending] = useState(false);
-  const [rules, setRules] = useState<Rule[]>([]);
-  const [selectedRuleId, setSelectedRuleId] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [compose, setCompose] = useState<ComposeState>(emptyCompose);
   const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [, setDrafts] = useState<Draft[]>([]);
   const [labels, setLabels] = useState<EmailLabel[]>([]);
   const [selectedLabelId, setSelectedLabelId] = useState('');
-  const [moveFolderId, setMoveFolderId] = useState('');
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>('all');
   const [layout, setLayout] = useState<MailLayout>('three-pane');
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
@@ -524,7 +511,7 @@ export function EmailClient() {
     [mailboxes, selectedMailboxId],
   );
 
-  const visibleFolders = useMemo(
+  const mailboxFolders = useMemo(
     () =>
       folders
         .filter((folder) => folder.mailbox_id === selectedMailbox?.id)
@@ -532,12 +519,21 @@ export function EmailClient() {
     [folders, selectedMailbox?.id],
   );
 
+  const publicFolders = useMemo(
+    () => folders
+      .filter((folder) => folder.kind === 'custom')
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    [folders],
+  );
+
+  const visibleFolders = mailboxFolders;
+
   const selectedMessage = useMemo(
     () => messages.find((message) => message.id === selectedMessageId) ?? messages[0] ?? null,
     [messages, selectedMessageId],
   );
 
-  const selectedFolder = visibleFolders.find((folder) => folder.id === selectedFolderId) ?? null;
+  const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
   const unreadCount = messages.filter((message) => !message.is_read).length;
   const attachmentCount = messages.filter((message) => message.has_attachments).length;
   const filteredMessages = useMemo(() => {
@@ -562,7 +558,7 @@ export function EmailClient() {
     return next.toString();
   }, [activeFilter, advanced.from, advanced.sort, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
 
-  const trashFolderId = visibleFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
+  const trashFolderId = mailboxFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
   const isMessageTabActive = activeTabId !== 'folder';
   const messageGridTemplate = emailMessageGridTemplate(columnWidths);
   const messageGridMinWidth = Object.values(columnWidths).reduce((total, width) => total + width, 0);
@@ -649,18 +645,13 @@ export function EmailClient() {
 
   useEffect(() => {
     if (!selectedMailboxId) {
-      setRules([]);
-      setSelectedRuleId('');
       setLabels([]);
       setDrafts([]);
       return;
     }
     let cancelled = false;
     void (async () => {
-      const [rulesRes, labelsRes, draftsRes] = await Promise.all([
-        fetch(`/api/email/rules?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
-          cache: 'no-store',
-        }),
+      const [labelsRes, draftsRes] = await Promise.all([
         fetch(`/api/email/labels?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
           cache: 'no-store',
         }),
@@ -668,19 +659,11 @@ export function EmailClient() {
           cache: 'no-store',
         }),
       ]);
-      const [rulesPayload, labelsPayload, draftsPayload] = await Promise.all([
-        rulesRes.json().catch(() => ({})),
+      const [labelsPayload, draftsPayload] = await Promise.all([
         labelsRes.json().catch(() => ({})),
         draftsRes.json().catch(() => ({})),
       ]);
       if (!cancelled) {
-        const nextRules = rulesRes.ok ? ((rulesPayload.rules ?? []) as Rule[]) : [];
-        setRules(nextRules);
-        setSelectedRuleId((current) =>
-          current && nextRules.some((rule) => rule.id === current)
-            ? current
-            : nextRules[0]?.id ?? '',
-        );
         setLabels(labelsRes.ok ? (labelsPayload.labels ?? []) : []);
         setDrafts(draftsRes.ok ? (draftsPayload.drafts ?? []) : []);
       }
@@ -717,9 +700,6 @@ export function EmailClient() {
   }, [selectedMessage?.id]);
 
   useEffect(() => {
-    setMoveFolderId(
-      visibleFolders.find((folder) => folder.id !== selectedMessage?.folder_id)?.id ?? '',
-    );
     setRuleDraft((current) => ({
       ...current,
       targetFolderId:
@@ -785,7 +765,7 @@ export function EmailClient() {
     }
   }
 
-  function setTableSort(nextSort: 'received' | 'sender' | 'size') {
+  function setTableSort(nextSort: 'received' | 'sender' | 'subject' | 'size') {
     setAdvanced((current) => ({
       ...current,
       sort:
@@ -793,7 +773,9 @@ export function EmailClient() {
           ? current.sort === 'newest' ? 'oldest' : 'newest'
           : nextSort === 'size'
             ? current.sort === 'size_desc' ? 'size_asc' : 'size_desc'
-            : 'sender',
+            : nextSort === 'subject'
+              ? current.sort === 'subject_asc' ? 'subject_desc' : 'subject_asc'
+              : 'sender',
     }));
   }
 
@@ -976,26 +958,6 @@ export function EmailClient() {
     await load();
   }
 
-  async function applyRule() {
-    if (!selectedMessage || !selectedRuleId) return;
-    const res = await fetch('/api/email/rules', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'apply',
-        message_id: selectedMessage.id,
-        rule_id: selectedRuleId,
-      }),
-    });
-    const payload = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      toast.error(payload.error || 'No se pudo aplicar la regla');
-      return;
-    }
-    toast.success('Regla aplicada');
-    await load();
-  }
-
   async function createRuleFromBuilder() {
     if (!selectedMailbox || !ruleDraft.value.trim() || !ruleDraft.targetFolderId) return;
     const res = await fetch('/api/email/rules', {
@@ -1015,9 +977,6 @@ export function EmailClient() {
       toast.error(payload.error || 'No se pudo crear la regla');
       return;
     }
-    const nextRule = payload.rule as Rule;
-    setRules((current) => [...current, nextRule]);
-    setSelectedRuleId(nextRule.id);
     setRuleDraft(emptyRuleDraft);
     setRuleBuilderOpen(false);
     toast.success('Regla creada');
@@ -1072,22 +1031,6 @@ export function EmailClient() {
       ? currentLabels.filter((id) => id !== labelId)
       : [...currentLabels, labelId];
     await setMessageLabels(nextLabels);
-  }
-
-  function openDraft(draft: Draft) {
-    setCurrentDraftId(draft.id);
-    setCompose({
-      to: draft.to_addresses.join(', '),
-      cc: draft.cc_addresses.join(', '),
-      bcc: draft.bcc_addresses.join(', '),
-      subject: draft.subject,
-      text: draft.body_text,
-      html: draft.body_html ?? draft.body_text,
-      inReplyToMessageId: draft.in_reply_to_message_id,
-    });
-    setComposeAttachments([]);
-    setEditorKey((current) => current + 1);
-    setComposeOpen(true);
   }
 
   function openNewMessage() {
@@ -1331,61 +1274,6 @@ export function EmailClient() {
           {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           Sincronizar
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => patchMessage({ is_read: !selectedMessage?.is_read })}
-          disabled={!selectedMessage}
-        >
-          {selectedMessage?.is_read ? <Mail className="size-4" /> : <MailOpen className="size-4" />}
-          {selectedMessage?.is_read ? 'No leido' : 'Leido'}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => patchMessage({ is_starred: !selectedMessage?.is_starred })}
-          disabled={!selectedMessage}
-        >
-          <Star className={cn('size-4', selectedMessage?.is_starred && 'fill-amber-400 text-amber-500')} />
-          Favorito
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => openReply()} disabled={!selectedMessage || !selectedMailbox?.can_send}>
-          <Reply className="size-4" />
-          Responder
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => openForward()} disabled={!selectedMessage || !selectedMailbox?.can_send}>
-          <Send className="size-4" />
-          Reenviar
-        </Button>
-        <div className="flex min-w-[210px] items-center gap-2">
-          <select
-            value={moveFolderId}
-            onChange={(event) => setMoveFolderId(event.target.value)}
-            disabled={!selectedMessage}
-            className="h-8 min-w-0 flex-1 rounded-md border border-border bg-card px-2 text-sm"
-          >
-            {visibleFolders
-              .filter((folder) => folder.id !== selectedMessage?.folder_id)
-              .map((folder) => (
-                <option key={folder.id} value={folder.id}>
-                  {folder.name}
-                </option>
-              ))}
-          </select>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => patchMessage({ folder_id: moveFolderId })}
-            disabled={!selectedMessage || !moveFolderId}
-          >
-            <Archive className="size-4" />
-            Mover
-          </Button>
-        </div>
-        <Button size="sm" variant="outline" onClick={openSelectedMessageMenu} disabled={!selectedMessage}>
-          <MoreHorizontal className="size-4" />
-          Acciones
-        </Button>
         <div className="ml-auto flex shrink-0 items-center gap-2">
           <div className="grid grid-cols-3 rounded-lg bg-muted p-1">
             {[
@@ -1407,47 +1295,14 @@ export function EmailClient() {
             ))}
           </div>
           <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setRuleBuilderOpen((current) => !current)}
-            disabled={!selectedMailbox}
-            className="hidden xl:inline-flex"
-          >
-            <Tag className="size-4" />
-            Nueva regla
-          </Button>
-          <select
-            value={selectedRuleId}
-            onChange={(event) => setSelectedRuleId(event.target.value)}
-            disabled={!rules.length || !selectedMessage}
-            className="hidden h-8 w-36 rounded-md border border-border bg-card px-2 text-sm xl:block"
-          >
-            {rules.length === 0 ? <option>Sin reglas</option> : null}
-            {rules.map((rule) => (
-              <option key={rule.id} value={rule.id}>
-                {rule.name}
-              </option>
-            ))}
-          </select>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={applyRule}
-            disabled={!selectedMessage || !selectedRuleId}
-            className="hidden xl:inline-flex"
-          >
-            <Wand2 className="size-4" />
-            Aplicar
-          </Button>
-          <Button
-            size="sm"
+            size="icon-sm"
             variant="outline"
             onClick={() => {
               window.location.href = '/settings?tab=email';
             }}
+            title="Ajustes de correo"
           >
             <Settings className="size-4" />
-            Ajustes Email
           </Button>
         </div>
       </div>
@@ -1525,31 +1380,57 @@ export function EmailClient() {
                   No tienes buzones asignados.
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-3">
                   {mailboxes.map((mailbox) => (
-                    <button
-                      key={mailbox.id}
-                      type="button"
-                      onClick={() => {
-                        const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
-                        setSelectedMailboxId(mailbox.id);
-                        setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
-                        setSelectedMessageId(null);
-                        setActiveTabId('folder');
-                      }}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors',
-                        selectedMailbox?.id === mailbox.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted',
-                      )}
-                    >
-                      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold">
-                        {(mailbox.display_name || mailbox.address).slice(0, 2).toUpperCase()}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium">{mailbox.display_name || mailbox.address}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{mailbox.address}</span>
-                      </span>
-                    </button>
+                    <div key={mailbox.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
+                          setSelectedMailboxId(mailbox.id);
+                          setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
+                          setSelectedMessageId(null);
+                          setActiveTabId('folder');
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors',
+                          selectedMailbox?.id === mailbox.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted',
+                        )}
+                      >
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold">
+                          {(mailbox.display_name || mailbox.address).slice(0, 2).toUpperCase()}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium">{mailbox.display_name || mailbox.address}</span>
+                          <span className="block truncate text-xs text-muted-foreground">{mailbox.address}</span>
+                        </span>
+                      </button>
+                      <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-2">
+                        {folders
+                          .filter((folder) => folder.mailbox_id === mailbox.id && folder.kind !== 'custom')
+                          .sort((a, b) => a.position - b.position)
+                          .map((folder) => (
+                            <button
+                              key={folder.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedMailboxId(mailbox.id);
+                                setSelectedFolderId(folder.id);
+                                setSelectedMessageId(null);
+                                setActiveTabId('folder');
+                              }}
+                              className={cn(
+                                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
+                                selectedFolderId === folder.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                              )}
+                            >
+                              {folder.kind === 'inbox' ? <Inbox className="size-4" /> : folder.kind === 'trash' ? <Trash2 className="size-4" /> : <Archive className="size-4" />}
+                              <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                              {folder.kind === 'inbox' && selectedMailbox?.id === mailbox.id && unreadCount > 0 ? <span className="text-xs text-muted-foreground">{unreadCount}</span> : null}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -1557,19 +1438,20 @@ export function EmailClient() {
 
             <div>
               <div className="mb-2 flex items-center justify-between px-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas publicas</p>
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas compartidas</p>
                 <Button size="icon-xs" variant="ghost" onClick={createPublicFolder} disabled={!selectedMailbox} title="Crear carpeta">
                   <FolderPlus className="size-3.5" />
                 </Button>
               </div>
               <div className="space-y-1">
-                {visibleFolders.map((folder) => {
+                {publicFolders.map((folder) => {
                   const count = messages.filter((message) => message.folder_id === folder.id).length;
                   return (
                     <button
                       key={folder.id}
                       type="button"
                       onClick={() => {
+                        setSelectedMailboxId(folder.mailbox_id);
                         setSelectedFolderId(folder.id);
                         setSelectedMessageId(null);
                         setActiveTabId('folder');
@@ -1630,24 +1512,6 @@ export function EmailClient() {
                 ))}
               </div>
             </div>
-            {drafts.length > 0 ? (
-              <div>
-                <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Borradores</p>
-                <div className="space-y-1">
-                  {drafts.slice(0, 6).map((draft) => (
-                    <button
-                      key={draft.id}
-                      type="button"
-                      onClick={() => openDraft(draft)}
-                      className="block w-full rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      <span className="block truncate">{draft.subject || '(Sin asunto)'}</span>
-                      <span className="block truncate text-xs">{formatDate(draft.updated_at)}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </div>
         </aside>
 
@@ -1665,7 +1529,8 @@ export function EmailClient() {
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="xs" variant={advancedOpen ? 'secondary' : 'ghost'} onClick={() => setAdvancedOpen((current) => !current)}>
                 <Search className="size-3.5" />
-                Filtro avanzado
+                Filtros
+                <ChevronDown className={cn('size-3.5 transition-transform', advancedOpen && 'rotate-180')} />
               </Button>
               {advancedOpen ? (
                 <div className="grid w-full gap-2 rounded-md border border-border bg-background p-2 shadow-sm">
@@ -1690,6 +1555,8 @@ export function EmailClient() {
                     <option value="newest">Recientes</option>
                     <option value="oldest">Antiguos</option>
                     <option value="sender">Remitente</option>
+                    <option value="subject_asc">Asunto A-Z</option>
+                    <option value="subject_desc">Asunto Z-A</option>
                     <option value="size_desc">Mas grandes</option>
                     <option value="size_asc">Mas pequenos</option>
                   </select>
@@ -1735,25 +1602,18 @@ export function EmailClient() {
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
               <span>{unreadCount} no leidos</span>
             </div>
-            <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-muted p-1">
-              {[
-                { id: 'all' as const, label: 'Todos', count: messages.length },
-                { id: 'unread' as const, label: 'No leidos', count: unreadCount },
-                { id: 'attachments' as const, label: 'Adjuntos', count: attachmentCount },
-                { id: 'starred' as const, label: 'Fav', count: messages.filter((message) => message.is_starred).length },
-              ].map((filter) => (
-                <button
-                  key={filter.id}
-                  type="button"
-                  onClick={() => setActiveFilter(filter.id)}
-                  className={cn(
-                    'h-7 rounded-md px-2 text-xs font-medium transition-colors',
-                    activeFilter === filter.id ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {filter.label} {filter.count}
-                </button>
-              ))}
+            <div className="mt-3">
+              <select
+                value={activeFilter}
+                onChange={(event) => setActiveFilter(event.target.value as ActiveFilter)}
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+                aria-label="Filtrar mensajes"
+              >
+                <option value="all">Todos ({messages.length})</option>
+                <option value="unread">No leídos ({unreadCount})</option>
+                <option value="attachments">Con adjuntos ({attachmentCount})</option>
+                <option value="starred">Favoritos ({messages.filter((message) => message.is_starred).length})</option>
+              </select>
             </div>
             {activeSearchChips.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -1787,7 +1647,7 @@ export function EmailClient() {
                 >
                   <ResizableMessageHeader label="Estado" column="status" onResizeStart={startColumnResize} />
                   <ResizableMessageHeader label="De" column="from" sortable onSort={() => setTableSort('sender')} onResizeStart={startColumnResize} />
-                  <ResizableMessageHeader label="Asunto" column="subject" onResizeStart={startColumnResize} />
+                  <ResizableMessageHeader label="Asunto" column="subject" sortable onSort={() => setTableSort('subject')} onResizeStart={startColumnResize} />
                   <ResizableMessageHeader label="Categorias" column="labels" onResizeStart={startColumnResize} />
                   <ResizableMessageHeader label="Recibido" column="received" sortable onSort={() => setTableSort('received')} onResizeStart={startColumnResize} />
                   <ResizableMessageHeader label="Tamano" column="size" sortable onSort={() => setTableSort('size')} onResizeStart={startColumnResize} />

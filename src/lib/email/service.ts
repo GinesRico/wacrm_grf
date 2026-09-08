@@ -833,6 +833,10 @@ export async function listEmailMessages(args: {
     ? asc(emailMessages.receivedAt)
     : args.sort === 'sender'
       ? asc(emailMessages.fromAddress)
+      : args.sort === 'subject_asc'
+        ? asc(emailMessages.subject)
+        : args.sort === 'subject_desc'
+          ? desc(emailMessages.subject)
       : args.sort === 'size_desc'
         ? desc(emailMessages.rawSize)
         : args.sort === 'size_asc'
