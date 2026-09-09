@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FaWhatsapp } from "react-icons/fa";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
+import { useTotalUnreadEmail } from "@/hooks/use-total-unread-email";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
   Bell,
@@ -101,6 +102,8 @@ const navItems: NavItem[] = [
   { href: "/dashboard", labelKey: "dashboard", icon: LayoutDashboard },
   { href: "/inbox", labelKey: "inbox", icon: FaWhatsapp },
   { href: "/email", labelKey: "email", icon: Mail },
+  { href: "/appointments", labelKey: "appointments", icon: CalendarClock },
+  { href: "/payments", labelKey: "payments", icon: CreditCard },
   { href: "/contacts", labelKey: "contacts", icon: Users },
   { href: "/pipelines", labelKey: "pipelines", icon: GitBranch },
   { href: "/broadcasts", labelKey: "broadcasts", icon: Radio },
@@ -108,18 +111,6 @@ const navItems: NavItem[] = [
   { href: "/flows", labelKey: "flows", icon: Workflow, beta: true },
   { href: "/agents", labelKey: "aiAgents", icon: Bot },
 ];
-
-const paymentsNavItem: NavItem = {
-  href: "/payments",
-  labelKey: "payments",
-  icon: CreditCard,
-};
-
-const appointmentsNavItem: NavItem = {
-  href: "/appointments",
-  labelKey: "appointments",
-  icon: CalendarClock,
-};
 
 const bottomNavItems = [
   { href: "/settings", labelKey: "settings", icon: Settings },
@@ -143,13 +134,29 @@ export function Sidebar({
 }: SidebarProps) {
   const t = useTranslations("Sidebar");
   const pathname = usePathname();
-  const { profile, account, accountRole, canEditSettings, signOut } = useAuth();
+  const { profile, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
+  const totalUnreadEmail = useTotalUnreadEmail();
   const unreadNotifications = useUnreadNotifications();
   const { mode, toggleMode } = useTheme();
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [appointmentsEnabled, setAppointmentsEnabled] = useState(false);
   const ThemeIcon = mode === "dark" ? Sun : Moon;
+  const isAdminUser = accountRole === "owner" || accountRole === "admin";
+  const visibleNavItems = useMemo(
+    () =>
+      navItems.filter((item) => {
+        if (item.href === "/appointments") return appointmentsEnabled || !isAdminUser;
+        if (item.href === "/payments") return paymentsEnabled || !isAdminUser;
+        if (item.href === "/agents") return isAdminUser && account?.allow_ai !== false;
+        if (item.href === "/pipelines" || item.href === "/automations" || item.href === "/flows") {
+          return isAdminUser;
+        }
+        if (item.href === "/broadcasts") return account?.allow_broadcasts !== false;
+        return true;
+      }),
+    [account?.allow_ai, account?.allow_broadcasts, appointmentsEnabled, isAdminUser, paymentsEnabled],
+  );
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -304,24 +311,15 @@ export function Sidebar({
         {/* Main navigation */}
         <nav className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <ul className="flex flex-col gap-1">
-            {[
-              ...navItems.filter((item) => {
-                if (item.href === "/flows" || item.href === "/automations") {
-                  return canEditSettings;
-                }
-                if (item.href === "/agents") return account?.allow_ai !== false;
-                if (item.href === "/broadcasts") return account?.allow_broadcasts !== false;
-                return true;
-              }),
-              ...(appointmentsEnabled ? [appointmentsNavItem] : []),
-              ...(paymentsEnabled ? [paymentsNavItem] : []),
-            ].map((item) => {
+            {visibleNavItems.map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));
 
               const showUnreadDot =
-                item.href === "/inbox" && totalUnread > 0 && !isActive;
+                ((item.href === "/inbox" && totalUnread > 0) ||
+                  (item.href === "/email" && totalUnreadEmail > 0)) &&
+                !isActive;
 
               // even while the page is active — it reflects unread state
               return (

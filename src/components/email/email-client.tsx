@@ -60,6 +60,14 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
@@ -549,6 +557,16 @@ function formatBytes(value: number | null) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function isAppDarkMode() {
+  if (typeof document === 'undefined') return false;
+  return (
+    document.documentElement.dataset.mode === 'dark' ||
+    document.body.dataset.mode === 'dark' ||
+    document.documentElement.classList.contains('dark') ||
+    document.body.classList.contains('dark')
+  );
+}
+
 function emailHtml(html: string, allowExternalContent: boolean) {
   if (allowExternalContent) return html;
   return html
@@ -997,6 +1015,7 @@ export function EmailClient() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [applyingRules, setApplyingRules] = useState(false);
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
@@ -1013,6 +1032,8 @@ export function EmailClient() {
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
   const [ruleBuilderPosition, setRuleBuilderPosition] = useState({ x: 320, y: 96 });
+  const [publicFolderDialogOpen, setPublicFolderDialogOpen] = useState(false);
+  const [publicFolderName, setPublicFolderName] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
   const [searchScope, setSearchScope] = useState<'folder' | 'mailbox'>('folder');
@@ -1039,13 +1060,11 @@ export function EmailClient() {
 
   useEffect(() => {
     const readDarkMode = () =>
-      document.documentElement.classList.contains('dark') ||
-      document.body.classList.contains('dark') ||
-      window.matchMedia('(prefers-color-scheme: dark)').matches;
+      isAppDarkMode() || window.matchMedia('(prefers-color-scheme: dark)').matches;
     setIsDarkReader(readDarkMode());
     const observer = new MutationObserver(() => setIsDarkReader(readDarkMode()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-mode'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-mode'] });
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onMediaChange = () => setIsDarkReader(readDarkMode());
     media.addEventListener('change', onMediaChange);
@@ -1911,20 +1930,45 @@ export function EmailClient() {
     }
   }
 
-  async function createPublicFolder() {
+  async function applyCurrentRules() {
     if (!selectedMailbox) return;
-    const name = window.prompt('Nombre de la nueva carpeta publica');
-    if (!name?.trim()) return;
+    setApplyingRules(true);
+    try {
+      const res = await fetch('/api/email/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'apply_all',
+          mailbox_id: selectedMailbox.id,
+          folder_id: selectedFolderId,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudieron aplicar las reglas');
+      toast.success(`Reglas aplicadas: ${payload.matched ?? 0} correos coincidentes, ${payload.updated ?? 0} actualizados`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron aplicar las reglas');
+    } finally {
+      setApplyingRules(false);
+    }
+  }
+
+  async function createPublicFolder() {
+    const name = publicFolderName.trim();
+    if (!name) return;
     const res = await fetch('/api/email/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mailbox_id: selectedMailbox.id, name }),
+      body: JSON.stringify({ name }),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       toast.error(payload.error || 'No se pudo crear la carpeta');
       return;
     }
+    setPublicFolderName('');
+    setPublicFolderDialogOpen(false);
     toast.success('Carpeta publica creada');
     await load();
   }
@@ -2463,6 +2507,16 @@ export function EmailClient() {
           <Button size="icon-sm" variant="outline" onClick={sync} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
             {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           </Button>
+          <Button
+            size="icon-sm"
+            variant="outline"
+            onClick={applyCurrentRules}
+            disabled={applyingRules || !selectedMailbox}
+            title="Aplicar reglas"
+            aria-label="Aplicar reglas"
+          >
+            {applyingRules ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+          </Button>
           <Button size="icon-sm" variant="outline" onClick={cycleLayout} title={`${layoutLabel}. Cambiar vista`} aria-label={`${layoutLabel}. Cambiar vista`}>
             <LayoutIcon className="size-4" />
           </Button>
@@ -2504,9 +2558,6 @@ export function EmailClient() {
                 <Mail className="size-4 text-primary" />
                 Email
               </div>
-              <Button size="icon-sm" variant="ghost" onClick={createPublicFolder} disabled={!selectedMailbox} title="Nueva carpeta publica">
-                <FolderPlus className="size-4" />
-              </Button>
             </div>
           </div>
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
@@ -2586,7 +2637,7 @@ export function EmailClient() {
             <div>
               <div className="mb-2 flex items-center justify-between px-2">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas compartidas</p>
-                <Button size="icon-xs" variant="ghost" onClick={createPublicFolder} disabled={!selectedMailbox} title="Crear carpeta">
+                <Button size="icon-xs" variant="ghost" onClick={() => setPublicFolderDialogOpen(true)} title="Crear carpeta compartida">
                   <FolderPlus className="size-3.5" />
                 </Button>
               </div>
@@ -3261,6 +3312,45 @@ export function EmailClient() {
               </div>
             </div>
           ) : null}
+
+          <Dialog
+            open={publicFolderDialogOpen}
+            onOpenChange={(open) => {
+              setPublicFolderDialogOpen(open);
+              if (!open) setPublicFolderName('');
+            }}
+          >
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Nueva carpeta compartida</DialogTitle>
+                <DialogDescription>
+                  La carpeta será global y aparecerá fuera de los buzones. El acceso se controla desde Permisos.
+                </DialogDescription>
+              </DialogHeader>
+              <Input
+                autoFocus
+                value={publicFolderName}
+                onChange={(event) => setPublicFolderName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    void createPublicFolder();
+                  }
+                }}
+                placeholder="Nombre de la carpeta"
+                aria-label="Nombre de la carpeta compartida"
+              />
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setPublicFolderDialogOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="button" onClick={() => void createPublicFolder()} disabled={!publicFolderName.trim()}>
+                  <FolderPlus className="size-4" />
+                  Crear carpeta
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {composeOpen ? (
             <div className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background">

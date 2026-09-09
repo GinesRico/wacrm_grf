@@ -1336,6 +1336,141 @@ export async function applyEmailRuleToMessage(args: {
   return updated;
 }
 
+export async function applyEmailRulesForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId: string;
+  folderId?: string | null;
+}) {
+  const workspace = await listEmailWorkspace(args);
+  const mailbox = workspace.mailboxes.find((row) => row.id === args.mailboxId);
+  if (!mailbox) throw new Error('Mailbox not found or not permitted.');
+
+  const selectedFolder = args.folderId
+    ? workspace.folders.find((folder) => folder.id === args.folderId) ?? null
+    : null;
+  if (args.folderId && !selectedFolder) {
+    throw new Error('Folder not found or not permitted.');
+  }
+
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+    folderId: selectedFolder?.id ?? undefined,
+  });
+  if (!permission.canClassify && !permission.canMove) {
+    throw new Error('You do not have permission to apply rules here.');
+  }
+
+  const [rules, accessibleTargetFolders] = await Promise.all([
+    db
+      .select()
+      .from(emailRules)
+      .where(
+        and(
+          eq(emailRules.accountId, args.accountId),
+          eq(emailRules.mailboxId, args.mailboxId),
+          eq(emailRules.enabled, true),
+        ),
+      )
+      .orderBy(asc(emailRules.position), asc(emailRules.name)),
+    listAccessibleFolders({
+      accountId: args.accountId,
+      userId: args.userId,
+      role: args.role,
+      mailboxIds: [args.mailboxId],
+    }),
+  ]);
+  const accessibleTargetFolderIds = new Set(accessibleTargetFolders.map((folder) => folder.id));
+  const applicableRules = rules.filter((rule) => {
+    const action = clean(rule.action) || 'move_to';
+    return !(action === 'move_to' || action === 'copy_to') || !rule.targetFolderId || accessibleTargetFolderIds.has(rule.targetFolderId);
+  });
+  if (applicableRules.length === 0) {
+    return { checked: 0, matched: 0, updated: 0, skipped_rules: rules.length };
+  }
+
+  const folderIds = selectedFolder
+    ? [selectedFolder.id]
+    : workspace.folders
+        .filter((folder) => folder.mailbox_id === args.mailboxId)
+        .map((folder) => folder.id);
+  if (folderIds.length === 0) {
+    return { checked: 0, matched: 0, updated: 0, skipped_rules: rules.length - applicableRules.length };
+  }
+
+  const rows = await db
+    .select()
+    .from(emailMessages)
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        eq(emailMessages.mailboxId, args.mailboxId),
+        inArray(emailMessages.folderId, folderIds),
+        eq(emailMessages.externalState, 'present'),
+      ),
+    )
+    .orderBy(desc(emailMessages.receivedAt))
+    .limit(1000);
+
+  let matched = 0;
+  let updated = 0;
+  for (const message of rows) {
+    const candidate: RuleCandidate = {
+      fromAddress: message.fromAddress,
+      toAddresses: message.toAddresses,
+      ccAddresses: message.ccAddresses,
+      subject: message.subject,
+      bodyText: message.bodyText ?? '',
+      sizeBytes: message.rawSize ?? undefined,
+      hasAttachment: message.hasAttachments,
+      date: message.receivedAt,
+    };
+    if (!applicableRules.some((rule) => matchEmailRule(rule, candidate))) continue;
+    matched += 1;
+    const next = await applyMatchingRulesToImportedMessage({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: args.mailboxId,
+      message,
+      candidate,
+      rules: applicableRules,
+    });
+    if (
+      next.folderId !== message.folderId ||
+      next.isRead !== message.isRead ||
+      next.isStarred !== message.isStarred
+    ) {
+      updated += 1;
+      await publishEmailMessageEvent('email.message.updated', next, 'rules_applied');
+    }
+  }
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: args.mailboxId,
+    folderId: selectedFolder?.id ?? null,
+    eventType: 'rules.applied_bulk',
+    metadata: {
+      checked: rows.length,
+      matched,
+      updated,
+      skipped_rules: rules.length - applicableRules.length,
+    },
+  });
+
+  return {
+    checked: rows.length,
+    matched,
+    updated,
+    skipped_rules: rules.length - applicableRules.length,
+  };
+}
+
 export async function listEmailMessages(args: {
   accountId: string;
   userId: string;

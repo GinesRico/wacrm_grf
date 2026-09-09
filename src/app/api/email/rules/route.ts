@@ -4,6 +4,7 @@ import { requireDbRole } from '@/lib/auth/current-account';
 import { toErrorResponse } from '@/lib/auth/errors';
 import {
   applyEmailRuleToMessage,
+  applyEmailRulesForUser,
   createEmailRule,
   deleteEmailRuleForUser,
   listEmailRulesForUser,
@@ -75,6 +76,22 @@ export async function POST(request: Request) {
         ruleId: body.rule_id,
       });
       return NextResponse.json({ message: serializeEmailMessage(message) });
+    }
+    if (body?.action === 'apply_all') {
+      if (typeof body.mailbox_id !== 'string') {
+        return NextResponse.json(
+          { error: 'mailbox_id is required.' },
+          { status: 400 },
+        );
+      }
+      const result = await applyEmailRulesForUser({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        role: ctx.role,
+        mailboxId: body.mailbox_id,
+        folderId: typeof body.folder_id === 'string' ? body.folder_id : null,
+      });
+      return NextResponse.json(result);
     }
 
     if (
