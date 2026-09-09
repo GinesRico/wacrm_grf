@@ -18,6 +18,7 @@ function attachments(value: unknown) {
       filename: typeof item?.filename === 'string' ? item.filename : 'attachment',
       contentType: typeof item?.content_type === 'string' ? item.content_type : undefined,
       contentBase64: typeof item?.content_base64 === 'string' ? item.content_base64 : '',
+      contentId: typeof item?.content_id === 'string' ? item.content_id : undefined,
     }))
     .filter((item) => item.contentBase64);
 }

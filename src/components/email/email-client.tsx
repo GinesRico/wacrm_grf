@@ -159,6 +159,7 @@ interface ComposeAttachment {
   content_type?: string;
   size: number;
   content_base64: string;
+  content_id?: string | null;
 }
 
 interface ComposeState {
@@ -592,6 +593,33 @@ function emailDocument(html: string, allowExternalContent: boolean) {
   return `<!doctype html><html><head><meta charset="utf-8">${baseStyles}</head><body>${safeHtml}</body></html>`;
 }
 
+function emailBodyFragment(html: string) {
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  return bodyMatch?.[1] ?? html;
+}
+
+function normalizeContentId(value: string | null | undefined) {
+  return value?.trim().replace(/^<|>$/g, '') || null;
+}
+
+function forwardedHtml(message: Message) {
+  const body = message.body_html
+    ? emailBodyFragment(message.body_html)
+    : `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(message.body_text || message.snippet || '')}</pre>`;
+  return [
+    '<p><br></p>',
+    '<div style="border-top:1px solid #d4d4d8;margin-top:16px;padding-top:12px">',
+    '<p style="margin:0 0 10px;font-weight:600">Mensaje reenviado</p>',
+    '<table style="font-size:13px;margin-bottom:12px">',
+    `<tr><td style="padding-right:8px;color:#6b7280">De:</td><td>${escapeHtml(message.from_name ? `${message.from_name} <${message.from_address}>` : message.from_address)}</td></tr>`,
+    `<tr><td style="padding-right:8px;color:#6b7280">Fecha:</td><td>${escapeHtml(new Date(message.received_at).toLocaleString('es-ES'))}</td></tr>`,
+    `<tr><td style="padding-right:8px;color:#6b7280">Asunto:</td><td>${escapeHtml(message.subject || '(Sin asunto)')}</td></tr>`,
+    '</table>',
+    body,
+    '</div>',
+  ].join('');
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -606,11 +634,14 @@ function replyQuote(message: Message) {
   const author = message.from_name ? `${message.from_name} <${message.from_address}>` : message.from_address;
   const quotedText = message.body_text || message.snippet || '';
   const text = `\n\nEl ${date}, ${author} escribio:\n> ${quotedText.replace(/\n/g, '\n> ')}`;
+  const quotedHtml = message.body_html
+    ? emailBodyFragment(message.body_html)
+    : `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(quotedText)}</pre>`;
   const html = [
     '<p><br></p>',
     '<blockquote style="margin:0 0 0 0.75rem;border-left:3px solid #d4d4d8;padding-left:0.75rem;color:#52525b">',
     `<p>El ${escapeHtml(date)}, ${escapeHtml(author)} escribio:</p>`,
-    `<pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(quotedText)}</pre>`,
+    quotedHtml,
     '</blockquote>',
   ].join('');
   return { text, html };
@@ -1655,16 +1686,6 @@ export function EmailClient() {
     });
   }
 
-  function openSelectedMessageMenu(event: MouseEvent<HTMLButtonElement>) {
-    if (!selectedMessage) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    setContextMenu({
-      x: Math.max(VIEWPORT_GAP, rect.right - CONTEXT_MENU_WIDTH),
-      y: Math.min(rect.bottom + 6, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_GAP),
-      messageId: selectedMessage.id,
-    });
-  }
-
   async function copyMessageLink(message: Message) {
     const next = new URL(window.location.href);
     next.pathname = '/email';
@@ -1722,15 +1743,19 @@ export function EmailClient() {
   }
 
   function printMessage(message: Message) {
-    const printWindow = window.open('', '_blank', 'noopener,noreferrer,width=960,height=720');
-    if (!printWindow) {
-      toast.error('El navegador ha bloqueado la ventana de impresion');
-      return;
-    }
     const safeBody = message.body_html
-      ? emailHtml(message.body_html, allowExternalContent)
+      ? emailBodyFragment(emailHtml(message.body_html, allowExternalContent))
       : `<pre>${escapeHtml(message.body_text || message.snippet || '')}</pre>`;
-    printWindow.document.write(`
+    const frame = document.createElement('iframe');
+    frame.title = 'Impresion del correo';
+    frame.style.position = 'fixed';
+    frame.style.right = '0';
+    frame.style.bottom = '0';
+    frame.style.width = '0';
+    frame.style.height = '0';
+    frame.style.border = '0';
+    frame.style.opacity = '0';
+    frame.srcdoc = `
       <!doctype html>
       <html>
         <head>
@@ -1751,11 +1776,20 @@ export function EmailClient() {
             Fecha: ${escapeHtml(new Date(message.received_at).toLocaleString('es-ES'))}
           </div>
           ${safeBody}
-          <script>window.addEventListener('load', () => window.print());</script>
         </body>
       </html>
-    `);
-    printWindow.document.close();
+    `;
+    frame.onload = () => {
+      try {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+      } catch {
+        toast.error('No se pudo abrir el dialogo de impresion');
+      } finally {
+        window.setTimeout(() => frame.remove(), 1000);
+      }
+    };
+    document.body.appendChild(frame);
   }
 
   async function runContextAction(action: ContextActionId) {
@@ -1765,15 +1799,15 @@ export function EmailClient() {
     if (action === 'open') await openMessageTab(message);
     if (action === 'reply') {
       await selectMessage(message);
-      openReply(message);
+      await openReply(message);
     }
     if (action === 'reply_all') {
       await selectMessage(message);
-      openReplyAll(message);
+      await openReplyAll(message);
     }
     if (action === 'forward') {
       await selectMessage(message);
-      openForward(message);
+      await openForward(message);
     }
     if (action === 'read') await patchMessageById(message.id, { is_read: true });
     if (action === 'unread') await patchMessageById(message.id, { is_read: false });
@@ -1918,10 +1952,14 @@ export function EmailClient() {
     openComposeTab('Nuevo correo');
   }
 
-  function openReply(source?: Message) {
+  async function openReply(source?: Message) {
     const message = source ?? selectedMessage;
     if (!message) return;
     const quote = replyQuote(message);
+    const inlineAttachments = await loadMessageAttachmentsForCompose(message, { inlineOnly: true }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron preparar las imagenes embebidas');
+      return [];
+    });
     setCurrentDraftId(null);
     setCompose({
       to: message.from_address,
@@ -1934,15 +1972,19 @@ export function EmailClient() {
       html: quote.html,
       inReplyToMessageId: message.id,
     });
-    setComposeAttachments([]);
+    setComposeAttachments(inlineAttachments);
     setEditorKey((current) => current + 1);
     openComposeTab('Responder');
   }
 
-  function openReplyAll(source?: Message) {
+  async function openReplyAll(source?: Message) {
     const message = source ?? selectedMessage;
     if (!message || !selectedMailbox) return;
     const quote = replyQuote(message);
+    const inlineAttachments = await loadMessageAttachmentsForCompose(message, { inlineOnly: true }).catch((error) => {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron preparar las imagenes embebidas');
+      return [];
+    });
     const recipients = [message.from_address, ...(message.to_addresses ?? [])]
       .filter((address) => address && address !== selectedMailbox.address);
     setCurrentDraftId(null);
@@ -1957,14 +1999,22 @@ export function EmailClient() {
       html: quote.html,
       inReplyToMessageId: message.id,
     });
-    setComposeAttachments([]);
+    setComposeAttachments(inlineAttachments);
     setEditorKey((current) => current + 1);
     openComposeTab('Responder a todos');
   }
 
-  function openForward(source?: Message) {
+  async function openForward(source?: Message) {
     const message = source ?? selectedMessage;
     if (!message) return;
+    let forwardedAttachments: ComposeAttachment[] = [];
+    if (message.has_attachments) {
+      try {
+        forwardedAttachments = await loadMessageAttachmentsForCompose(message);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'No se pudieron preparar los adjuntos originales');
+      }
+    }
     setCurrentDraftId(null);
     setCompose({
       to: '',
@@ -1974,10 +2024,10 @@ export function EmailClient() {
         ? message.subject
         : `Fw: ${message.subject}`,
       text: `\n\n---------- Mensaje reenviado ----------\nDe: ${message.from_address}\nFecha: ${new Date(message.received_at).toLocaleString('es-ES')}\nAsunto: ${message.subject}\n\n${message.body_text ?? message.snippet ?? ''}`,
-      html: '',
+      html: forwardedHtml(message),
       inReplyToMessageId: null,
     });
-    setComposeAttachments([]);
+    setComposeAttachments(forwardedAttachments);
     setEditorKey((current) => current + 1);
     openComposeTab('Reenviar');
   }
@@ -2045,16 +2095,15 @@ export function EmailClient() {
 
   async function prepareAttachmentDrag(attachment: Attachment, event: DragEvent<HTMLDivElement>) {
     event.dataTransfer.effectAllowed = 'copy';
-    const url = await getAttachmentUrl(attachment);
-    if (!url) return;
+    const downloadUrl = `${window.location.origin}/api/email/attachments/${encodeURIComponent(attachment.id)}?download=1`;
 
     // Chromium exposes DownloadURL to the desktop/file manager, which is the
     // same interaction users expect from a native webmail attachment.
     event.dataTransfer.setData(
       'DownloadURL',
-      `${attachment.content_type || 'application/octet-stream'}:${attachment.file_name}:${url}`,
+      `${attachment.content_type || 'application/octet-stream'}:${attachment.file_name}:${downloadUrl}`,
     );
-    event.dataTransfer.setData('text/uri-list', url);
+    event.dataTransfer.setData('text/uri-list', downloadUrl);
   }
 
   async function openAttachmentPreview(attachment: Attachment) {
@@ -2131,6 +2180,46 @@ export function EmailClient() {
     document.body.appendChild(link);
     link.click();
     link.remove();
+  }
+
+  function blobToBase64(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('No se pudo leer el adjunto.'));
+      reader.onload = () => {
+        const value = typeof reader.result === 'string' ? reader.result : '';
+        resolve(value.includes(',') ? value.split(',')[1] ?? '' : value);
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function loadMessageAttachmentsForCompose(message: Message, options: { inlineOnly?: boolean } = {}) {
+    if (!message.has_attachments) return [];
+    const listRes = await fetch(`/api/email/messages/${message.id}/attachments`, { cache: 'no-store' });
+    const listPayload = await listRes.json().catch(() => ({}));
+    if (!listRes.ok) throw new Error(listPayload.error || 'No se pudieron cargar los adjuntos originales');
+    const sourceAttachments = ((listPayload.attachments ?? []) as Attachment[])
+      .filter((attachment) => !options.inlineOnly || Boolean(attachment.content_id));
+    const totalBytes = sourceAttachments.reduce((total, attachment) => total + (attachment.size ?? 0), 0);
+    if (totalBytes > 8 * 1024 * 1024) {
+      throw new Error('Los adjuntos originales superan el limite de 8 MB.');
+    }
+
+    return Promise.all(
+      sourceAttachments.slice(0, 10).map(async (attachment) => {
+        const fileRes = await fetch(`/api/email/attachments/${attachment.id}?raw=1`, { cache: 'no-store' });
+        if (!fileRes.ok) throw new Error(`No se pudo leer ${attachment.file_name}`);
+        const blob = await fileRes.blob();
+        return {
+          filename: attachment.file_name,
+          content_type: attachment.content_type ?? (blob.type || 'application/octet-stream'),
+          size: attachment.size ?? blob.size,
+          content_base64: await blobToBase64(blob),
+          content_id: normalizeContentId(attachment.content_id),
+        } satisfies ComposeAttachment;
+      }),
+    );
   }
 
   async function addComposeFiles(files: FileList | null) {
@@ -2212,7 +2301,7 @@ export function EmailClient() {
       }
       if (event.key.toLowerCase() === 'r' && selectedMessage) {
         event.preventDefault();
-        openReply();
+        void openReply();
       }
       if (event.key.toLowerCase() === 'u' && selectedMessage) {
         event.preventDefault();
@@ -2843,33 +2932,31 @@ export function EmailClient() {
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Button size="sm" onClick={() => openReply()} disabled={!selectedMailbox?.can_send}>
+                    <Button size="sm" className="h-8 px-2.5" onClick={() => void openReply()} disabled={!selectedMailbox?.can_send}>
                       <Reply className="size-4" />
                       Responder
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => openReplyAll()} disabled={!selectedMailbox?.can_send}>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => void openReplyAll()} disabled={!selectedMailbox?.can_send}>
                       <Reply className="size-4" />
                       Todos
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => openForward()} disabled={!selectedMailbox?.can_send}>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => void openForward()} disabled={!selectedMailbox?.can_send}>
                       <Send className="size-4" />
                       Reenviar
                     </Button>
-                    <Button variant="outline" size="icon-sm" onClick={() => copyMessageLink(selectedMessage)} title="Copiar enlace" aria-label="Copiar enlace">
+                    <Button variant="outline" size="icon-sm" className="size-8" onClick={() => copyMessageLink(selectedMessage)} title="Copiar enlace" aria-label="Copiar enlace">
                       <LinkIcon className="size-4" />
                     </Button>
-                    <Button variant="outline" size="icon-sm" onClick={() => printMessage(selectedMessage)} title="Imprimir" aria-label="Imprimir">
+                    <Button variant="outline" size="icon-sm" className="size-8" onClick={() => printMessage(selectedMessage)} title="Imprimir" aria-label="Imprimir">
                       <Printer className="size-4" />
                     </Button>
-                    <Button variant="outline" size="icon-sm" onClick={() => setDetailsOpen((current) => !current)} title="Detalles" aria-label="Detalles">
+                    <Button variant="outline" size="icon-sm" className="size-8" onClick={() => setDetailsOpen((current) => !current)} title="Detalles" aria-label="Detalles">
                       <Info className="size-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon-sm" title="Mas acciones" onClick={openSelectedMessageMenu}>
-                      <MoreHorizontal className="size-4" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon-sm"
+                      className="size-8"
                       title="Cerrar mensaje"
                       aria-label="Cerrar mensaje"
                       onClick={closeMessageView}

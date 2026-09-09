@@ -2393,6 +2393,7 @@ export async function sendEmail(args: {
     filename: string;
     contentType?: string;
     contentBase64: string;
+    contentId?: string;
   }[];
   inReplyToMessageId?: string | null;
 }) {
@@ -2441,6 +2442,7 @@ export async function sendEmail(args: {
       filename: attachment.filename || 'attachment',
       contentType: attachment.contentType,
       content: Buffer.from(attachment.contentBase64, 'base64'),
+      cid: attachment.contentId,
     })),
   });
 
@@ -2509,7 +2511,7 @@ export async function sendEmail(args: {
         contentType: attachment.contentType,
         size: Math.ceil((attachment.contentBase64.length * 3) / 4),
         storageKey,
-        contentId: null,
+        contentId: attachment.contentId ?? null,
       });
     }
   }
