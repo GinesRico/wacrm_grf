@@ -1,6 +1,9 @@
 import Pusher from 'pusher';
 
 export type RealtimeEventName =
+  | 'email.message.created'
+  | 'email.message.updated'
+  | 'email.message.deleted'
   | 'message.created'
   | 'message.updated'
   | 'conversation.created'

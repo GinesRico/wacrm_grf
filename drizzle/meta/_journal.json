@@ -260,6 +260,13 @@
       "when": 1789022400000,
       "tag": "0036_email_rule_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788943637193,
+      "tag": "0037_curious_meggan",
+      "breakpoints": true
     }
   ]
 }

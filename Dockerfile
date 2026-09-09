@@ -29,6 +29,8 @@ COPY --from=builder /app/drizzle ./drizzle
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
+COPY --from=builder /app/src ./src
 COPY --from=builder /app/src/i18n ./src/i18n
 COPY --from=builder /app/messages ./messages
 

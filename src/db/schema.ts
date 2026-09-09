@@ -1469,6 +1469,10 @@ export const emailMessages = pgTable(
     imapMailbox: text('imap_mailbox').notNull().default('INBOX'),
     imapUidValidity: text('imap_uid_validity').notNull().default('0'),
     imapUid: integer('imap_uid').notNull(),
+    imapFlags: text('imap_flags').array().notNull().default([]),
+    externalState: text('external_state').notNull().default('present'),
+    folderSource: text('folder_source').notNull().default('imap'),
+    lastImapSyncAt: timestamp('last_imap_sync_at', { withTimezone: true }),
     messageId: text('message_id'),
     threadKey: text('thread_key'),
     subject: text('subject').notNull().default('(Sin asunto)'),
@@ -1502,6 +1506,19 @@ export const emailMessages = pgTable(
       table.imapMailbox,
       table.imapUidValidity,
       table.imapUid
+    ),
+    check(
+      'email_messages_external_state_check',
+      sql`${table.externalState} in ('present', 'missing')`,
+    ),
+    check(
+      'email_messages_folder_source_check',
+      sql`${table.folderSource} in ('imap', 'local')`,
+    ),
+    index('idx_email_messages_external_state').on(
+      table.emailAccountId,
+      table.externalState,
+      table.lastImapSyncAt,
     ),
     index('idx_email_messages_account_folder_received').on(
       table.accountId,

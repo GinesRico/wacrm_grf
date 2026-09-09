@@ -69,6 +69,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/use-auth';
+import { subscribeRealtimeChannel, unsubscribeRealtimeChannel } from '@/lib/realtime/soketi-client';
 
 interface Mailbox {
   id: string;
@@ -860,6 +862,7 @@ function RichTextEditor({
 }
 
 export function EmailClient() {
+  const { accountId } = useAuth();
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1045,6 +1048,22 @@ export function EmailClient() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!accountId) return;
+    const channelName = `private-account-${accountId}`;
+    const channel = subscribeRealtimeChannel(channelName);
+    const refresh = () => void load();
+    channel.bind('email.message.created', refresh);
+    channel.bind('email.message.updated', refresh);
+    channel.bind('email.message.deleted', refresh);
+    return () => {
+      channel.unbind('email.message.created', refresh);
+      channel.unbind('email.message.updated', refresh);
+      channel.unbind('email.message.deleted', refresh);
+      unsubscribeRealtimeChannel(channelName);
+    };
+  }, [accountId, load]);
 
   useEffect(() => {
     const next = new URLSearchParams(window.location.search);

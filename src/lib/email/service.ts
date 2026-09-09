@@ -22,6 +22,7 @@ import {
   profiles,
 } from '@/db/schema';
 import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik';
+import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
 import { resolveEmailPermission } from './permissions';
 import { resolveRuleTargetFolder } from './rules';
@@ -105,12 +106,29 @@ export function serializeEmailMessage(row: typeof emailMessages.$inferSelect, ex
     body_html: row.bodyHtml,
     is_read: row.isRead,
     is_starred: row.isStarred,
+    external_state: row.externalState,
     is_replied: flags?.isReplied ?? false,
     has_attachments: row.hasAttachments,
     raw_size: row.rawSize,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
+}
+
+async function publishEmailMessageEvent(
+  name: 'email.message.created' | 'email.message.updated' | 'email.message.deleted',
+  row: typeof emailMessages.$inferSelect,
+  reason: string,
+) {
+  await publishRealtimeEvent(name, {
+    accountId: row.accountId,
+    payload: {
+      message: serializeEmailMessage(row),
+      reason,
+    },
+  }).catch((error) => {
+    console.warn('[realtime] failed to publish email event', { name, reason, error });
+  });
 }
 
 export function serializeEmailMailbox(row: typeof emailMailboxes.$inferSelect) {
@@ -1479,6 +1497,7 @@ export async function updateEmailMessageState(args: {
       isRead: typeof args.isRead === 'boolean' ? args.isRead : current.message.isRead,
       isStarred: typeof args.isStarred === 'boolean' ? args.isStarred : current.message.isStarred,
       folderId: args.folderId ?? current.message.folderId,
+      folderSource: args.folderId ? 'local' : current.message.folderSource,
       updatedAt: new Date(),
     })
     .where(and(eq(emailMessages.id, args.messageId), eq(emailMessages.accountId, args.accountId)))
@@ -1501,6 +1520,8 @@ export async function updateEmailMessageState(args: {
       folder_id: updated.folderId,
     },
   });
+
+  await publishEmailMessageEvent('email.message.updated', updated, args.folderId ? 'moved' : 'state_changed');
 
   return updated;
 }
@@ -1566,6 +1587,12 @@ export async function markEmailMailboxAsRead(args: {
     eventType: 'mailbox.marked_read',
     metadata: { message_count: updated.length },
   });
+
+  const mailboxRows = await db
+    .select()
+    .from(emailMessages)
+    .where(and(eq(emailMessages.accountId, args.accountId), eq(emailMessages.mailboxId, args.mailboxId)));
+  await Promise.all(mailboxRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'mailbox_marked_read')));
 
   return { updated: updated.length };
 }
@@ -1916,6 +1943,39 @@ async function rulesFor(accountId: string, mailboxId: string) {
     .orderBy(asc(emailRules.position));
 }
 
+type EmailSyncCursor = {
+  folders?: Record<string, { last_uid?: number; uid_validity?: string }>;
+  last_uid?: number;
+  uid_validity?: string;
+};
+
+async function ensureImapFolder(accountId: string, mailboxId: string, path: string, specialUse?: string) {
+  const normalized = path.toLowerCase() === 'inbox' ? 'inbox' : path;
+  const special = specialUse?.toLowerCase();
+  const mapped = special === '\\sent'
+    ? { slug: 'sent', name: 'Enviados', kind: 'sent' as const, position: 10 }
+    : special === '\\trash'
+      ? { slug: 'trash', name: 'Papelera', kind: 'trash' as const, position: 30 }
+      : special === '\\archive'
+        ? { slug: 'archive', name: 'Archivo', kind: 'archive' as const, position: 20 }
+        : normalized === 'inbox'
+          ? { slug: 'inbox', name: 'Entrada', kind: 'inbox' as const, position: 0 }
+          : { slug: `imap-${slugify(path)}`, name: path, kind: 'custom' as const, position: 100 };
+
+  const [existing] = await db
+    .select()
+    .from(emailFolders)
+    .where(and(eq(emailFolders.mailboxId, mailboxId), eq(emailFolders.slug, mapped.slug)))
+    .limit(1);
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(emailFolders)
+    .values({ mailboxId, accountId, ...mapped })
+    .returning();
+  return created;
+}
+
 export async function importEmailAccount(args: {
   accountId: string;
   emailAccountId: string;
@@ -1927,7 +1987,7 @@ export async function importEmailAccount(args: {
     .from(emailAccounts)
     .where(and(eq(emailAccounts.accountId, args.accountId), eq(emailAccounts.id, args.emailAccountId)))
     .limit(1);
-  if (!account || !account.enabled) return { imported: 0, skipped: 0 };
+  if (!account || !account.enabled) return { imported: 0, skipped: 0, moved: 0, missing: 0 };
 
   const [mailbox] = await db
     .select()
@@ -1936,154 +1996,164 @@ export async function importEmailAccount(args: {
     .limit(1);
   if (!mailbox) throw new Error('Email mailbox is missing.');
 
-  const [inboxFolder] = await db
-    .select()
-    .from(emailFolders)
-    .where(and(eq(emailFolders.mailboxId, mailbox.id), eq(emailFolders.kind, 'inbox')))
-    .limit(1);
-  if (!inboxFolder) throw new Error('Inbox folder is missing.');
-
   const credentials = decryptEmailCredentials(account.encryptedCredentials as Record<string, unknown>);
-  const cursor = (account.syncCursor as { last_uid?: number; uid_validity?: string } | null) ?? {};
+  const cursor = (account.syncCursor as EmailSyncCursor | null) ?? {};
+  const folderCursors = cursor.folders ?? {
+    [account.syncMailbox]: { last_uid: cursor.last_uid, uid_validity: cursor.uid_validity },
+  };
   const client = new ImapFlow({
     host: account.imapHost,
     port: account.imapPort,
     secure: account.imapSecure,
-    auth: {
-      user: credentials.imap_user,
-      pass: credentials.imap_password,
-    },
+    auth: { user: credentials.imap_user, pass: credentials.imap_password },
   });
 
   let imported = 0;
   let skipped = 0;
-  let maxUid = cursor.last_uid ?? 0;
+  let moved = 0;
+  let missing = 0;
+  const limit = args.maxMessages ?? 50;
+  const seen = new Set<string>();
+  const seenMessageIds = new Set<string>();
 
   try {
     await client.connect();
-    const lock = await client.getMailboxLock(account.syncMailbox);
-    try {
-      const mailboxInfo = await client.mailboxOpen(account.syncMailbox, { readOnly: true });
-      const uidValidity = String(mailboxInfo.uidValidity ?? cursor.uid_validity ?? '0');
-      const fromUid = uidValidity === cursor.uid_validity ? (cursor.last_uid ?? 0) + 1 : 1;
-      const range = `${fromUid}:*`;
-      const ruleRows = await rulesFor(args.accountId, mailbox.id);
-      const limit = args.maxMessages ?? 50;
+    const listed = await client.list();
+    const folders = listed.filter((item) => item.listed && item.path && !item.flags.has('\\Noselect'));
+    const existingRows = await db.select().from(emailMessages).where(eq(emailMessages.emailAccountId, account.id));
+    const byMessageId = new Map(existingRows.filter((row) => row.messageId).map((row) => [row.messageId as string, row]));
+    const rules = await rulesFor(args.accountId, mailbox.id);
 
-      for await (const msg of client.fetch(range, { uid: true, source: true, flags: true, envelope: true, internalDate: true, size: true }, { uid: true })) {
-        if (!msg.uid || msg.uid < fromUid) continue;
-        if (imported >= limit) break;
-        maxUid = Math.max(maxUid, msg.uid);
-        const source = msg.source ? Buffer.from(msg.source) : null;
-        if (!source) {
-          skipped++;
-          continue;
-        }
+    for (const remoteFolder of folders) {
+      const lock = await client.getMailboxLock(remoteFolder.path);
+      try {
+        const info = await client.mailboxOpen(remoteFolder.path, { readOnly: true });
+        const uidValidity = String(info.uidValidity ?? '0');
+        const previous = folderCursors[remoteFolder.path];
+        const fromUid = previous?.uid_validity === uidValidity ? (previous.last_uid ?? 0) + 1 : 1;
+        const allUidsResult = await client.search({ all: true }, { uid: true });
+        const allUids = Array.isArray(allUidsResult) ? allUidsResult : [];
+        for (const uid of allUids) seen.add(`${remoteFolder.path}:${uidValidity}:${uid}`);
 
-        const parsed = await simpleParser(source);
-        const from = firstAddress(parsed.from);
-        const toAddresses = addressList(parsed.to);
-        const ccAddresses = addressList(parsed.cc);
-        const targetFolderId =
-          resolveRuleTargetFolder(ruleRows, {
+        const range = `${fromUid}:*`;
+        let folderMaxUid = Math.max(0, fromUid - 1);
+        for await (const msg of client.fetch(range, { uid: true, source: true, flags: true, internalDate: true, size: true }, { uid: true })) {
+          if (!msg.uid || msg.uid < fromUid) continue;
+          if (imported >= limit) break;
+          folderMaxUid = Math.max(folderMaxUid, msg.uid);
+          const source = msg.source ? Buffer.from(msg.source) : null;
+          if (!source) { skipped++; continue; }
+
+          const parsed = await simpleParser(source);
+          const from = firstAddress(parsed.from);
+          const toAddresses = addressList(parsed.to);
+          const ccAddresses = addressList(parsed.cc);
+          const externalFolder = await ensureImapFolder(args.accountId, mailbox.id, remoteFolder.path, remoteFolder.specialUse);
+          const targetFolderId = resolveRuleTargetFolder(rules, {
             fromAddress: from.address,
             toAddresses,
             ccAddresses,
             subject: parsed.subject ?? '',
-          }) ?? inboxFolder.id;
+            bodyText: parsed.text ?? '',
+            sizeBytes: msg.size ?? source.byteLength,
+            hasAttachment: parsed.attachments.length > 0,
+            date: parsed.date ?? msg.internalDate,
+          }) ?? externalFolder.id;
+          const flags = [...(msg.flags ?? [])];
+          const existing = parsed.messageId ? byMessageId.get(parsed.messageId) : undefined;
+          let row: typeof emailMessages.$inferSelect | undefined;
 
-        const [created] = await db
-          .insert(emailMessages)
-          .values({
-            accountId: args.accountId,
-            emailAccountId: account.id,
-            mailboxId: mailbox.id,
-            folderId: targetFolderId,
-            imapMailbox: account.syncMailbox,
-            imapUidValidity: uidValidity,
-            imapUid: msg.uid,
-            messageId: parsed.messageId ?? null,
-            threadKey: parsed.references?.toString() ?? parsed.inReplyTo ?? parsed.messageId ?? null,
-            subject: parsed.subject || '(Sin asunto)',
-            fromName: from.name,
-            fromAddress: from.address,
-            toAddresses,
-            ccAddresses,
-            bccAddresses: addressList(parsed.bcc),
-            replyToAddresses: addressList(parsed.replyTo),
-            receivedAt: parsed.date ?? asDate(msg.internalDate) ?? new Date(),
-            sentAt: parsed.date ?? null,
-            snippet: snippet(parsed),
-            bodyText: parsed.text ?? null,
-            bodyHtml: typeof parsed.html === 'string' ? parsed.html : null,
-            isRead: false,
-            hasAttachments: parsed.attachments.length > 0,
-            rawHeaders: Object.fromEntries(parsed.headers.entries()),
-            rawSize: msg.size ?? source.byteLength,
-          })
-          .onConflictDoNothing()
-          .returning();
-
-        if (!created) {
-          skipped++;
-          continue;
+          if (existing) {
+            const [updated] = await db.update(emailMessages).set({
+              imapMailbox: remoteFolder.path,
+              imapUidValidity: uidValidity,
+              imapUid: msg.uid,
+              imapFlags: flags,
+              externalState: 'present',
+              lastImapSyncAt: new Date(),
+              folderId: existing.folderSource === 'imap' ? targetFolderId : existing.folderId,
+              updatedAt: new Date(),
+            }).where(eq(emailMessages.id, existing.id)).returning();
+            row = updated;
+            if (updated.messageId) seenMessageIds.add(updated.messageId);
+            if (existing.imapMailbox !== remoteFolder.path) moved++;
+            await publishEmailMessageEvent('email.message.updated', updated, existing.imapMailbox !== remoteFolder.path ? 'moved_externally' : 'imap_refreshed');
+          } else {
+            const [created] = await db.insert(emailMessages).values({
+              accountId: args.accountId,
+              emailAccountId: account.id,
+              mailboxId: mailbox.id,
+              folderId: targetFolderId,
+              imapMailbox: remoteFolder.path,
+              imapUidValidity: uidValidity,
+              imapUid: msg.uid,
+              imapFlags: flags,
+              externalState: 'present',
+              folderSource: targetFolderId === externalFolder.id ? 'imap' : 'local',
+              lastImapSyncAt: new Date(),
+              messageId: parsed.messageId ?? null,
+              threadKey: parsed.references?.toString() ?? parsed.inReplyTo ?? parsed.messageId ?? null,
+              subject: parsed.subject || '(Sin asunto)',
+              fromName: from.name,
+              fromAddress: from.address,
+              toAddresses,
+              ccAddresses,
+              bccAddresses: addressList(parsed.bcc),
+              replyToAddresses: addressList(parsed.replyTo),
+              receivedAt: parsed.date ?? asDate(msg.internalDate) ?? new Date(),
+              sentAt: parsed.date ?? null,
+              snippet: snippet(parsed),
+              bodyText: parsed.text ?? null,
+              bodyHtml: typeof parsed.html === 'string' ? parsed.html : null,
+              isRead: flags.some((flag) => flag.toLowerCase() === '\\seen'),
+              hasAttachments: parsed.attachments.length > 0,
+              rawHeaders: Object.fromEntries(parsed.headers.entries()),
+              rawSize: msg.size ?? source.byteLength,
+            }).onConflictDoNothing().returning();
+            if (!created) { skipped++; continue; }
+            row = created;
+            if (created.messageId) seenMessageIds.add(created.messageId);
+            byMessageId.set(created.messageId ?? created.id, created);
+            for (const attachment of parsed.attachments) {
+              const fileName = attachment.filename || 'attachment';
+              const storageKey = `email/${args.accountId}/${created.id}/${crypto.randomUUID()}-${fileName}`;
+              await putObject({ key: storageKey, body: attachment.content, contentType: attachment.contentType });
+              await db.insert(emailAttachments).values({ accountId: args.accountId, messageId: created.id, fileName, contentType: attachment.contentType, size: attachment.size, storageKey, contentId: attachment.contentId ?? null });
+            }
+            await db.insert(emailAuditEvents).values({ accountId: args.accountId, userId: args.userId ?? null, mailboxId: mailbox.id, folderId: targetFolderId, messageId: created.id, eventType: 'message.imported', metadata: { imap_uid: msg.uid, copied_from: remoteFolder.path } });
+            await publishEmailMessageEvent('email.message.created', created, 'imported');
+            imported++;
+          }
+          void row;
         }
-
-        for (const attachment of parsed.attachments) {
-          const fileName = attachment.filename || 'attachment';
-          const storageKey = `email/${args.accountId}/${created.id}/${crypto.randomUUID()}-${fileName}`;
-          await putObject({
-            key: storageKey,
-            body: attachment.content,
-            contentType: attachment.contentType,
-          });
-          await db.insert(emailAttachments).values({
-            accountId: args.accountId,
-            messageId: created.id,
-            fileName,
-            contentType: attachment.contentType,
-            size: attachment.size,
-            storageKey,
-            contentId: attachment.contentId ?? null,
-          });
-        }
-
-        await db.insert(emailAuditEvents).values({
-          accountId: args.accountId,
-          userId: args.userId ?? null,
-          mailboxId: mailbox.id,
-          folderId: targetFolderId,
-          messageId: created.id,
-          eventType: 'message.imported',
-          metadata: { imap_uid: msg.uid, copied_from: account.syncMailbox },
-        });
-        imported++;
+        folderCursors[remoteFolder.path] = { last_uid: folderMaxUid, uid_validity: uidValidity };
+      } finally {
+        lock.release();
       }
-
-      await db
-        .update(emailAccounts)
-        .set({
-          syncCursor: { last_uid: maxUid, uid_validity: uidValidity },
-          lastSyncedAt: new Date(),
-          status: 'active',
-          lastError: null,
-        })
-        .where(eq(emailAccounts.id, account.id));
-    } finally {
-      lock.release();
     }
+
+    for (const row of existingRows) {
+      const identity = `${row.imapMailbox}:${row.imapUidValidity}:${row.imapUid}`;
+      if (row.externalState === 'present' && !seen.has(identity) && !seenMessageIds.has(row.messageId ?? '')) {
+        const [updated] = await db.update(emailMessages).set({ externalState: 'missing', lastImapSyncAt: new Date(), updatedAt: new Date() }).where(eq(emailMessages.id, row.id)).returning();
+        if (updated) {
+          missing++;
+          await db.insert(emailAuditEvents).values({ accountId: args.accountId, userId: args.userId ?? null, mailboxId: updated.mailboxId, folderId: updated.folderId, messageId: updated.id, eventType: 'message.external_missing', metadata: { imap_mailbox: updated.imapMailbox, imap_uid: updated.imapUid } });
+          await publishEmailMessageEvent('email.message.deleted', updated, 'missing_externally');
+        }
+      }
+    }
+
+    await db.update(emailAccounts).set({ syncCursor: { folders: folderCursors }, lastSyncedAt: new Date(), status: 'active', lastError: null }).where(eq(emailAccounts.id, account.id));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Email import failed.';
-    await db
-      .update(emailAccounts)
-      .set({ status: 'error', lastError: message })
-      .where(eq(emailAccounts.id, account.id));
+    await db.update(emailAccounts).set({ status: 'error', lastError: message }).where(eq(emailAccounts.id, account.id));
     throw error;
   } finally {
     await client.logout().catch(() => undefined);
   }
 
-  return { imported, skipped };
+  return { imported, skipped, moved, missing };
 }
 
 export async function importAllEmailAccounts(args: {
@@ -2101,6 +2171,8 @@ export async function importAllEmailAccounts(args: {
     );
   let imported = 0;
   let skipped = 0;
+  let moved = 0;
+  let missing = 0;
   for (const row of rows) {
     const result = await importEmailAccount({
       accountId: row.accountId,
@@ -2110,8 +2182,10 @@ export async function importAllEmailAccounts(args: {
     });
     imported += result.imported;
     skipped += result.skipped;
+    moved += result.moved;
+    missing += result.missing;
   }
-  return { imported, skipped, accounts: rows.length };
+  return { imported, skipped, moved, missing, accounts: rows.length };
 }
 
 export async function sendEmail(args: {
@@ -2193,10 +2267,11 @@ export async function sendEmail(args: {
     .limit(1);
 
   let sentMessageId: string | null = null;
+  let sentMessage: typeof emailMessages.$inferSelect | null = null;
   if (sentFolder) {
     const now = new Date();
     const localUid = Math.floor(now.getTime() / 1000) + Math.floor(Math.random() * 1000);
-    const [sentMessage] = await db
+    const [createdSentMessage] = await db
       .insert(emailMessages)
       .values({
         accountId: args.accountId,
@@ -2226,11 +2301,12 @@ export async function sendEmail(args: {
         rawSize: null,
       })
       .returning();
-    sentMessageId = sentMessage.id;
+    sentMessage = createdSentMessage;
+    sentMessageId = createdSentMessage.id;
 
     for (const attachment of args.attachments ?? []) {
       const fileName = attachment.filename || 'attachment';
-      const storageKey = `email/${args.accountId}/${sentMessage.id}/${crypto.randomUUID()}-${fileName}`;
+      const storageKey = `email/${args.accountId}/${createdSentMessage.id}/${crypto.randomUUID()}-${fileName}`;
       await putObject({
         key: storageKey,
         body: Buffer.from(attachment.contentBase64, 'base64'),
@@ -2238,7 +2314,7 @@ export async function sendEmail(args: {
       });
       await db.insert(emailAttachments).values({
         accountId: args.accountId,
-        messageId: sentMessage.id,
+        messageId: createdSentMessage.id,
         fileName,
         contentType: attachment.contentType,
         size: Math.ceil((attachment.contentBase64.length * 3) / 4),
@@ -2265,6 +2341,10 @@ export async function sendEmail(args: {
       in_reply_to_message_id: args.inReplyToMessageId ?? null,
     },
   });
+
+  if (sentMessage) {
+    await publishEmailMessageEvent('email.message.created', sentMessage, 'sent');
+  }
 
   return { message_id: info.messageId ?? null, stored_message_id: sentMessageId };
 }
