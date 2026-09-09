@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Bell, CheckCheck, Loader2, UserPlus } from "lucide-react";
+import { Bell, CheckCheck, Loader2, Mail, UserPlus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
@@ -22,6 +22,7 @@ import {
 
 const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   conversation_assigned: UserPlus,
+  email_new_message: Mail,
 };
 
 export function NotificationsMenu() {
@@ -124,6 +125,10 @@ export function NotificationsMenu() {
       if (!notification.read_at) void markRead(notification.id);
       if (notification.conversation_id) {
         router.push(`/inbox?c=${notification.conversation_id}`);
+        return;
+      }
+      if (notification.type === "email_new_message") {
+        router.push("/email");
       }
     },
     [markRead, router],

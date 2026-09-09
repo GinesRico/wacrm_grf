@@ -225,7 +225,7 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+export type NotificationType = 'conversation_assigned' | 'email_new_message';
 
 export interface Notification {
   id: string;
@@ -233,13 +233,13 @@ export interface Notification {
   /** Recipient — the agent this notification is for. */
   user_id: string;
   type: NotificationType;
-  conversation_id?: string;
-  contact_id?: string;
+  conversation_id?: string | null;
+  contact_id?: string | null;
   /** Who triggered it. Null when an automation/system assigned it. */
-  actor_user_id?: string;
+  actor_user_id?: string | null;
   title: string;
-  body?: string;
-  read_at?: string;
+  body?: string | null;
+  read_at?: string | null;
   created_at: string;
 }
 

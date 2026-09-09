@@ -8,6 +8,7 @@ import {
   unsubscribeRealtimeChannel,
 } from "@/lib/realtime/soketi-client";
 import type { Message } from "@/types";
+import type { Notification as AppNotification } from "@/types";
 
 const MAX_BODY_LENGTH = 120;
 const INCOMING_MESSAGE_SOUND_SRC = "/sounds/incoming-message.mp3";
@@ -102,6 +103,7 @@ export function useIncomingMessageAlerts(enabled: boolean) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
+  const seenNotificationIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!enabled) return;
@@ -192,10 +194,40 @@ export function useIncomingMessageAlerts(enabled: boolean) {
     }) => {
       void showAlert(event.payload);
     };
+    const handleNotificationCreated = (event: {
+      payload: { notification: AppNotification };
+    }) => {
+      const notification = event.payload.notification;
+      if (notification.type !== "email_new_message") return;
+      if (seenNotificationIdsRef.current.has(notification.id)) return;
+      seenNotificationIdsRef.current.add(notification.id);
+
+      void playIncomingMessageSound(audioContextRef.current, audioRef.current);
+
+      if (
+        !isNotificationSupported() ||
+        window.Notification.permission !== "granted"
+      ) {
+        return;
+      }
+
+      const desktopNotification = new window.Notification(notification.title, {
+        body: trimBody(notification.body),
+        tag: "wacrm-email-new-message",
+      });
+
+      desktopNotification.onclick = () => {
+        window.focus();
+        router.push("/email");
+        desktopNotification.close();
+      };
+    };
     channel.bind("message.created", handleMessageCreated);
+    channel.bind("notification.created", handleNotificationCreated);
 
     return () => {
       channel.unbind("message.created", handleMessageCreated);
+      channel.unbind("notification.created", handleNotificationCreated);
       unsubscribeRealtimeChannel(channelName);
     };
   }, [accountId, enabled, router]);

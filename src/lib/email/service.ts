@@ -7,6 +7,7 @@ import nodemailer from 'nodemailer';
 import { db } from '@/db/client';
 import {
   departments,
+  departmentMembers,
   emailAccounts,
   emailAttachments,
   emailAuditEvents,
@@ -22,6 +23,7 @@ import {
   profiles,
 } from '@/db/schema';
 import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik';
+import { createRealtimeNotification } from '@/lib/notifications/create-notification';
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
 import { listAccessibleFolders, resolveEmailPermission } from './permissions';
@@ -2155,6 +2157,101 @@ async function applyMatchingRulesToImportedMessage(args: {
   return updated ?? args.message;
 }
 
+async function listEmailNotificationRecipients(args: {
+  accountId: string;
+  mailboxId: string;
+  folderId: string;
+}) {
+  const recipients = new Set<string>();
+
+  const adminRows = await db
+    .select({ userId: profiles.userId })
+    .from(profiles)
+    .where(
+      and(
+        eq(profiles.accountId, args.accountId),
+        inArray(profiles.accountRole, ['owner', 'admin']),
+      ),
+    );
+  for (const row of adminRows) recipients.add(row.userId);
+
+  const [mailbox] = await db
+    .select({ ownerUserId: emailMailboxes.ownerUserId, kind: emailMailboxes.kind })
+    .from(emailMailboxes)
+    .where(and(eq(emailMailboxes.accountId, args.accountId), eq(emailMailboxes.id, args.mailboxId)))
+    .limit(1);
+  if (mailbox?.kind === 'personal' && mailbox.ownerUserId) {
+    recipients.add(mailbox.ownerUserId);
+  }
+
+  const userPermissionRows = await db
+    .select({ userId: emailUserPermissions.userId })
+    .from(emailUserPermissions)
+    .where(
+      and(
+        eq(emailUserPermissions.accountId, args.accountId),
+        eq(emailUserPermissions.canRead, true),
+        or(
+          eq(emailUserPermissions.folderId, args.folderId),
+          and(
+            eq(emailUserPermissions.mailboxId, args.mailboxId),
+            isNull(emailUserPermissions.folderId),
+          ),
+        ),
+      ),
+    );
+  for (const row of userPermissionRows) recipients.add(row.userId);
+
+  const departmentPermissionRows = await db
+    .select({ userId: departmentMembers.userId })
+    .from(emailPermissions)
+    .innerJoin(departmentMembers, eq(departmentMembers.departmentId, emailPermissions.departmentId))
+    .where(
+      and(
+        eq(emailPermissions.accountId, args.accountId),
+        eq(departmentMembers.accountId, args.accountId),
+        eq(emailPermissions.canRead, true),
+        or(
+          eq(emailPermissions.folderId, args.folderId),
+          and(
+            eq(emailPermissions.mailboxId, args.mailboxId),
+            isNull(emailPermissions.folderId),
+          ),
+        ),
+      ),
+    );
+  for (const row of departmentPermissionRows) recipients.add(row.userId);
+
+  return [...recipients];
+}
+
+async function notifyNewEmailMessage(row: typeof emailMessages.$inferSelect) {
+  const recipients = await listEmailNotificationRecipients({
+    accountId: row.accountId,
+    mailboxId: row.mailboxId,
+    folderId: row.folderId,
+  });
+  if (recipients.length === 0) return;
+
+  const sender = row.fromName?.trim() || row.fromAddress;
+  const subject = row.subject || '(Sin asunto)';
+  const body = row.snippet || subject;
+
+  await Promise.all(
+    recipients.map((userId) =>
+      createRealtimeNotification({
+        accountId: row.accountId,
+        userId,
+        type: 'email_new_message',
+        title: `Nuevo correo de ${sender}`,
+        body,
+      }).catch((error) => {
+        console.warn('[notifications] failed to create email notification:', error);
+      }),
+    ),
+  );
+}
+
 export async function importEmailAccount(args: {
   accountId: string;
   emailAccountId: string;
@@ -2311,6 +2408,7 @@ export async function importEmailAccount(args: {
             row = createdWithRules;
             byMessageId.set(createdWithRules.messageId ?? createdWithRules.id, createdWithRules);
             await db.insert(emailAuditEvents).values({ accountId: args.accountId, userId: args.userId ?? null, mailboxId: mailbox.id, folderId: createdWithRules.folderId, messageId: createdWithRules.id, eventType: 'message.imported', metadata: { imap_uid: msg.uid, copied_from: remoteFolder.path } });
+            await notifyNewEmailMessage(createdWithRules);
             await publishEmailMessageEvent('email.message.created', createdWithRules, 'imported');
             imported++;
           }

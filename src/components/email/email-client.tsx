@@ -556,29 +556,74 @@ function emailHtml(html: string, allowExternalContent: boolean) {
     .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
 }
 
-function emailDocument(html: string, allowExternalContent: boolean) {
+function emailDocument(html: string, allowExternalContent: boolean, darkMode: boolean) {
   const safeHtml = emailHtml(html, allowExternalContent);
+  const surface = darkMode ? '#0f1117' : '#ffffff';
+  const text = darkMode ? '#f8fafc' : '#111827';
+  const mutedText = darkMode ? '#cbd5e1' : '#4b5563';
+  const border = darkMode ? '#2b3038' : '#d1d5db';
+  const link = darkMode ? '#8ab4ff' : '#0b57d0';
+  const scrollbarThumb = darkMode ? '#4b5563' : '#cbd5e1';
+  const scrollbarTrack = darkMode ? '#0f1117' : '#f8fafc';
   const baseStyles = `
     <style>
-      :root { color-scheme: light; }
+      :root { color-scheme: ${darkMode ? 'dark' : 'light'}; }
       html, body {
         min-height: 100%;
         margin: 0;
-        background: #ffffff !important;
-        color: #111827;
+        background: ${surface} !important;
+        color: ${text} !important;
+        scrollbar-color: ${scrollbarThumb} ${scrollbarTrack};
       }
       body {
+        box-sizing: border-box;
         overflow-wrap: anywhere;
+        padding: 8px 10px;
+      }
+      ${darkMode ? `
+      body, body * {
+        color: ${text} !important;
+        border-color: ${border} !important;
+      }
+      body * {
+        background-color: transparent !important;
+      }
+      [style*="color:"] {
+        color: ${text} !important;
+      }
+      [style*="background"] {
+        background-color: transparent !important;
+      }
+      ` : ''}
+      *::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      *::-webkit-scrollbar-track {
+        background: ${scrollbarTrack};
+      }
+      *::-webkit-scrollbar-thumb {
+        background: ${scrollbarThumb};
+        border-radius: 999px;
+        border: 2px solid ${scrollbarTrack};
       }
       img, video {
         max-width: 100%;
         height: auto;
+        background: transparent !important;
       }
       table {
         max-width: 100%;
       }
+      hr {
+        border-color: ${border};
+      }
       a {
-        color: #0b57d0;
+        color: ${link} !important;
+      }
+      blockquote {
+        color: ${mutedText} !important;
+        border-color: ${border} !important;
       }
     </style>
   `;
@@ -973,6 +1018,7 @@ export function EmailClient() {
   const [searchScope, setSearchScope] = useState<'folder' | 'mailbox'>('folder');
   const [editorKey, setEditorKey] = useState(0);
   const [allowExternalContent, setAllowExternalContent] = useState(false);
+  const [isDarkReader, setIsDarkReader] = useState(false);
   const [tabs, setTabs] = useState<MailTab[]>([]);
   const [activeTabId, setActiveTabId] = useState('folder');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -990,6 +1036,24 @@ export function EmailClient() {
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
     [mailboxes, selectedMailboxId],
   );
+
+  useEffect(() => {
+    const readDarkMode = () =>
+      document.documentElement.classList.contains('dark') ||
+      document.body.classList.contains('dark') ||
+      window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setIsDarkReader(readDarkMode());
+    const observer = new MutationObserver(() => setIsDarkReader(readDarkMode()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onMediaChange = () => setIsDarkReader(readDarkMode());
+    media.addEventListener('change', onMediaChange);
+    return () => {
+      observer.disconnect();
+      media.removeEventListener('change', onMediaChange);
+    };
+  }, []);
 
   const mailboxFolders = useMemo(
     () =>
@@ -3088,11 +3152,11 @@ export function EmailClient() {
                   <iframe
                     title="Contenido del correo"
                     sandbox=""
-                    srcDoc={emailDocument(selectedMessage.body_html, allowExternalContent)}
-                    className="h-full min-h-[420px] w-full border-0 bg-white"
+                    srcDoc={emailDocument(selectedMessage.body_html, allowExternalContent, isDarkReader)}
+                    className="h-full min-h-[420px] w-full border-0 bg-background"
                   />
                 ) : (
-                  <pre className="min-h-full whitespace-pre-wrap bg-background p-4 text-sm leading-6 text-foreground">
+                  <pre className="min-h-full whitespace-pre-wrap bg-background p-2.5 text-sm leading-6 text-foreground">
                     {selectedMessage.body_text || selectedMessage.snippet}
                   </pre>
                 )}
