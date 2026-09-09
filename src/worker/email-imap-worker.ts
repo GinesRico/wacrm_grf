@@ -6,8 +6,8 @@ import { emailAccounts } from '@/db/schema';
 import { decryptEmailCredentials } from '@/lib/email/credentials';
 import { importEmailAccount } from '@/lib/email/service';
 
-const RECONCILE_INTERVAL_MS = Number(process.env.EMAIL_RECONCILE_INTERVAL_MS ?? 60_000);
-const WATCH_REFRESH_MS = 30_000;
+const RECONCILE_INTERVAL_MS = Number(process.env.EMAIL_RECONCILE_INTERVAL_MS ?? 300_000);
+const WATCH_REFRESH_MS = Number(process.env.EMAIL_WATCH_REFRESH_MS ?? 60_000);
 
 type Watch = { accountId: string; emailAccountId: string; client: ImapFlow; running: boolean };
 const watches = new Map<string, Watch>();
@@ -75,12 +75,13 @@ async function refreshWatches() {
   const activeIds = new Set(accounts.map((account) => account.id));
   for (const account of accounts) void startWatch(account);
   for (const emailAccountId of watches.keys()) if (!activeIds.has(emailAccountId)) await stopWatch(emailAccountId);
-  for (const account of accounts) void syncAccount(account.accountId, account.id, 'periodic_reconcile');
+  return accounts;
 }
 
 async function main() {
   log('worker started', { reconcileIntervalMs: RECONCILE_INTERVAL_MS });
-  await refreshWatches();
+  const accounts = await refreshWatches();
+  for (const account of accounts) void syncAccount(account.accountId, account.id, 'startup_reconcile');
   const refreshTimer = setInterval(() => void refreshWatches().catch((error) => log('watch refresh failed', { error: String(error) })), WATCH_REFRESH_MS);
   const reconcileTimer = setInterval(() => void Promise.all([...watches.values()].map((watch) => syncAccount(watch.accountId, watch.emailAccountId, 'periodic_reconcile'))), RECONCILE_INTERVAL_MS);
   const shutdown = async () => {

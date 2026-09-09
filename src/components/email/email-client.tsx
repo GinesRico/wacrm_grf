@@ -87,6 +87,7 @@ interface Folder {
   slug: string;
   kind: string;
   position: number;
+  unread_count?: number;
 }
 
 interface Message {
@@ -114,6 +115,13 @@ interface MessagesResponse {
   mailboxes: Mailbox[];
   folders: Folder[];
   messages: Message[];
+}
+
+interface RealtimeEmailEvent {
+  payload?: {
+    message?: Message;
+    reason?: string;
+  };
 }
 
 interface Attachment {
@@ -197,7 +205,9 @@ interface ContextMenuState {
 interface MailboxContextMenuState {
   x: number;
   y: number;
+  target: 'mailbox' | 'folder';
   mailboxId: string;
+  folderId?: string;
 }
 
 type AttachmentPreviewKind = 'image' | 'pdf' | 'spreadsheet' | 'file';
@@ -545,6 +555,43 @@ function emailHtml(html: string, allowExternalContent: boolean) {
     .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
 }
 
+function emailDocument(html: string, allowExternalContent: boolean) {
+  const safeHtml = emailHtml(html, allowExternalContent);
+  const baseStyles = `
+    <style>
+      :root { color-scheme: light; }
+      html, body {
+        min-height: 100%;
+        margin: 0;
+        background: #ffffff !important;
+        color: #111827;
+      }
+      body {
+        overflow-wrap: anywhere;
+      }
+      img, video {
+        max-width: 100%;
+        height: auto;
+      }
+      table {
+        max-width: 100%;
+      }
+      a {
+        color: #0b57d0;
+      }
+    </style>
+  `;
+
+  if (/<html[\s>]/i.test(safeHtml)) {
+    if (/<head[\s>]/i.test(safeHtml)) {
+      return safeHtml.replace(/<head([^>]*)>/i, `<head$1>${baseStyles}`);
+    }
+    return safeHtml.replace(/<html([^>]*)>/i, `<html$1><head>${baseStyles}</head>`);
+  }
+
+  return `<!doctype html><html><head><meta charset="utf-8">${baseStyles}</head><body>${safeHtml}</body></html>`;
+}
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, '&amp;')
@@ -623,11 +670,13 @@ function MailboxContextMenu({
   x,
   y,
   mailboxName,
+  target,
   onMarkAllRead,
 }: {
   x: number;
   y: number;
   mailboxName: string;
+  target: 'mailbox' | 'folder';
   onMarkAllRead: () => void;
 }) {
   return (
@@ -645,7 +694,7 @@ function MailboxContextMenu({
         className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
       >
         <MailOpen className="size-4" />
-        <span className="truncate">Marcar todos como leidos</span>
+        <span className="truncate">{target === 'folder' ? 'Marcar carpeta como leida' : 'Marcar todos como leidos'}</span>
       </button>
     </div>
   );
@@ -903,6 +952,8 @@ export function EmailClient() {
   const [panelWidths, setPanelWidths] = useState<EmailPanelWidths>(() => initialEmailPanelWidths());
   const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
   const attachmentUrlsRef = useRef(new Map<string, string>());
+  const hasLoadedRef = useRef(false);
+  const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -943,6 +994,14 @@ export function EmailClient() {
   );
 
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
+  const unreadByMailbox = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const folder of folders) {
+      if (!folder.mailbox_id) continue;
+      counts.set(folder.mailbox_id, (counts.get(folder.mailbox_id) ?? 0) + (folder.unread_count ?? 0));
+    }
+    return counts;
+  }, [folders]);
   const unreadCount = messages.filter((message) => !message.is_read).length;
   const attachmentCount = messages.filter((message) => message.has_attachments).length;
   const filteredMessages = useMemo(() => {
@@ -1006,8 +1065,68 @@ export function EmailClient() {
     searchScope === 'mailbox' ? { id: 'scope', label: 'Todo el buzon' } : null,
   ].filter(Boolean) as Array<{ id: string; label: string }>;
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const sortMessagesByCurrentSort = useCallback((items: Message[]) => {
+    const sorted = [...items];
+    sorted.sort((a, b) => {
+      if (advanced.sort === 'oldest') return new Date(a.received_at).getTime() - new Date(b.received_at).getTime();
+      if (advanced.sort === 'sender') return a.from_address.localeCompare(b.from_address);
+      if (advanced.sort === 'subject_asc') return a.subject.localeCompare(b.subject);
+      if (advanced.sort === 'subject_desc') return b.subject.localeCompare(a.subject);
+      if (advanced.sort === 'size_asc') return (a.raw_size ?? 0) - (b.raw_size ?? 0);
+      if (advanced.sort === 'size_desc') return (b.raw_size ?? 0) - (a.raw_size ?? 0);
+      return new Date(b.received_at).getTime() - new Date(a.received_at).getTime();
+    });
+    return sorted;
+  }, [advanced.sort]);
+
+  const messageMatchesCurrentView = useCallback((message: Message) => {
+    if (selectedMailboxId && message.mailbox_id !== selectedMailboxId) return false;
+    if (selectedFolderId && searchScope === 'folder' && message.folder_id !== selectedFolderId) return false;
+    if (activeFilter === 'unread' && message.is_read) return false;
+    if (activeFilter === 'attachments' && !message.has_attachments) return false;
+    if (activeFilter === 'starred' && !message.is_starred) return false;
+    if (selectedLabelId) return false;
+    if (advanced.from.trim() && !message.from_address.toLowerCase().includes(advanced.from.trim().toLowerCase())) return false;
+    if (advanced.to.trim() && !message.to_addresses.join(',').toLowerCase().includes(advanced.to.trim().toLowerCase())) return false;
+    const textQuery = query.trim().toLowerCase();
+    if (textQuery) {
+      const haystack = [message.subject, message.from_address, message.from_name, message.snippet, message.body_text]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(textQuery)) return false;
+    }
+    return true;
+  }, [activeFilter, advanced.from, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
+
+  const applyRealtimeMessage = useCallback((eventName: 'created' | 'updated' | 'deleted', event: RealtimeEmailEvent) => {
+    const message = event.payload?.message;
+    if (!message) return;
+
+    setFolders((current) =>
+      current.map((folder) => {
+        const currentCount = folder.unread_count ?? 0;
+        const sameFolder = folder.id === message.folder_id;
+        if (eventName === 'created' && sameFolder && !message.is_read) {
+          return { ...folder, unread_count: currentCount + 1 };
+        }
+        if ((eventName === 'updated' || eventName === 'deleted') && sameFolder && message.is_read) {
+          return folder;
+        }
+        return folder;
+      }),
+    );
+
+    setMessages((current) => {
+      const withoutCurrent = current.filter((item) => item.id !== message.id);
+      if (eventName === 'deleted' || !messageMatchesCurrentView(message)) return withoutCurrent;
+      return sortMessagesByCurrentSort([message, ...withoutCurrent]).slice(0, 200);
+    });
+  }, [messageMatchesCurrentView, sortMessagesByCurrentSort]);
+
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? hasLoadedRef.current;
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(`/api/email/messages?${params}`, { cache: 'no-store' });
       const payload = (await res.json().catch(() => ({}))) as Partial<MessagesResponse> & { error?: string };
@@ -1038,10 +1157,11 @@ export function EmailClient() {
           ? current
           : nextMessages[0]?.id ?? null,
       );
+      hasLoadedRef.current = true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar el correo');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [params, selectedFolderId, selectedMailboxId]);
 
@@ -1053,17 +1173,39 @@ export function EmailClient() {
     if (!accountId) return;
     const channelName = `private-account-${accountId}`;
     const channel = subscribeRealtimeChannel(channelName);
-    const refresh = () => void load();
-    channel.bind('email.message.created', refresh);
-    channel.bind('email.message.updated', refresh);
-    channel.bind('email.message.deleted', refresh);
+    const scheduleSilentRefresh = () => {
+      if (realtimeRefreshTimerRef.current) clearTimeout(realtimeRefreshTimerRef.current);
+      realtimeRefreshTimerRef.current = setTimeout(() => {
+        realtimeRefreshTimerRef.current = null;
+        void load({ silent: true });
+      }, 450);
+    };
+    const created = (event: RealtimeEmailEvent) => {
+      applyRealtimeMessage('created', event);
+      scheduleSilentRefresh();
+    };
+    const updated = (event: RealtimeEmailEvent) => {
+      applyRealtimeMessage('updated', event);
+      scheduleSilentRefresh();
+    };
+    const deleted = (event: RealtimeEmailEvent) => {
+      applyRealtimeMessage('deleted', event);
+      scheduleSilentRefresh();
+    };
+    channel.bind('email.message.created', created);
+    channel.bind('email.message.updated', updated);
+    channel.bind('email.message.deleted', deleted);
     return () => {
-      channel.unbind('email.message.created', refresh);
-      channel.unbind('email.message.updated', refresh);
-      channel.unbind('email.message.deleted', refresh);
+      if (realtimeRefreshTimerRef.current) {
+        clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      channel.unbind('email.message.created', created);
+      channel.unbind('email.message.updated', updated);
+      channel.unbind('email.message.deleted', deleted);
       unsubscribeRealtimeChannel(channelName);
     };
-  }, [accountId, load]);
+  }, [accountId, applyRealtimeMessage, load]);
 
   useEffect(() => {
     const next = new URLSearchParams(window.location.search);
@@ -1496,7 +1638,20 @@ export function EmailClient() {
     setMailboxContextMenu({
       x: Math.min(event.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_GAP),
       y: Math.min(event.clientY, window.innerHeight - 120 - VIEWPORT_GAP),
+      target: 'mailbox',
       mailboxId: mailbox.id,
+    });
+  }
+
+  function openFolderContextMenu(event: MouseEvent, folder: Folder, fallbackMailboxId: string | null) {
+    event.preventDefault();
+    setContextMenu(null);
+    setMailboxContextMenu({
+      x: Math.min(event.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_GAP),
+      y: Math.min(event.clientY, window.innerHeight - 120 - VIEWPORT_GAP),
+      target: 'folder',
+      mailboxId: folder.mailbox_id ?? fallbackMailboxId ?? '',
+      folderId: folder.id,
     });
   }
 
@@ -1539,6 +1694,29 @@ export function EmailClient() {
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo marcar el buzon como leido');
+      await load();
+    }
+  }
+
+  async function markFolderAsRead(folderId: string) {
+    setMailboxContextMenu(null);
+    setMessages((current) =>
+      current.map((message) =>
+        message.folder_id === folderId ? { ...message, is_read: true } : message,
+      ),
+    );
+    try {
+      const res = await fetch('/api/email/messages/batch', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_folder_read', folder_id: folderId }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudo marcar la carpeta como leida');
+      toast.success(`${payload.updated ?? 0} correos marcados como leidos`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo marcar la carpeta como leida');
       await load();
     }
   }
@@ -2213,6 +2391,11 @@ export function EmailClient() {
                           <span className="block truncate text-sm font-medium">{mailbox.display_name || mailbox.address}</span>
                           <span className="block truncate text-xs text-muted-foreground">{mailbox.address}</span>
                         </span>
+                        {(unreadByMailbox.get(mailbox.id) ?? 0) > 0 ? (
+                          <span className="ml-auto rounded-full bg-primary/10 px-1.5 text-xs font-medium text-primary">
+                            {unreadByMailbox.get(mailbox.id)}
+                          </span>
+                        ) : null}
                       </button>
                       <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-2">
                         {folders
@@ -2222,6 +2405,7 @@ export function EmailClient() {
                             <button
                               key={folder.id}
                               type="button"
+                              onContextMenu={(event) => openFolderContextMenu(event, folder, mailbox.id)}
                               onClick={() => {
                                 setSelectedMailboxId(mailbox.id);
                                 setSelectedFolderId(folder.id);
@@ -2236,7 +2420,7 @@ export function EmailClient() {
                             >
                               {folder.kind === 'inbox' ? <Inbox className="size-4" /> : folder.kind === 'trash' ? <Trash2 className="size-4" /> : <Archive className="size-4" />}
                               <span className="min-w-0 flex-1 truncate">{folder.name}</span>
-                              {folder.kind === 'inbox' && selectedMailbox?.id === mailbox.id && unreadCount > 0 ? <span className="text-xs text-muted-foreground">{unreadCount}</span> : null}
+                              {(folder.unread_count ?? 0) > 0 ? <span className="text-xs text-muted-foreground">{folder.unread_count}</span> : null}
                             </button>
                           ))}
                       </div>
@@ -2255,11 +2439,12 @@ export function EmailClient() {
               </div>
               <div className="space-y-1">
                 {publicFolders.map((folder) => {
-                  const count = messages.filter((message) => message.folder_id === folder.id).length;
+                  const count = folder.unread_count ?? 0;
                   return (
                     <button
                       key={folder.id}
                       type="button"
+                      onContextMenu={(event) => openFolderContextMenu(event, folder, selectedMailboxId)}
                       onClick={() => {
                         setSelectedMailboxId(folder.mailbox_id ?? selectedMailboxId);
                         setSelectedFolderId(folder.id);
@@ -2606,11 +2791,20 @@ export function EmailClient() {
               x={mailboxContextMenu.x}
               y={mailboxContextMenu.y}
               mailboxName={
-                mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.display_name ||
-                mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.address ||
-                'Buzon'
+                mailboxContextMenu.folderId
+                  ? folders.find((folder) => folder.id === mailboxContextMenu.folderId)?.name || 'Carpeta'
+                  : mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.display_name ||
+                    mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.address ||
+                    'Buzon'
               }
-              onMarkAllRead={() => void markMailboxAsRead(mailboxContextMenu.mailboxId)}
+              target={mailboxContextMenu.target}
+              onMarkAllRead={() => {
+                if (mailboxContextMenu.folderId) {
+                  void markFolderAsRead(mailboxContextMenu.folderId);
+                  return;
+                }
+                void markMailboxAsRead(mailboxContextMenu.mailboxId);
+              }}
             />
           ) : null}
         </section>
@@ -2802,16 +2996,16 @@ export function EmailClient() {
                 ) : null}
               </div>
 
-              <article className="min-h-0 flex-1 overflow-y-auto p-4">
+              <article className="min-h-0 flex-1 overflow-y-auto">
                 {selectedMessage.body_html ? (
                   <iframe
                     title="Contenido del correo"
                     sandbox=""
-                    srcDoc={emailHtml(selectedMessage.body_html, allowExternalContent)}
-                    className="h-full min-h-[420px] w-full rounded-md border border-border bg-background"
+                    srcDoc={emailDocument(selectedMessage.body_html, allowExternalContent)}
+                    className="h-full min-h-[420px] w-full border-0 bg-white"
                   />
                 ) : (
-                  <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+                  <pre className="min-h-full whitespace-pre-wrap bg-background p-4 text-sm leading-6 text-foreground">
                     {selectedMessage.body_text || selectedMessage.snippet}
                   </pre>
                 )}

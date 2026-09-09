@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { requireDbRole } from '@/lib/auth/current-account';
 import { toErrorResponse } from '@/lib/auth/errors';
 import {
+  markEmailFolderAsRead,
   markEmailMailboxAsRead,
   serializeEmailMessage,
   updateEmailMessagesBatch,
@@ -21,6 +22,18 @@ export async function PATCH(request: Request) {
         userId: ctx.userId,
         role: ctx.role,
         mailboxId: body.mailbox_id,
+      });
+      return NextResponse.json(result);
+    }
+    if (body?.action === 'mark_folder_read') {
+      if (typeof body.folder_id !== 'string') {
+        return NextResponse.json({ error: 'folder_id is required.' }, { status: 400 });
+      }
+      const result = await markEmailFolderAsRead({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        role: ctx.role,
+        folderId: body.folder_id,
       });
       return NextResponse.json(result);
     }

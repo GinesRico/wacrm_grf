@@ -25,7 +25,7 @@ import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
 import { listAccessibleFolders, resolveEmailPermission } from './permissions';
-import { resolveRuleTargetFolder } from './rules';
+import { matchEmailRule, resolveRuleTargetFolder, type EmailRuleLike, type RuleCandidate } from './rules';
 import type { AccountRole } from '@/lib/auth/roles';
 import type { CreateEmailAccountInput, EmailRuleAction, ThunderbirdRuleInput } from './types';
 
@@ -145,7 +145,10 @@ export function serializeEmailMailbox(row: typeof emailMailboxes.$inferSelect) {
   };
 }
 
-export function serializeEmailFolder(row: typeof emailFolders.$inferSelect) {
+export function serializeEmailFolder(
+  row: typeof emailFolders.$inferSelect,
+  counts?: { unreadCount?: number },
+) {
   return {
     id: row.id,
     account_id: row.accountId,
@@ -154,6 +157,7 @@ export function serializeEmailFolder(row: typeof emailFolders.$inferSelect) {
     slug: row.slug,
     kind: row.kind,
     position: row.position,
+    unread_count: counts?.unreadCount ?? 0,
   };
 }
 
@@ -515,7 +519,7 @@ export async function listEmailAdminState(accountId: string) {
       last_synced_at: serializeDate(row.lastSyncedAt),
     })),
     mailboxes: mailboxRows.map(serializeEmailMailbox),
-    folders: folderRows.map(serializeEmailFolder),
+    folders: folderRows.map((row) => serializeEmailFolder(row)),
     permissions: permissionRows.map(serializeEmailPermission),
     user_permissions: userPermissionRows.map(serializeEmailUserPermission),
     departments: departmentRows,
@@ -1043,9 +1047,28 @@ export async function listEmailWorkspace(args: {
     ...args,
     mailboxIds: mailboxes.map((mailbox) => mailbox.id),
   });
+  const folderIds = folders.map((folder) => folder.id);
+  const unreadRows = folderIds.length > 0
+    ? await db
+        .select({
+          folderId: emailMessages.folderId,
+          unreadCount: sql<number>`count(*)::int`,
+        })
+        .from(emailMessages)
+        .where(
+          and(
+            eq(emailMessages.accountId, args.accountId),
+            inArray(emailMessages.folderId, folderIds),
+            eq(emailMessages.isRead, false),
+            eq(emailMessages.externalState, 'present'),
+          ),
+        )
+        .groupBy(emailMessages.folderId)
+    : [];
+  const unreadByFolder = new Map(unreadRows.map((row) => [row.folderId, Number(row.unreadCount) || 0]));
   return {
     mailboxes: mailboxes.map(serializeEmailMailbox),
-    folders: folders.map(serializeEmailFolder),
+    folders: folders.map((folder) => serializeEmailFolder(folder, { unreadCount: unreadByFolder.get(folder.id) ?? 0 })),
   };
 }
 
@@ -1614,6 +1637,62 @@ export async function markEmailMailboxAsRead(args: {
   return { updated: updated.length };
 }
 
+export async function markEmailFolderAsRead(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  folderId: string;
+}) {
+  const [folder] = await db
+    .select()
+    .from(emailFolders)
+    .where(and(eq(emailFolders.accountId, args.accountId), eq(emailFolders.id, args.folderId)))
+    .limit(1);
+  if (!folder) throw new Error('Folder not found.');
+
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: folder.mailboxId,
+    folderId: folder.id,
+  });
+  if (!permission.canRead) {
+    throw new Error('You do not have permission to read this folder.');
+  }
+
+  const updated = await db
+    .update(emailMessages)
+    .set({ isRead: true, updatedAt: new Date() })
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        eq(emailMessages.folderId, folder.id),
+        eq(emailMessages.isRead, false),
+      ),
+    )
+    .returning({ id: emailMessages.id });
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: folder.mailboxId,
+    folderId: folder.id,
+    eventType: 'folder.marked_read',
+    metadata: { folder_name: folder.name, message_count: updated.length },
+  });
+
+  if (updated.length > 0) {
+    const folderRows = await db
+      .select()
+      .from(emailMessages)
+      .where(inArray(emailMessages.id, updated.map((row) => row.id)));
+    await Promise.all(folderRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'folder_marked_read')));
+  }
+
+  return { updated: updated.length };
+}
+
 export async function listEmailAttachmentsForUser(args: {
   accountId: string;
   userId: string;
@@ -1993,6 +2072,89 @@ async function ensureImapFolder(accountId: string, mailboxId: string, path: stri
   return created;
 }
 
+async function applyMatchingRulesToImportedMessage(args: {
+  accountId: string;
+  userId?: string | null;
+  mailboxId: string;
+  message: typeof emailMessages.$inferSelect;
+  candidate: RuleCandidate;
+  rules: EmailRuleLike[];
+}) {
+  const matched = args.rules.filter((rule) => matchEmailRule(rule, args.candidate));
+  if (matched.length === 0) return args.message;
+
+  const now = new Date();
+  let nextFolderId = args.message.folderId;
+  let nextIsRead = args.message.isRead;
+  let nextIsStarred = args.message.isStarred;
+  const auditRows: Array<typeof emailAuditEvents.$inferInsert> = [];
+
+  for (const rule of matched) {
+    const action = clean(rule.action) || 'move_to';
+    if ((action === 'move_to' || action === 'copy_to') && rule.targetFolderId) {
+      nextFolderId = rule.targetFolderId;
+    } else if (action === 'mark_read') {
+      nextIsRead = true;
+    } else if (action === 'mark_unread') {
+      nextIsRead = false;
+    } else if (action === 'star') {
+      nextIsStarred = true;
+    } else if (action === 'label' && rule.actionValue) {
+      const [label] = await db
+        .select({ id: emailLabels.id })
+        .from(emailLabels)
+        .where(and(eq(emailLabels.accountId, args.accountId), eq(emailLabels.id, rule.actionValue)))
+        .limit(1);
+      if (label) {
+        await db
+          .insert(emailMessageLabels)
+          .values({
+            accountId: args.accountId,
+            messageId: args.message.id,
+            labelId: label.id,
+          })
+          .onConflictDoNothing();
+      }
+    }
+
+    auditRows.push({
+      accountId: args.accountId,
+      userId: args.userId ?? null,
+      mailboxId: args.mailboxId,
+      folderId: action === 'move_to' || action === 'copy_to' ? rule.targetFolderId ?? nextFolderId : nextFolderId,
+      messageId: args.message.id,
+      eventType: 'rule.applied',
+      metadata: { rule_id: rule.id, action },
+    });
+  }
+
+  if (auditRows.length > 0) {
+    await db.insert(emailAuditEvents).values(auditRows);
+  }
+
+  if (
+    nextFolderId === args.message.folderId &&
+    nextIsRead === args.message.isRead &&
+    nextIsStarred === args.message.isStarred
+  ) {
+    return args.message;
+  }
+
+  const [updated] = await db
+    .update(emailMessages)
+    .set({
+      folderId: nextFolderId,
+      folderSource: nextFolderId !== args.message.folderId ? 'local' : args.message.folderSource,
+      isRead: nextIsRead,
+      isStarred: nextIsStarred,
+      updatedAt: now,
+    })
+    .where(and(eq(emailMessages.accountId, args.accountId), eq(emailMessages.id, args.message.id)))
+    .returning();
+
+  return updated ?? args.message;
+}
+
 export async function importEmailAccount(args: {
   accountId: string;
   emailAccountId: string;
@@ -2066,8 +2228,7 @@ export async function importEmailAccount(args: {
           const from = firstAddress(parsed.from);
           const toAddresses = addressList(parsed.to);
           const ccAddresses = addressList(parsed.cc);
-          const externalFolder = await ensureImapFolder(args.accountId, mailbox.id, remoteFolder.path, remoteFolder.specialUse);
-          const targetFolderId = resolveRuleTargetFolder(rules, {
+          const candidate = {
             fromAddress: from.address,
             toAddresses,
             ccAddresses,
@@ -2076,7 +2237,9 @@ export async function importEmailAccount(args: {
             sizeBytes: msg.size ?? source.byteLength,
             hasAttachment: parsed.attachments.length > 0,
             date: parsed.date ?? msg.internalDate,
-          }) ?? externalFolder.id;
+          };
+          const externalFolder = await ensureImapFolder(args.accountId, mailbox.id, remoteFolder.path, remoteFolder.specialUse);
+          const targetFolderId = resolveRuleTargetFolder(rules, candidate) ?? externalFolder.id;
           const flags = [...(msg.flags ?? [])];
           const existing = parsed.messageId ? byMessageId.get(parsed.messageId) : undefined;
           let row: typeof emailMessages.$inferSelect | undefined;
@@ -2131,15 +2294,24 @@ export async function importEmailAccount(args: {
             if (!created) { skipped++; continue; }
             row = created;
             if (created.messageId) seenMessageIds.add(created.messageId);
-            byMessageId.set(created.messageId ?? created.id, created);
             for (const attachment of parsed.attachments) {
               const fileName = attachment.filename || 'attachment';
               const storageKey = `email/${args.accountId}/${created.id}/${crypto.randomUUID()}-${fileName}`;
               await putObject({ key: storageKey, body: attachment.content, contentType: attachment.contentType });
               await db.insert(emailAttachments).values({ accountId: args.accountId, messageId: created.id, fileName, contentType: attachment.contentType, size: attachment.size, storageKey, contentId: attachment.contentId ?? null });
             }
-            await db.insert(emailAuditEvents).values({ accountId: args.accountId, userId: args.userId ?? null, mailboxId: mailbox.id, folderId: targetFolderId, messageId: created.id, eventType: 'message.imported', metadata: { imap_uid: msg.uid, copied_from: remoteFolder.path } });
-            await publishEmailMessageEvent('email.message.created', created, 'imported');
+            const createdWithRules = await applyMatchingRulesToImportedMessage({
+              accountId: args.accountId,
+              userId: args.userId ?? null,
+              mailboxId: mailbox.id,
+              message: created,
+              candidate,
+              rules,
+            });
+            row = createdWithRules;
+            byMessageId.set(createdWithRules.messageId ?? createdWithRules.id, createdWithRules);
+            await db.insert(emailAuditEvents).values({ accountId: args.accountId, userId: args.userId ?? null, mailboxId: mailbox.id, folderId: createdWithRules.folderId, messageId: createdWithRules.id, eventType: 'message.imported', metadata: { imap_uid: msg.uid, copied_from: remoteFolder.path } });
+            await publishEmailMessageEvent('email.message.created', createdWithRules, 'imported');
             imported++;
           }
           void row;
