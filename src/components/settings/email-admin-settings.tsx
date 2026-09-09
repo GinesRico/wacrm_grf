@@ -1,16 +1,36 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Edit2, FolderPlus, Loader2, Plus, Save, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ComponentType } from 'react';
+import {
+  Archive,
+  Edit2,
+  Folder,
+  FolderPlus,
+  Inbox,
+  Loader2,
+  Mail,
+  Plus,
+  RefreshCw,
+  Save,
+  Send,
+  ShieldCheck,
+  Trash2,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { SettingsPanelHead } from './settings-panel-head';
 import { cn } from '@/lib/utils';
+import { SettingsPanelHead } from './settings-panel-head';
 
 interface EmailAccountRow {
   id: string;
@@ -29,43 +49,143 @@ interface EmailAccountRow {
   last_synced_at: string | null;
 }
 
+interface MailboxRow {
+  id: string;
+  email_account_id: string;
+  owner_user_id: string | null;
+  address: string;
+  display_name: string | null;
+  kind: 'personal' | 'shared';
+  can_send: boolean;
+}
+
+interface FolderRow {
+  id: string;
+  mailbox_id: string | null;
+  name: string;
+  slug: string;
+  kind: 'inbox' | 'sent' | 'archive' | 'trash' | 'custom' | 'public';
+}
+
+interface PermissionRow {
+  id: string;
+  department_id?: string;
+  user_id?: string;
+  mailbox_id: string | null;
+  folder_id: string | null;
+  can_read: boolean;
+  can_move: boolean;
+  can_classify: boolean;
+  can_send: boolean;
+}
+
+interface UserRow {
+  user_id: string;
+  full_name: string | null;
+  email: string | null;
+  role: string;
+}
+
+interface RuleRow {
+  id: string;
+  mailbox_id: string | null;
+  target_folder_id: string;
+  name: string;
+  value: string;
+  field: string;
+  operator: string;
+  enabled: boolean;
+}
+
+interface AuditRow {
+  id: string;
+  user_id: string | null;
+  mailbox_id: string | null;
+  folder_id: string | null;
+  event_type: string;
+  created_at: string;
+  metadata: unknown;
+}
+
 interface AdminState {
   accounts: EmailAccountRow[];
-  mailboxes: Array<{ id: string; email_account_id: string; address: string; display_name: string | null; kind: string }>;
-  folders: Array<{ id: string; mailbox_id: string; name: string; kind: string }>;
-  permissions: Array<{ id: string; department_id: string; mailbox_id: string; folder_id: string | null; can_read: boolean; can_move: boolean; can_classify: boolean; can_send: boolean }>;
+  mailboxes: MailboxRow[];
+  folders: FolderRow[];
+  permissions: PermissionRow[];
+  user_permissions: PermissionRow[];
   departments: Array<{ id: string; name: string; color: string }>;
-  rules: Array<{
-    id: string;
-    mailbox_id: string;
-    target_folder_id: string;
-    name: string;
-    value: string;
-    field: string;
-    operator: string;
-    enabled: boolean;
-  }>;
-  audit_events: Array<{ id: string; event_type: string; created_at: string; metadata: unknown }>;
+  users: UserRow[];
+  rules: RuleRow[];
+  audit_events: AuditRow[];
 }
+
+type SectionId = 'mailboxes' | 'folders' | 'permissions' | 'rules' | 'audit';
 
 const emptyState: AdminState = {
   accounts: [],
   mailboxes: [],
   folders: [],
   permissions: [],
+  user_permissions: [],
   departments: [],
+  users: [],
   rules: [],
   audit_events: [],
+};
+
+const sections: Array<{ id: SectionId; label: string }> = [
+  { id: 'mailboxes', label: 'Buzones' },
+  { id: 'folders', label: 'Carpetas' },
+  { id: 'permissions', label: 'Permisos' },
+  { id: 'rules', label: 'Reglas' },
+  { id: 'audit', label: 'Auditoria' },
+];
+
+const defaultMailboxForm = {
+  label: '',
+  email_address: '',
+  imap_host: 'imap.serviciodecorreo.es',
+  imap_port: '993',
+  imap_secure: true,
+  imap_user: '',
+  imap_password: '',
+  smtp_host: 'smtp.serviciodecorreo.es',
+  smtp_port: '465',
+  smtp_secure: true,
+  smtp_user: '',
+  smtp_password: '',
+  sync_mailbox: 'INBOX',
+  mailbox_kind: 'shared',
+  owner_user_id: '',
 };
 
 export function EmailAdminSettings() {
   const [state, setState] = useState<AdminState>(emptyState);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<'mailboxes' | 'folders' | 'permissions' | 'rules'>('mailboxes');
+  const [activeSection, setActiveSection] = useState<SectionId>('mailboxes');
   const [editorOpen, setEditorOpen] = useState(false);
-  const [savingRuleId, setSavingRuleId] = useState('');
+  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [mailboxForm, setMailboxForm] = useState(defaultMailboxForm);
+  const [selectedMailboxId, setSelectedMailboxId] = useState('');
+  const [newInternalFolder, setNewInternalFolder] = useState('');
+  const [newPublicFolder, setNewPublicFolder] = useState('');
+  const [permissionDraft, setPermissionDraft] = useState({
+    scope: 'user' as 'user' | 'department',
+    user_id: '',
+    department_id: '',
+    target_type: 'mailbox' as 'mailbox' | 'folder',
+    mailbox_id: '',
+    folder_id: '',
+    can_read: true,
+    can_move: false,
+    can_classify: false,
+    can_send: false,
+  });
+  const [rulesSource, setRulesSource] = useState('');
   const [editingRuleId, setEditingRuleId] = useState('');
+  const [savingRuleId, setSavingRuleId] = useState('');
+  const [ruleMailboxFilter, setRuleMailboxFilter] = useState('');
   const [ruleEdits, setRuleEdits] = useState<Record<string, {
     name: string;
     field: string;
@@ -74,35 +194,37 @@ export function EmailAdminSettings() {
     target_folder_id: string;
     enabled: boolean;
   }>>({});
-  const [rulesSource, setRulesSource] = useState('');
-  const [selectedAccountId, setSelectedAccountId] = useState('');
-  const [form, setForm] = useState({
-    label: '',
-    email_address: '',
-    imap_host: 'imap.serviciodecorreo.es',
-    imap_port: '993',
-    imap_secure: true,
-    imap_user: '',
-    imap_password: '',
-    smtp_host: 'smtp.serviciodecorreo.es',
-    smtp_port: '465',
-    smtp_secure: true,
-    smtp_user: '',
-    smtp_password: '',
-    sync_mailbox: 'INBOX',
-    mailbox_kind: 'shared',
-  });
 
-  const firstMailboxId = state.mailboxes[0]?.id ?? '';
-  const firstDepartmentId = state.departments[0]?.id ?? '';
   const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId) ?? null;
-  const mailboxName = (mailboxId: string) => {
+  const selectedMailbox = state.mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? state.mailboxes[0] ?? null;
+  const accountsById = useMemo(() => new Map(state.accounts.map((account) => [account.id, account])), [state.accounts]);
+  const publicFolders = state.folders.filter((folder) => folder.kind === 'public' || folder.mailbox_id === null);
+  const internalFolders = state.folders.filter((folder) => folder.mailbox_id === selectedMailbox?.id);
+  const systemFolderCount = state.folders.filter((folder) => folder.kind !== 'custom' && folder.kind !== 'public').length;
+  const permissionFolderTargets = state.folders.filter((folder) => folder.kind === 'public' || folder.kind === 'custom');
+  const visibleRules = ruleMailboxFilter ? state.rules.filter((rule) => rule.mailbox_id === ruleMailboxFilter) : state.rules;
+
+  const mailboxName = useCallback((mailboxId: string | null) => {
+    if (!mailboxId) return 'Carpetas publicas';
     const mailbox = state.mailboxes.find((item) => item.id === mailboxId);
     return mailbox?.display_name || mailbox?.address || 'Buzon';
-  };
-  const folderName = (folderId: string) => state.folders.find((item) => item.id === folderId)?.name ?? 'Carpeta';
-  const foldersForMailbox = (mailboxId: string) => state.folders.filter((folder) => folder.mailbox_id === mailboxId);
-  const ruleDraft = (rule: AdminState['rules'][number]) =>
+  }, [state.mailboxes]);
+
+  const folderName = useCallback((folderId: string | null) => {
+    if (!folderId) return 'Todo el buzon';
+    return state.folders.find((item) => item.id === folderId)?.name ?? 'Carpeta';
+  }, [state.folders]);
+
+  const userName = useCallback((userId: string | undefined) => {
+    const user = state.users.find((item) => item.user_id === userId);
+    return user?.full_name || user?.email || userId || 'Usuario';
+  }, [state.users]);
+
+  const departmentName = useCallback((departmentId: string | undefined) => {
+    return state.departments.find((item) => item.id === departmentId)?.name || departmentId || 'Grupo';
+  }, [state.departments]);
+
+  const ruleDraft = (rule: RuleRow) =>
     ruleEdits[rule.id] ?? {
       name: rule.name,
       field: rule.field,
@@ -118,12 +240,21 @@ export function EmailAdminSettings() {
       const res = await fetch('/api/email/admin', { cache: 'no-store' });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo cargar Email');
-      setState({ ...emptyState, ...payload });
-      setSelectedAccountId((current) =>
-        current && payload.accounts?.some((account: EmailAccountRow) => account.id === current)
+      const nextState: AdminState = { ...emptyState, ...payload };
+      const nextPublicFolders = nextState.folders.filter((folder) => folder.kind === 'public' || folder.mailbox_id === null);
+      setState(nextState);
+      setSelectedMailboxId((current) =>
+        current && nextState.mailboxes.some((mailbox) => mailbox.id === current)
           ? current
-          : payload.accounts?.[0]?.id ?? '',
+          : nextState.mailboxes[0]?.id ?? '',
       );
+      setPermissionDraft((current) => ({
+        ...current,
+        user_id: current.user_id || nextState.users[0]?.user_id || '',
+        department_id: current.department_id || nextState.departments[0]?.id || '',
+        mailbox_id: current.mailbox_id || nextState.mailboxes[0]?.id || '',
+        folder_id: current.folder_id || nextPublicFolders[0]?.id || '',
+      }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar Email');
     } finally {
@@ -154,33 +285,16 @@ export function EmailAdminSettings() {
     }
   }
 
-  async function createAccount() {
-    await post(
-      {
-        action: 'create_account',
-        ...form,
-        imap_port: Number(form.imap_port),
-        smtp_port: Number(form.smtp_port),
-      },
-      'Buzon conectado',
-    );
-    setForm((current) => ({
-      ...current,
-      label: '',
-      email_address: '',
-      imap_user: '',
-      imap_password: '',
-      smtp_user: '',
-      smtp_password: '',
-    }));
-    setEditorOpen(false);
+  function openNewMailbox() {
+    setSelectedAccountId('');
+    setMailboxForm(defaultMailboxForm);
+    setEditorOpen(true);
   }
 
-  function loadAccountIntoForm(account: EmailAccountRow) {
+  function openMailbox(account: EmailAccountRow) {
     const mailbox = state.mailboxes.find((item) => item.email_account_id === account.id);
     setSelectedAccountId(account.id);
-    setEditorOpen(true);
-    setForm({
+    setMailboxForm({
       label: account.label,
       email_address: account.email_address,
       imap_host: account.imap_host,
@@ -194,76 +308,83 @@ export function EmailAdminSettings() {
       smtp_user: '',
       smtp_password: '',
       sync_mailbox: account.sync_mailbox,
-      mailbox_kind: mailbox?.kind === 'personal' ? 'personal' : 'shared',
+      mailbox_kind: mailbox?.kind ?? 'shared',
+      owner_user_id: mailbox?.owner_user_id ?? '',
     });
-  }
-
-  async function saveSelectedAccount() {
-    if (!selectedAccount) return;
-    await post(
-      {
-        action: 'update_account',
-        email_account_id: selectedAccount.id,
-        ...form,
-        imap_port: Number(form.imap_port),
-        smtp_port: Number(form.smtp_port),
-        enabled: selectedAccount.enabled,
-      },
-      'Buzon actualizado',
-    );
-  }
-
-  function newAccountForm() {
-    setSelectedAccountId('');
     setEditorOpen(true);
-    setForm({
-      label: '',
-      email_address: '',
-      imap_host: 'imap.serviciodecorreo.es',
-      imap_port: '993',
-      imap_secure: true,
-      imap_user: '',
-      imap_password: '',
-      smtp_host: 'smtp.serviciodecorreo.es',
-      smtp_port: '465',
-      smtp_secure: true,
-      smtp_user: '',
-      smtp_password: '',
-      sync_mailbox: 'INBOX',
-      mailbox_kind: 'shared',
-    });
   }
 
-  async function grantPermission() {
-    if (!firstMailboxId || !firstDepartmentId) return;
+  async function saveMailbox() {
+    const body = {
+      ...mailboxForm,
+      imap_port: Number(mailboxForm.imap_port),
+      smtp_port: Number(mailboxForm.smtp_port),
+      owner_user_id: mailboxForm.mailbox_kind === 'personal' ? mailboxForm.owner_user_id || null : null,
+    };
+    if (selectedAccount) {
+      await post({ action: 'update_account', email_account_id: selectedAccount.id, enabled: selectedAccount.enabled, ...body }, 'Buzon actualizado');
+    } else {
+      await post({ action: 'create_account', ...body }, 'Buzon creado');
+    }
+    setEditorOpen(false);
+  }
+
+  async function deleteMailbox(account: EmailAccountRow) {
+    if (!window.confirm(`Borrar el buzon ${account.email_address}? Tambien se eliminaran sus correos importados.`)) return;
+    await post({ action: 'delete_account', email_account_id: account.id }, 'Buzon borrado');
+  }
+
+  async function createInternalFolder() {
+    if (!selectedMailbox || !newInternalFolder.trim()) return;
+    await post({ action: 'create_folder', mailbox_id: selectedMailbox.id, name: newInternalFolder.trim() }, 'Carpeta interna creada');
+    setNewInternalFolder('');
+  }
+
+  async function createPublicFolder() {
+    if (!newPublicFolder.trim()) return;
+    await post({ action: 'create_public_folder', name: newPublicFolder.trim() }, 'Carpeta publica creada');
+    setNewPublicFolder('');
+  }
+
+  async function deleteFolder(folder: FolderRow) {
+    if (!window.confirm(`Borrar la carpeta ${folder.name}? Los correos volveran a Entrada.`)) return;
+    await post({ action: 'delete_folder', folder_id: folder.id }, 'Carpeta borrada');
+  }
+
+  async function savePermission() {
+    const isFolderTarget = permissionDraft.target_type === 'folder';
+    const folder = isFolderTarget ? state.folders.find((item) => item.id === permissionDraft.folder_id) : null;
+    const mailboxId = isFolderTarget ? folder?.mailbox_id ?? null : permissionDraft.mailbox_id;
+    const folderId = isFolderTarget ? permissionDraft.folder_id : null;
     await post(
       {
-        action: 'grant_permission',
-        mailbox_id: firstMailboxId,
-        department_id: firstDepartmentId,
-        can_read: true,
-        can_move: true,
-        can_classify: true,
-        can_send: true,
+        action: permissionDraft.scope === 'user' ? 'grant_user_permission' : 'grant_permission',
+        target_user_id: permissionDraft.scope === 'user' ? permissionDraft.user_id : undefined,
+        department_id: permissionDraft.scope === 'department' ? permissionDraft.department_id : undefined,
+        mailbox_id: mailboxId,
+        folder_id: folderId,
+        can_read: permissionDraft.can_read,
+        can_move: permissionDraft.can_move,
+        can_classify: permissionDraft.can_classify,
+        can_send: permissionDraft.can_send,
       },
-      'Permiso concedido',
+      'Permiso guardado',
     );
   }
 
-  async function createFolder() {
-    const name = window.prompt('Nombre de carpeta interna');
-    if (!name || !firstMailboxId) return;
-    await post({ action: 'create_folder', mailbox_id: firstMailboxId, name }, 'Carpeta creada');
+  async function deletePermission(permission: PermissionRow, scope: 'user' | 'department') {
+    await post({ action: 'delete_permission', permission_id: permission.id, scope }, 'Permiso revocado');
   }
 
   async function importRules() {
-    if (!firstMailboxId || !rulesSource.trim()) return;
+    const mailboxId = ruleMailboxFilter || selectedMailboxId;
+    if (!mailboxId || !rulesSource.trim()) return;
     setSaving(true);
     try {
       const res = await fetch('/api/email/rules/import-thunderbird', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mailbox_id: firstMailboxId, source: rulesSource }),
+        body: JSON.stringify({ mailbox_id: mailboxId, source: rulesSource }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudieron importar reglas');
@@ -277,7 +398,7 @@ export function EmailAdminSettings() {
     }
   }
 
-  function startEditRule(rule: AdminState['rules'][number]) {
+  function startEditRule(rule: RuleRow) {
     setEditingRuleId(rule.id);
     setRuleEdits((current) => ({
       ...current,
@@ -295,16 +416,10 @@ export function EmailAdminSettings() {
   function updateRuleDraft(ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) {
     const rule = state.rules.find((item) => item.id === ruleId);
     if (!rule) return;
-    setRuleEdits((current) => ({
-      ...current,
-      [ruleId]: {
-        ...ruleDraft(rule),
-        ...patch,
-      },
-    }));
+    setRuleEdits((current) => ({ ...current, [ruleId]: { ...ruleDraft(rule), ...patch } }));
   }
 
-  async function saveRule(rule: AdminState['rules'][number]) {
+  async function saveRule(rule: RuleRow) {
     const draft = ruleDraft(rule);
     if (!draft.name.trim() || !draft.value.trim() || !draft.target_folder_id) return;
     setSavingRuleId(rule.id);
@@ -343,9 +458,7 @@ export function EmailAdminSettings() {
     if (!window.confirm('Borrar esta regla?')) return;
     setSavingRuleId(ruleId);
     try {
-      const res = await fetch(`/api/email/rules?rule_id=${encodeURIComponent(ruleId)}`, {
-        method: 'DELETE',
-      });
+      const res = await fetch(`/api/email/rules?rule_id=${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo borrar la regla');
       toast.success('Regla borrada');
@@ -367,309 +480,308 @@ export function EmailAdminSettings() {
   }
 
   return (
-    <section className="animate-in fade-in-50 space-y-6 duration-200">
+    <section className="animate-in fade-in-50 space-y-4 duration-200">
       <SettingsPanelHead
         title="Email compartido"
-        description="Configura buzones IMAP/SMTP, carpetas internas, permisos por departamento y reglas Thunderbird."
+        description="Administra buzones, carpetas publicas, permisos, reglas e historial del webmail."
       />
 
       <Card className="overflow-hidden">
         <CardContent className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold">Administracion de correo</p>
-              <p className="text-xs text-muted-foreground">Gestiona accesos y organizacion desde un solo lugar.</p>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Badge variant="outline">{state.mailboxes.length} buzones</Badge>
+              <Badge variant="outline">{publicFolders.length} carpetas publicas</Badge>
+              <Badge variant="outline">{state.permissions.length + state.user_permissions.length} permisos</Badge>
+              <Badge variant="outline">{state.rules.filter((rule) => rule.enabled).length} reglas activas</Badge>
             </div>
-            <Button size="sm" onClick={newAccountForm}>
+            <Button size="sm" onClick={openNewMailbox}>
               <Plus className="size-4" />
               Nuevo buzon
             </Button>
           </div>
-          <nav className="flex gap-1 overflow-x-auto px-2 pt-2" aria-label="Secciones de correo">
-            {[
-              ['mailboxes', 'Buzones'],
-              ['folders', 'Carpetas publicas'],
-              ['permissions', 'Permisos'],
-              ['rules', 'Reglas'],
-            ].map(([id, label]) => (
+          <nav className="flex gap-1 overflow-x-auto px-2 pt-2" aria-label="Secciones de Email">
+            {sections.map((section) => (
               <button
-                key={id}
+                key={section.id}
                 type="button"
-                onClick={() => setActiveSection(id as typeof activeSection)}
+                onClick={() => setActiveSection(section.id)}
                 className={cn(
                   'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                  activeSection === id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground',
+                  activeSection === section.id
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
                 )}
               >
-                {label}
+                {section.label}
               </button>
             ))}
           </nav>
-          <div className="grid gap-px border-t border-border bg-border sm:grid-cols-3">
-            <SummaryMetric label="Buzones" value={state.mailboxes.length} />
-            <SummaryMetric label="Carpetas publicas" value={state.folders.filter((folder) => folder.kind === 'custom').length} />
-            <SummaryMetric label="Reglas activas" value={state.rules.filter((rule) => rule.enabled).length} />
-          </div>
         </CardContent>
       </Card>
+
+      {activeSection === 'mailboxes' && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <CardTitle className="text-base">Buzones IMAP/SMTP</CardTitle>
+            <Button size="sm" variant="outline" onClick={openNewMailbox}>
+              <Plus className="size-4" />
+              Crear
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {state.mailboxes.length === 0 ? (
+              <EmptyLine icon={Mail} text="Aun no hay buzones configurados." />
+            ) : (
+              state.mailboxes.map((mailbox) => {
+                const account = accountsById.get(mailbox.email_account_id);
+                return (
+                  <div key={mailbox.id} className="grid gap-3 rounded-md border border-border p-3 text-sm lg:grid-cols-[minmax(220px,1fr)_minmax(180px,260px)_auto] lg:items-center">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Mail className="size-4 text-primary" />
+                        <span className="truncate font-medium">{mailbox.display_name || mailbox.address}</span>
+                        <Badge variant={mailbox.kind === 'personal' ? 'secondary' : 'outline'}>{mailbox.kind === 'personal' ? 'Personal' : 'Compartido'}</Badge>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">{mailbox.address}</p>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      <div>{account?.imap_host}:{account?.imap_port} · {account?.status}</div>
+                      <div>{account?.last_synced_at ? new Date(account.last_synced_at).toLocaleString() : 'Sin sincronizar'}</div>
+                      {account?.last_error ? <div className="text-destructive">{account.last_error}</div> : null}
+                    </div>
+                    <div className="flex justify-end gap-1">
+                      {account ? (
+                        <>
+                          <Button size="icon-sm" variant="ghost" onClick={() => openMailbox(account)} title="Editar buzon">
+                            <Edit2 className="size-4" />
+                          </Button>
+                          <Button size="icon-sm" variant="ghost" onClick={() => deleteMailbox(account)} title="Borrar buzon">
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {activeSection === 'folders' && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Carpetas internas por buzon</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <SelectLabel label="Buzon" value={selectedMailboxId} onChange={setSelectedMailboxId}>
+                {state.mailboxes.map((mailbox) => (
+                  <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
+                ))}
+              </SelectLabel>
+              <div className="flex gap-2">
+                <Input value={newInternalFolder} onChange={(event) => setNewInternalFolder(event.target.value)} placeholder="Nueva carpeta interna" />
+                <Button onClick={createInternalFolder} disabled={!selectedMailbox || !newInternalFolder.trim() || saving}>
+                  <FolderPlus className="size-4" />
+                  Crear
+                </Button>
+              </div>
+              <FolderList folders={internalFolders} onDelete={deleteFolder} />
+              <p className="text-xs text-muted-foreground">{systemFolderCount} carpetas de sistema protegidas.</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Carpetas publicas globales</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex gap-2">
+                <Input value={newPublicFolder} onChange={(event) => setNewPublicFolder(event.target.value)} placeholder="Nueva carpeta publica" />
+                <Button onClick={createPublicFolder} disabled={!newPublicFolder.trim() || saving}>
+                  <FolderPlus className="size-4" />
+                  Crear
+                </Button>
+              </div>
+              <FolderList folders={publicFolders} onDelete={deleteFolder} />
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {activeSection === 'permissions' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Permisos de acceso</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 rounded-md border border-border p-3 lg:grid-cols-4">
+              <SelectLabel label="Asignar a" value={permissionDraft.scope} onChange={(value) => setPermissionDraft({ ...permissionDraft, scope: value as 'user' | 'department' })}>
+                <option value="user">Usuario</option>
+                <option value="department">Grupo/departamento</option>
+              </SelectLabel>
+              {permissionDraft.scope === 'user' ? (
+                <SelectLabel label="Usuario" value={permissionDraft.user_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, user_id: value })}>
+                  {state.users.map((user) => (
+                    <option key={user.user_id} value={user.user_id}>{user.full_name || user.email || user.user_id}</option>
+                  ))}
+                </SelectLabel>
+              ) : (
+                <SelectLabel label="Grupo" value={permissionDraft.department_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, department_id: value })}>
+                  {state.departments.map((department) => (
+                    <option key={department.id} value={department.id}>{department.name}</option>
+                  ))}
+                </SelectLabel>
+              )}
+              <SelectLabel label="Destino" value={permissionDraft.target_type} onChange={(value) => setPermissionDraft({ ...permissionDraft, target_type: value as 'mailbox' | 'folder' })}>
+                <option value="mailbox">Buzon completo</option>
+                <option value="folder">Carpeta concreta</option>
+              </SelectLabel>
+              {permissionDraft.target_type === 'mailbox' ? (
+                <SelectLabel label="Buzon" value={permissionDraft.mailbox_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, mailbox_id: value })}>
+                  {state.mailboxes.map((mailbox) => (
+                    <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
+                  ))}
+                </SelectLabel>
+              ) : (
+                <SelectLabel label="Carpeta" value={permissionDraft.folder_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, folder_id: value })}>
+                  {permissionFolderTargets.map((folder) => (
+                    <option key={folder.id} value={folder.id}>{folder.name} · {mailboxName(folder.mailbox_id)}</option>
+                  ))}
+                </SelectLabel>
+              )}
+              <div className="flex flex-wrap items-center gap-4 lg:col-span-3">
+                <PermissionSwitch label="Leer" checked={permissionDraft.can_read} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_read: value })} />
+                <PermissionSwitch label="Mover" checked={permissionDraft.can_move} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_move: value })} />
+                <PermissionSwitch label="Clasificar" checked={permissionDraft.can_classify} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_classify: value })} />
+                <PermissionSwitch label="Enviar" checked={permissionDraft.can_send} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_send: value })} />
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={savePermission} disabled={saving}>
+                  <ShieldCheck className="size-4" />
+                  Guardar permiso
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <PermissionList title="Usuarios" rows={state.user_permissions} owner={(row) => userName(row.user_id)} mailboxName={mailboxName} folderName={folderName} onDelete={(row) => deletePermission(row, 'user')} />
+              <PermissionList title="Grupos" rows={state.permissions} owner={(row) => departmentName(row.department_id)} mailboxName={mailboxName} folderName={folderName} onDelete={(row) => deletePermission(row, 'department')} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeSection === 'rules' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Reglas Thunderbird</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <SelectLabel label="Buzon" value={ruleMailboxFilter} onChange={setRuleMailboxFilter}>
+              <option value="">Todos los buzones</option>
+              {state.mailboxes.map((mailbox) => (
+                <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
+              ))}
+            </SelectLabel>
+            <Textarea value={rulesSource} onChange={(event) => setRulesSource(event.target.value)} className="min-h-32 font-mono text-xs" placeholder="Pega aqui el contenido de msgFilterRules.dat" />
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={importRules} disabled={!(ruleMailboxFilter || selectedMailboxId) || !rulesSource.trim() || saving}>
+                <Upload className="size-4" />
+                Importar reglas
+              </Button>
+            </div>
+            <RulesTable
+              rules={visibleRules}
+              folders={state.folders}
+              mailboxName={mailboxName}
+              folderName={folderName}
+              editingRuleId={editingRuleId}
+              savingRuleId={savingRuleId}
+              ruleDraft={ruleDraft}
+              updateRuleDraft={updateRuleDraft}
+              startEditRule={startEditRule}
+              saveRule={saveRule}
+              deleteRule={deleteRule}
+              cancelEdit={(ruleId) => {
+                setEditingRuleId('');
+                setRuleEdits((current) => {
+                  const next = { ...current };
+                  delete next[ruleId];
+                  return next;
+                });
+              }}
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {activeSection === 'audit' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Auditoria reciente</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {state.audit_events.length === 0 ? (
+              <EmptyLine icon={Archive} text="Aun no hay eventos de auditoria." />
+            ) : (
+              state.audit_events.map((event) => (
+                <div key={event.id} className="grid gap-2 rounded-md border border-border p-3 text-sm lg:grid-cols-[180px_1fr_180px]">
+                  <span className="font-medium">{event.event_type}</span>
+                  <span className="truncate text-muted-foreground">{mailboxName(event.mailbox_id)} · {folderName(event.folder_id)}</span>
+                  <span className="text-xs text-muted-foreground lg:text-right">{new Date(event.created_at).toLocaleString()}</span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {editorOpen ? <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setEditorOpen(false)} /> : null}
       <Card className={cn('fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col rounded-none border-y-0 border-r-0 shadow-2xl', !editorOpen && 'hidden')}>
         <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">
-              {selectedAccount ? 'Modificar buzon IMAP/SMTP' : 'Nuevo buzon IMAP/SMTP'}
-            </CardTitle>
-            {selectedAccount ? (
-              <Button variant="ghost" size="icon-sm" onClick={() => setEditorOpen(false)} title="Cerrar" aria-label="Cerrar">
-                <X className="size-4" />
-              </Button>
-            ) : null}
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-base">{selectedAccount ? 'Modificar buzon' : 'Nuevo buzon'}</CardTitle>
+            <Button variant="ghost" size="icon-sm" onClick={() => setEditorOpen(false)} title="Cerrar">
+              <X className="size-4" />
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="min-h-0 flex-1 overflow-y-auto">
           <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="Etiqueta" value={form.label} onChange={(value) => setForm({ ...form, label: value })} />
-          <Field label="Direccion" value={form.email_address} onChange={(value) => setForm({ ...form, email_address: value })} />
-          <Field label="IMAP host" value={form.imap_host} onChange={(value) => setForm({ ...form, imap_host: value })} />
-          <Field label="IMAP puerto" value={form.imap_port} onChange={(value) => setForm({ ...form, imap_port: value })} />
-          <Field label="IMAP usuario" value={form.imap_user} onChange={(value) => setForm({ ...form, imap_user: value })} />
-          <Field label="IMAP password" type="password" value={form.imap_password} onChange={(value) => setForm({ ...form, imap_password: value })} />
-          <Field label="SMTP host" value={form.smtp_host} onChange={(value) => setForm({ ...form, smtp_host: value })} />
-          <Field label="SMTP puerto" value={form.smtp_port} onChange={(value) => setForm({ ...form, smtp_port: value })} />
-          <Field label="SMTP usuario" value={form.smtp_user} onChange={(value) => setForm({ ...form, smtp_user: value })} />
-          <Field label="SMTP password" type="password" value={form.smtp_password} onChange={(value) => setForm({ ...form, smtp_password: value })} />
-          <Field label="Carpeta IMAP a copiar" value={form.sync_mailbox} onChange={(value) => setForm({ ...form, sync_mailbox: value })} />
-          <div className="space-y-1.5">
-            <Label>Tipo</Label>
-            <select
-              value={form.mailbox_kind}
-              onChange={(event) => setForm({ ...form, mailbox_kind: event.target.value })}
-              className="h-10 w-full rounded-md border border-border bg-muted px-3 text-sm"
-            >
+            <Field label="Etiqueta" value={mailboxForm.label} onChange={(value) => setMailboxForm({ ...mailboxForm, label: value })} />
+            <Field label="Direccion" value={mailboxForm.email_address} onChange={(value) => setMailboxForm({ ...mailboxForm, email_address: value })} />
+            <Field label="IMAP host" value={mailboxForm.imap_host} onChange={(value) => setMailboxForm({ ...mailboxForm, imap_host: value })} />
+            <Field label="IMAP puerto" value={mailboxForm.imap_port} onChange={(value) => setMailboxForm({ ...mailboxForm, imap_port: value })} />
+            <Field label="IMAP usuario" value={mailboxForm.imap_user} onChange={(value) => setMailboxForm({ ...mailboxForm, imap_user: value })} />
+            <Field label="IMAP password" type="password" value={mailboxForm.imap_password} onChange={(value) => setMailboxForm({ ...mailboxForm, imap_password: value })} />
+            <Field label="SMTP host" value={mailboxForm.smtp_host} onChange={(value) => setMailboxForm({ ...mailboxForm, smtp_host: value })} />
+            <Field label="SMTP puerto" value={mailboxForm.smtp_port} onChange={(value) => setMailboxForm({ ...mailboxForm, smtp_port: value })} />
+            <Field label="SMTP usuario" value={mailboxForm.smtp_user} onChange={(value) => setMailboxForm({ ...mailboxForm, smtp_user: value })} />
+            <Field label="SMTP password" type="password" value={mailboxForm.smtp_password} onChange={(value) => setMailboxForm({ ...mailboxForm, smtp_password: value })} />
+            <Field label="Carpeta IMAP a copiar" value={mailboxForm.sync_mailbox} onChange={(value) => setMailboxForm({ ...mailboxForm, sync_mailbox: value })} />
+            <SelectLabel label="Tipo" value={mailboxForm.mailbox_kind} onChange={(value) => setMailboxForm({ ...mailboxForm, mailbox_kind: value })}>
               <option value="shared">Compartido</option>
               <option value="personal">Personal</option>
-            </select>
-          </div>
+            </SelectLabel>
+            {mailboxForm.mailbox_kind === 'personal' ? (
+              <SelectLabel label="Propietario" value={mailboxForm.owner_user_id} onChange={(value) => setMailboxForm({ ...mailboxForm, owner_user_id: value })}>
+                <option value="">Usuario actual</option>
+                {state.users.map((user) => (
+                  <option key={user.user_id} value={user.user_id}>{user.full_name || user.email || user.user_id}</option>
+                ))}
+              </SelectLabel>
+            ) : null}
             <div className="flex justify-end gap-2 lg:col-span-2">
               <Button variant="outline" onClick={() => setEditorOpen(false)}>Cancelar</Button>
-              <Button onClick={selectedAccount ? saveSelectedAccount : createAccount} disabled={saving}>
+              <Button onClick={saveMailbox} disabled={saving}>
                 {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                {selectedAccount ? 'Actualizar buzon' : 'Guardar buzon'}
+                {selectedAccount ? 'Actualizar' : 'Guardar'}
               </Button>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className={cn('grid gap-4 lg:grid-cols-2', activeSection === 'rules' && 'hidden')}>
-        <Card className={cn(activeSection === 'permissions' && 'hidden')}>
-          <CardHeader>
-            <CardTitle className="text-base">Buzones y carpetas</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {state.accounts.map((account) => (
-              <button
-                key={account.id}
-                type="button"
-                onClick={() => loadAccountIntoForm(account)}
-                className="block w-full rounded-md border border-border p-3 text-left text-sm transition-colors hover:bg-muted"
-              >
-                <div className="font-medium">{account.label} · {account.email_address}</div>
-                <div className="text-xs text-muted-foreground">
-                  {account.imap_host}:{account.imap_port} · {account.status}
-                  {account.last_synced_at ? ` · ${new Date(account.last_synced_at).toLocaleString()}` : ''}
-                </div>
-                {account.last_error && <div className="mt-1 text-xs text-destructive">{account.last_error}</div>}
-              </button>
-            ))}
-            {state.mailboxes.length === 0 && <p className="text-sm text-muted-foreground">Aun no hay buzones.</p>}
-            <Button variant="outline" onClick={createFolder} disabled={!firstMailboxId || saving}>
-              <FolderPlus className="size-4" />
-              Crear carpeta interna
-            </Button>
-            <div className="space-y-1 text-xs text-muted-foreground">
-              {state.folders.map((folder) => <div key={folder.id}>{folder.name}</div>)}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className={cn(activeSection !== 'permissions' && 'hidden')}>
-          <CardHeader>
-            <CardTitle className="text-base">Permisos por grupo</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Acceso completo rapido para el primer departamento y primer buzon. Despues se podra granular por carpeta.
-            </p>
-            <Button variant="outline" onClick={grantPermission} disabled={!firstMailboxId || !firstDepartmentId || saving}>
-              <ShieldCheck className="size-4" />
-              Conceder acceso completo
-            </Button>
-            <div className="space-y-1 text-xs text-muted-foreground">
-              {state.permissions.map((permission) => (
-                <div key={permission.id}>
-                  {permission.department_id.slice(0, 8)} · {permission.mailbox_id.slice(0, 8)} · leer {String(permission.can_read)} · enviar {String(permission.can_send)}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className={cn(activeSection !== 'rules' && 'hidden')}>
-        <CardHeader>
-          <CardTitle className="text-base">Reglas Thunderbird</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Textarea
-            value={rulesSource}
-            onChange={(event) => setRulesSource(event.target.value)}
-            className="min-h-40 font-mono text-xs"
-            placeholder="Pega aqui el contenido de msgFilterRules.dat"
-          />
-          <div className="flex justify-end">
-            <Button variant="outline" onClick={importRules} disabled={!firstMailboxId || !rulesSource.trim() || saving}>
-              <Upload className="size-4" />
-              Importar reglas
-            </Button>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold">Reglas guardadas</h3>
-              <span className="text-xs text-muted-foreground">{state.rules.length} reglas</span>
-            </div>
-            {state.rules.length === 0 ? (
-              <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
-                Aun no hay reglas importadas o creadas.
-              </p>
-            ) : (
-              <div className="overflow-x-auto rounded-md border border-border">
-                <div className="min-w-[920px]">
-                  <div className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_132px] items-center border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
-                    <span>Buzon</span>
-                    <span>Nombre</span>
-                    <span>Campo</span>
-                    <span>Operador</span>
-                    <span>Valor</span>
-                    <span>Destino</span>
-                    <span>Activa</span>
-                    <span className="text-right">Acciones</span>
-                  </div>
-                  {state.rules.map((rule) => {
-                    const editing = editingRuleId === rule.id;
-                    const draft = ruleDraft(rule);
-                    const folderOptions = foldersForMailbox(rule.mailbox_id);
-                    return (
-                      <div
-                        key={rule.id}
-                        className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_132px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0"
-                      >
-                        <span className="truncate text-muted-foreground">{mailboxName(rule.mailbox_id)}</span>
-                        {editing ? (
-                          <>
-                            <Input
-                              value={draft.name}
-                              onChange={(event) => updateRuleDraft(rule.id, { name: event.target.value })}
-                              className="h-8"
-                            />
-                            <select
-                              value={draft.field}
-                              onChange={(event) => updateRuleDraft(rule.id, { field: event.target.value })}
-                              className="h-8 rounded-md border border-border bg-card px-2"
-                            >
-                              <option value="from">De</option>
-                              <option value="domain">Dominio</option>
-                              <option value="to">Para</option>
-                              <option value="subject">Asunto</option>
-                              <option value="body">Cuerpo</option>
-                            </select>
-                            <select
-                              value={draft.operator}
-                              onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })}
-                              className="h-8 rounded-md border border-border bg-card px-2"
-                            >
-                              <option value="contains">Contiene</option>
-                              <option value="equals">Igual</option>
-                              <option value="starts_with">Empieza por</option>
-                              <option value="ends_with">Termina por</option>
-                            </select>
-                            <Input
-                              value={draft.value}
-                              onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })}
-                              className="h-8"
-                            />
-                            <select
-                              value={draft.target_folder_id}
-                              onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value })}
-                              className="h-8 rounded-md border border-border bg-card px-2"
-                            >
-                              {folderOptions.map((folder) => (
-                                <option key={folder.id} value={folder.id}>
-                                  {folder.name}
-                                </option>
-                              ))}
-                            </select>
-                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <input
-                                type="checkbox"
-                                checked={draft.enabled}
-                                onChange={(event) => updateRuleDraft(rule.id, { enabled: event.target.checked })}
-                              />
-                              Si
-                            </label>
-                            <div className="flex justify-end gap-1">
-                              <Button size="icon-sm" variant="ghost" onClick={() => saveRule(rule)} disabled={savingRuleId === rule.id}>
-                                {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                              </Button>
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  setEditingRuleId('');
-                                  setRuleEdits((current) => {
-                                    const next = { ...current };
-                                    delete next[rule.id];
-                                    return next;
-                                  });
-                                }}
-                              >
-                                <X className="size-4" />
-                              </Button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <span className="truncate font-medium">{rule.name}</span>
-                            <span className="truncate text-muted-foreground">{rule.field}</span>
-                            <span className="truncate text-muted-foreground">{rule.operator}</span>
-                            <span className="truncate">{rule.value}</span>
-                            <span className="truncate text-muted-foreground">{folderName(rule.target_folder_id)}</span>
-                            <span className={rule.enabled ? 'text-emerald-600' : 'text-muted-foreground'}>
-                              {rule.enabled ? 'Si' : 'No'}
-                            </span>
-                            <div className="flex justify-end gap-1">
-                              <Button size="icon-sm" variant="ghost" onClick={() => startEditRule(rule)} title="Editar regla">
-                                <Edit2 className="size-4" />
-                              </Button>
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                onClick={() => deleteRule(rule.id)}
-                                disabled={savingRuleId === rule.id}
-                                title="Borrar regla"
-                              >
-                                {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                              </Button>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
@@ -696,11 +808,228 @@ function Field({
   );
 }
 
-function SummaryMetric({ label, value }: { label: string; value: number }) {
+function SelectLabel({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="bg-card px-4 py-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm">
+        {children}
+      </select>
+    </div>
+  );
+}
+
+function PermissionSwitch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <Switch checked={checked} onCheckedChange={onChange} />
+      {label}
+    </label>
+  );
+}
+
+function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (folder: FolderRow) => void }) {
+  if (folders.length === 0) return <EmptyLine icon={Folder} text="No hay carpetas." />;
+  return (
+    <div className="space-y-1">
+      {folders.map((folder) => (
+        <div key={folder.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+          <div className="flex min-w-0 items-center gap-2">
+            {folder.kind === 'inbox' ? <Inbox className="size-4 text-primary" /> : folder.kind === 'sent' ? <Send className="size-4 text-muted-foreground" /> : <Folder className="size-4 text-muted-foreground" />}
+            <span className="truncate">{folder.name}</span>
+            <Badge variant="outline">{folder.kind === 'public' ? 'Publica' : folder.kind}</Badge>
+          </div>
+          {folder.kind === 'custom' || folder.kind === 'public' ? (
+            <Button size="icon-sm" variant="ghost" onClick={() => onDelete(folder)} title="Borrar carpeta">
+              <Trash2 className="size-4" />
+            </Button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PermissionList({
+  title,
+  rows,
+  owner,
+  mailboxName,
+  folderName,
+  onDelete,
+}: {
+  title: string;
+  rows: PermissionRow[];
+  owner: (row: PermissionRow) => string;
+  mailboxName: (mailboxId: string | null) => string;
+  folderName: (folderId: string | null) => string;
+  onDelete: (row: PermissionRow) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="flex items-center gap-2 text-sm font-semibold">
+        <Users className="size-4" />
+        {title}
+      </h3>
+      {rows.length === 0 ? (
+        <EmptyLine icon={ShieldCheck} text="Sin permisos configurados." />
+      ) : (
+        rows.map((row) => (
+          <div key={row.id} className="rounded-md border border-border p-3 text-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate font-medium">{owner(row)}</p>
+                <p className="truncate text-xs text-muted-foreground">{mailboxName(row.mailbox_id)} · {folderName(row.folder_id)}</p>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {row.can_read ? <Badge variant="outline">Leer</Badge> : null}
+                  {row.can_move ? <Badge variant="outline">Mover</Badge> : null}
+                  {row.can_classify ? <Badge variant="outline">Clasificar</Badge> : null}
+                  {row.can_send ? <Badge variant="outline">Enviar</Badge> : null}
+                </div>
+              </div>
+              <Button size="icon-sm" variant="ghost" onClick={() => onDelete(row)} title="Revocar permiso">
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function RulesTable({
+  rules,
+  folders,
+  mailboxName,
+  folderName,
+  editingRuleId,
+  savingRuleId,
+  ruleDraft,
+  updateRuleDraft,
+  startEditRule,
+  saveRule,
+  deleteRule,
+  cancelEdit,
+}: {
+  rules: RuleRow[];
+  folders: FolderRow[];
+  mailboxName: (mailboxId: string | null) => string;
+  folderName: (folderId: string | null) => string;
+  editingRuleId: string;
+  savingRuleId: string;
+  ruleDraft: (rule: RuleRow) => { name: string; field: string; operator: string; value: string; target_folder_id: string; enabled: boolean };
+  updateRuleDraft: (ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) => void;
+  startEditRule: (rule: RuleRow) => void;
+  saveRule: (rule: RuleRow) => void;
+  deleteRule: (ruleId: string) => void;
+  cancelEdit: (ruleId: string) => void;
+}) {
+  if (rules.length === 0) return <EmptyLine icon={RefreshCw} text="No hay reglas para mostrar." />;
+  return (
+    <div className="overflow-x-auto rounded-md border border-border">
+      <div className="min-w-[920px]">
+        <div className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+          <span>Buzon</span>
+          <span>Nombre</span>
+          <span>Campo</span>
+          <span>Operador</span>
+          <span>Valor</span>
+          <span>Destino</span>
+          <span>Activa</span>
+          <span className="text-right">Acciones</span>
+        </div>
+        {rules.map((rule) => {
+          const editing = editingRuleId === rule.id;
+          const draft = ruleDraft(rule);
+          const folderOptions = folders.filter((folder) => folder.mailbox_id === rule.mailbox_id);
+          return (
+            <div key={rule.id} className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0">
+              <span className="truncate text-muted-foreground">{mailboxName(rule.mailbox_id)}</span>
+              {editing ? (
+                <>
+                  <Input value={draft.name} onChange={(event) => updateRuleDraft(rule.id, { name: event.target.value })} className="h-8" />
+                  <select value={draft.field} onChange={(event) => updateRuleDraft(rule.id, { field: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                    <option value="from">De</option>
+                    <option value="from_domain">Dominio</option>
+                    <option value="to">Para</option>
+                    <option value="cc">Cc</option>
+                    <option value="subject">Asunto</option>
+                  </select>
+                  <select value={draft.operator} onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                    <option value="contains">Contiene</option>
+                    <option value="equals">Igual</option>
+                    <option value="starts_with">Empieza por</option>
+                    <option value="ends_with">Termina por</option>
+                  </select>
+                  <Input value={draft.value} onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })} className="h-8" />
+                  <select value={draft.target_folder_id} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                    {folderOptions.map((folder) => (
+                      <option key={folder.id} value={folder.id}>{folder.name}</option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={draft.enabled} onChange={(event) => updateRuleDraft(rule.id, { enabled: event.target.checked })} />
+                    Si
+                  </label>
+                  <div className="flex justify-end gap-1">
+                    <Button size="icon-sm" variant="ghost" onClick={() => saveRule(rule)} disabled={savingRuleId === rule.id}>
+                      {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" onClick={() => cancelEdit(rule.id)}>
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="truncate font-medium">{rule.name}</span>
+                  <span className="truncate text-muted-foreground">{rule.field}</span>
+                  <span className="truncate text-muted-foreground">{rule.operator}</span>
+                  <span className="truncate">{rule.value}</span>
+                  <span className="truncate text-muted-foreground">{folderName(rule.target_folder_id)}</span>
+                  <span className={rule.enabled ? 'text-emerald-600' : 'text-muted-foreground'}>{rule.enabled ? 'Si' : 'No'}</span>
+                  <div className="flex justify-end gap-1">
+                    <Button size="icon-sm" variant="ghost" onClick={() => startEditRule(rule)} title="Editar regla">
+                      <Edit2 className="size-4" />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" onClick={() => deleteRule(rule.id)} disabled={savingRuleId === rule.id} title="Borrar regla">
+                      {savingRuleId === rule.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EmptyLine({ icon: Icon, text }: { icon: ComponentType<{ className?: string }>; text: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+      <Icon className="size-4" />
+      {text}
     </div>
   );
 }

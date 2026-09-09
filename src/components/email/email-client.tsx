@@ -80,7 +80,7 @@ interface Mailbox {
 
 interface Folder {
   id: string;
-  mailbox_id: string;
+  mailbox_id: string | null;
   name: string;
   slug: string;
   kind: string;
@@ -870,7 +870,7 @@ export function EmailClient() {
 
   const publicFolders = useMemo(
     () => folders
-      .filter((folder) => folder.kind === 'custom')
+      .filter((folder) => folder.kind === 'public' || (folder.kind === 'custom' && !folder.mailbox_id))
       .sort((a, b) => a.name.localeCompare(b.name)),
     [folders],
   );
@@ -965,6 +965,7 @@ export function EmailClient() {
           ? selectedFolderId
           : nextFolders.find((folder) => folder.mailbox_id === nextMailboxId && folder.kind === 'inbox')?.id ??
             nextFolders.find((folder) => folder.mailbox_id === nextMailboxId)?.id ??
+            nextFolders.find((folder) => !folder.mailbox_id)?.id ??
             null;
 
       setMailboxes(nextMailboxes);
@@ -2122,7 +2123,7 @@ export function EmailClient() {
                       key={folder.id}
                       type="button"
                       onClick={() => {
-                        setSelectedMailboxId(folder.mailbox_id);
+                        setSelectedMailboxId(folder.mailbox_id ?? selectedMailboxId);
                         setSelectedFolderId(folder.id);
                         setSelectedMessageId(null);
                         setActiveTabId('folder');

@@ -5,7 +5,12 @@ import { toErrorResponse } from '@/lib/auth/errors';
 import {
   createEmailAccount,
   createEmailFolder,
+  createGlobalEmailFolder,
+  deleteEmailAccount,
+  deleteEmailFolder,
+  deleteEmailPermission,
   grantEmailPermission,
+  grantEmailUserPermission,
   listEmailAdminState,
   updateEmailAccount,
 } from '@/lib/email/service';
@@ -98,28 +103,94 @@ export async function POST(request: Request) {
       }
       const folder = await createEmailFolder({
         accountId: ctx.accountId,
+        userId: ctx.userId,
         mailboxId: body.mailbox_id,
         name: String(body.name ?? ''),
       });
       return NextResponse.json({ folder });
     }
 
+    if (action === 'create_public_folder') {
+      const folder = await createGlobalEmailFolder({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        name: String(body.name ?? ''),
+      });
+      return NextResponse.json({ folder });
+    }
+
+    if (action === 'delete_folder') {
+      if (typeof body.folder_id !== 'string') {
+        return NextResponse.json({ error: 'folder_id is required.' }, { status: 400 });
+      }
+      const folder = await deleteEmailFolder({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        folderId: body.folder_id,
+      });
+      return NextResponse.json({ folder });
+    }
+
+    if (action === 'delete_account') {
+      if (typeof body.email_account_id !== 'string') {
+        return NextResponse.json({ error: 'email_account_id is required.' }, { status: 400 });
+      }
+      const account = await deleteEmailAccount({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        emailAccountId: body.email_account_id,
+      });
+      return NextResponse.json({ account });
+    }
+
     if (action === 'grant_permission') {
-      if (typeof body.department_id !== 'string' || typeof body.mailbox_id !== 'string') {
+      if (typeof body.department_id !== 'string') {
         return NextResponse.json(
-          { error: 'department_id and mailbox_id are required.' },
+          { error: 'department_id is required.' },
           { status: 400 },
         );
       }
       const permission = await grantEmailPermission({
         accountId: ctx.accountId,
+        userId: ctx.userId,
         departmentId: body.department_id,
-        mailboxId: body.mailbox_id,
+        mailboxId: typeof body.mailbox_id === 'string' && body.mailbox_id ? body.mailbox_id : null,
         folderId: typeof body.folder_id === 'string' && body.folder_id ? body.folder_id : null,
         canRead: body.can_read !== false,
         canMove: body.can_move === true,
         canClassify: body.can_classify === true,
         canSend: body.can_send === true,
+      });
+      return NextResponse.json({ permission });
+    }
+
+    if (action === 'grant_user_permission') {
+      if (typeof body.target_user_id !== 'string') {
+        return NextResponse.json({ error: 'target_user_id is required.' }, { status: 400 });
+      }
+      const permission = await grantEmailUserPermission({
+        accountId: ctx.accountId,
+        actorUserId: ctx.userId,
+        targetUserId: body.target_user_id,
+        mailboxId: typeof body.mailbox_id === 'string' && body.mailbox_id ? body.mailbox_id : null,
+        folderId: typeof body.folder_id === 'string' && body.folder_id ? body.folder_id : null,
+        canRead: body.can_read !== false,
+        canMove: body.can_move === true,
+        canClassify: body.can_classify === true,
+        canSend: body.can_send === true,
+      });
+      return NextResponse.json({ permission });
+    }
+
+    if (action === 'delete_permission') {
+      if (typeof body.permission_id !== 'string') {
+        return NextResponse.json({ error: 'permission_id is required.' }, { status: 400 });
+      }
+      const permission = await deleteEmailPermission({
+        accountId: ctx.accountId,
+        userId: ctx.userId,
+        permissionId: body.permission_id,
+        scope: body.scope === 'user' ? 'user' : 'department',
       });
       return NextResponse.json({ permission });
     }

@@ -246,6 +246,13 @@
       "when": 1788849600000,
       "tag": "0034_email_webmail_suite",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788936000000,
+      "tag": "0035_email_public_folders_permissions",
+      "breakpoints": true
     }
   ]
 }

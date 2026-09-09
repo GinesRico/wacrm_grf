@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import crypto from 'crypto';
 import { ImapFlow } from 'imapflow';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
@@ -18,6 +18,8 @@ import {
   emailMessages,
   emailPermissions,
   emailRules,
+  emailUserPermissions,
+  profiles,
 } from '@/db/schema';
 import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
@@ -135,6 +137,77 @@ export function serializeEmailFolder(row: typeof emailFolders.$inferSelect) {
     kind: row.kind,
     position: row.position,
   };
+}
+
+function serializeEmailPermission(row: typeof emailPermissions.$inferSelect) {
+  return {
+    id: row.id,
+    department_id: row.departmentId,
+    mailbox_id: row.mailboxId,
+    folder_id: row.folderId,
+    can_read: row.canRead,
+    can_move: row.canMove,
+    can_classify: row.canClassify,
+    can_send: row.canSend,
+  };
+}
+
+function serializeEmailUserPermission(row: typeof emailUserPermissions.$inferSelect) {
+  return {
+    id: row.id,
+    user_id: row.userId,
+    mailbox_id: row.mailboxId,
+    folder_id: row.folderId,
+    can_read: row.canRead,
+    can_move: row.canMove,
+    can_classify: row.canClassify,
+    can_send: row.canSend,
+  };
+}
+
+async function assertUserInAccount(accountId: string, userId: string) {
+  const [user] = await db
+    .select({ userId: profiles.userId })
+    .from(profiles)
+    .where(and(eq(profiles.accountId, accountId), eq(profiles.userId, userId)))
+    .limit(1);
+  if (!user) throw new Error('User is not part of this account.');
+}
+
+async function assertDepartmentInAccount(accountId: string, departmentId: string) {
+  const [department] = await db
+    .select({ id: departments.id })
+    .from(departments)
+    .where(and(eq(departments.accountId, accountId), eq(departments.id, departmentId)))
+    .limit(1);
+  if (!department) throw new Error('Department is not part of this account.');
+}
+
+async function assertEmailPermissionTarget(
+  accountId: string,
+  mailboxId: string | null,
+  folderId: string | null,
+) {
+  if (!mailboxId && !folderId) throw new Error('Choose a mailbox or folder target.');
+  if (mailboxId) {
+    const [mailbox] = await db
+      .select({ id: emailMailboxes.id })
+      .from(emailMailboxes)
+      .where(and(eq(emailMailboxes.accountId, accountId), eq(emailMailboxes.id, mailboxId)))
+      .limit(1);
+    if (!mailbox) throw new Error('Mailbox not found.');
+  }
+  if (folderId) {
+    const [folder] = await db
+      .select({ id: emailFolders.id, mailboxId: emailFolders.mailboxId })
+      .from(emailFolders)
+      .where(and(eq(emailFolders.accountId, accountId), eq(emailFolders.id, folderId)))
+      .limit(1);
+    if (!folder) throw new Error('Folder not found.');
+    if (mailboxId && folder.mailboxId && folder.mailboxId !== mailboxId) {
+      throw new Error('Folder does not belong to the selected mailbox.');
+    }
+  }
 }
 
 export function serializeEmailAttachment(row: typeof emailAttachments.$inferSelect) {
@@ -375,7 +448,9 @@ export async function listEmailAdminState(accountId: string) {
     mailboxRows,
     folderRows,
     permissionRows,
+    userPermissionRows,
     departmentRows,
+    userRows,
     ruleRows,
     auditRows,
   ] = await Promise.all([
@@ -383,7 +458,18 @@ export async function listEmailAdminState(accountId: string) {
     db.select().from(emailMailboxes).where(eq(emailMailboxes.accountId, accountId)),
     db.select().from(emailFolders).where(eq(emailFolders.accountId, accountId)),
     db.select().from(emailPermissions).where(eq(emailPermissions.accountId, accountId)),
+    db.select().from(emailUserPermissions).where(eq(emailUserPermissions.accountId, accountId)),
     db.select().from(departments).where(eq(departments.accountId, accountId)).orderBy(asc(departments.name)),
+    db
+      .select({
+        userId: profiles.userId,
+        fullName: profiles.fullName,
+        email: profiles.email,
+        accountRole: profiles.accountRole,
+      })
+      .from(profiles)
+      .where(eq(profiles.accountId, accountId))
+      .orderBy(asc(profiles.fullName), asc(profiles.email)),
     db.select().from(emailRules).where(eq(emailRules.accountId, accountId)).orderBy(asc(emailRules.position)),
     db
       .select()
@@ -412,17 +498,15 @@ export async function listEmailAdminState(accountId: string) {
     })),
     mailboxes: mailboxRows.map(serializeEmailMailbox),
     folders: folderRows.map(serializeEmailFolder),
-    permissions: permissionRows.map((row) => ({
-      id: row.id,
-      department_id: row.departmentId,
-      mailbox_id: row.mailboxId,
-      folder_id: row.folderId,
-      can_read: row.canRead,
-      can_move: row.canMove,
-      can_classify: row.canClassify,
-      can_send: row.canSend,
-    })),
+    permissions: permissionRows.map(serializeEmailPermission),
+    user_permissions: userPermissionRows.map(serializeEmailUserPermission),
     departments: departmentRows,
+    users: userRows.map((row) => ({
+      user_id: row.userId,
+      full_name: row.fullName,
+      email: row.email,
+      role: row.accountRole,
+    })),
     rules: ruleRows.map((row) => ({
       id: row.id,
       mailbox_id: row.mailboxId,
@@ -449,61 +533,328 @@ export async function listEmailAdminState(accountId: string) {
 
 export async function grantEmailPermission(args: {
   accountId: string;
+  userId?: string;
   departmentId: string;
-  mailboxId: string;
+  mailboxId?: string | null;
   folderId?: string | null;
   canRead: boolean;
   canMove: boolean;
   canClassify: boolean;
   canSend: boolean;
 }) {
-  const [row] = await db
-    .insert(emailPermissions)
-    .values({
-      accountId: args.accountId,
-      departmentId: args.departmentId,
-      mailboxId: args.mailboxId,
-      folderId: args.folderId ?? null,
-      canRead: args.canRead,
-      canMove: args.canMove,
-      canClassify: args.canClassify,
-      canSend: args.canSend,
-    })
-    .onConflictDoUpdate({
-      target: [
-        emailPermissions.departmentId,
-        emailPermissions.mailboxId,
-        emailPermissions.folderId,
-      ],
-      set: {
+  await assertDepartmentInAccount(args.accountId, args.departmentId);
+  await assertEmailPermissionTarget(args.accountId, args.mailboxId ?? null, args.folderId ?? null);
+  const row = await db.transaction(async (tx) => {
+    await tx
+      .delete(emailPermissions)
+      .where(
+        and(
+          eq(emailPermissions.accountId, args.accountId),
+          eq(emailPermissions.departmentId, args.departmentId),
+          args.mailboxId ? eq(emailPermissions.mailboxId, args.mailboxId) : isNull(emailPermissions.mailboxId),
+          args.folderId ? eq(emailPermissions.folderId, args.folderId) : isNull(emailPermissions.folderId),
+        ),
+      );
+    const [permission] = await tx
+      .insert(emailPermissions)
+      .values({
+        accountId: args.accountId,
+        departmentId: args.departmentId,
+        mailboxId: args.mailboxId ?? null,
+        folderId: args.folderId ?? null,
         canRead: args.canRead,
         canMove: args.canMove,
         canClassify: args.canClassify,
         canSend: args.canSend,
-      },
-    })
-    .returning();
+      })
+      .returning();
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId ?? null,
+      mailboxId: args.mailboxId ?? null,
+      folderId: args.folderId ?? null,
+      eventType: 'permission.updated',
+      metadata: { scope: 'department', department_id: args.departmentId },
+    });
+    return permission;
+  });
   return row;
+}
+
+export async function grantEmailUserPermission(args: {
+  accountId: string;
+  actorUserId: string;
+  targetUserId: string;
+  mailboxId?: string | null;
+  folderId?: string | null;
+  canRead: boolean;
+  canMove: boolean;
+  canClassify: boolean;
+  canSend: boolean;
+}) {
+  await assertUserInAccount(args.accountId, args.targetUserId);
+  await assertEmailPermissionTarget(args.accountId, args.mailboxId ?? null, args.folderId ?? null);
+  return db.transaction(async (tx) => {
+    await tx
+      .delete(emailUserPermissions)
+      .where(
+        and(
+          eq(emailUserPermissions.accountId, args.accountId),
+          eq(emailUserPermissions.userId, args.targetUserId),
+          args.mailboxId
+            ? eq(emailUserPermissions.mailboxId, args.mailboxId)
+            : isNull(emailUserPermissions.mailboxId),
+          args.folderId
+            ? eq(emailUserPermissions.folderId, args.folderId)
+            : isNull(emailUserPermissions.folderId),
+        ),
+      );
+    const [permission] = await tx
+      .insert(emailUserPermissions)
+      .values({
+        accountId: args.accountId,
+        userId: args.targetUserId,
+        mailboxId: args.mailboxId ?? null,
+        folderId: args.folderId ?? null,
+        canRead: args.canRead,
+        canMove: args.canMove,
+        canClassify: args.canClassify,
+        canSend: args.canSend,
+      })
+      .returning();
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.actorUserId,
+      mailboxId: args.mailboxId ?? null,
+      folderId: args.folderId ?? null,
+      eventType: 'permission.updated',
+      metadata: { scope: 'user', target_user_id: args.targetUserId },
+    });
+    return permission;
+  });
+}
+
+export async function deleteEmailPermission(args: {
+  accountId: string;
+  userId: string;
+  permissionId: string;
+  scope: 'department' | 'user';
+}) {
+  if (args.scope === 'user') {
+    const [deleted] = await db
+      .delete(emailUserPermissions)
+      .where(
+        and(
+          eq(emailUserPermissions.accountId, args.accountId),
+          eq(emailUserPermissions.id, args.permissionId),
+        ),
+      )
+      .returning();
+    if (deleted) {
+      await db.insert(emailAuditEvents).values({
+        accountId: args.accountId,
+        userId: args.userId,
+        mailboxId: deleted.mailboxId,
+        folderId: deleted.folderId,
+        eventType: 'permission.revoked',
+        metadata: { scope: 'user', target_user_id: deleted.userId },
+      });
+    }
+    return deleted ?? null;
+  }
+
+  const [deleted] = await db
+    .delete(emailPermissions)
+    .where(
+      and(
+        eq(emailPermissions.accountId, args.accountId),
+        eq(emailPermissions.id, args.permissionId),
+      ),
+    )
+    .returning();
+  if (deleted) {
+    await db.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: deleted.mailboxId,
+      folderId: deleted.folderId,
+      eventType: 'permission.revoked',
+      metadata: { scope: 'department', department_id: deleted.departmentId },
+    });
+  }
+  return deleted ?? null;
 }
 
 export async function createEmailFolder(args: {
   accountId: string;
   mailboxId: string;
   name: string;
+  userId?: string;
 }) {
   const name = clean(args.name);
   if (!name) throw new Error('Folder name is required.');
-  const [row] = await db
+  await assertEmailPermissionTarget(args.accountId, args.mailboxId, null);
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(emailFolders)
+      .values({
+        accountId: args.accountId,
+        mailboxId: args.mailboxId,
+        name,
+        slug: slugify(name),
+        kind: 'custom',
+      })
+      .returning();
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId ?? null,
+      mailboxId: args.mailboxId,
+      folderId: row.id,
+      eventType: 'folder.created',
+      metadata: { name: row.name, visibility: 'mailbox' },
+    });
+    return row;
+  });
+}
+
+export async function createGlobalEmailFolder(args: {
+  accountId: string;
+  userId: string;
+  name: string;
+}) {
+  const name = clean(args.name);
+  if (!name) throw new Error('Folder name is required.');
+  const [folder] = await db
     .insert(emailFolders)
     .values({
       accountId: args.accountId,
-      mailboxId: args.mailboxId,
+      mailboxId: null,
       name,
       slug: slugify(name),
-      kind: 'custom',
+      kind: 'public',
+      position: 100,
     })
     .returning();
-  return row;
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    folderId: folder.id,
+    eventType: 'folder.created',
+    metadata: { name: folder.name, visibility: 'public' },
+  });
+  return folder;
+}
+
+export async function deleteEmailFolder(args: {
+  accountId: string;
+  userId: string;
+  folderId: string;
+}) {
+  const [folder] = await db
+    .select()
+    .from(emailFolders)
+    .where(and(eq(emailFolders.accountId, args.accountId), eq(emailFolders.id, args.folderId)))
+    .limit(1);
+  if (!folder) throw new Error('Folder not found.');
+  if (folder.kind !== 'custom' && folder.kind !== 'public') {
+    throw new Error('System folders cannot be deleted.');
+  }
+
+  await db.transaction(async (tx) => {
+    if (folder.mailboxId) {
+      const [inboxFolder] = await tx
+        .select({ id: emailFolders.id })
+        .from(emailFolders)
+        .where(
+          and(
+            eq(emailFolders.accountId, args.accountId),
+            eq(emailFolders.mailboxId, folder.mailboxId),
+            eq(emailFolders.kind, 'inbox'),
+          ),
+        )
+        .limit(1);
+      if (!inboxFolder) throw new Error('Inbox folder is missing.');
+      await tx
+        .update(emailMessages)
+        .set({ folderId: inboxFolder.id, updatedAt: new Date() })
+        .where(and(eq(emailMessages.accountId, args.accountId), eq(emailMessages.folderId, folder.id)));
+    } else {
+      const affected = await tx
+        .selectDistinct({ mailboxId: emailMessages.mailboxId })
+        .from(emailMessages)
+        .where(and(eq(emailMessages.accountId, args.accountId), eq(emailMessages.folderId, folder.id)));
+      for (const row of affected) {
+        const [inboxFolder] = await tx
+          .select({ id: emailFolders.id })
+          .from(emailFolders)
+          .where(
+            and(
+              eq(emailFolders.accountId, args.accountId),
+              eq(emailFolders.mailboxId, row.mailboxId),
+              eq(emailFolders.kind, 'inbox'),
+            ),
+          )
+          .limit(1);
+        if (inboxFolder) {
+          await tx
+            .update(emailMessages)
+            .set({ folderId: inboxFolder.id, updatedAt: new Date() })
+            .where(
+              and(
+                eq(emailMessages.accountId, args.accountId),
+                eq(emailMessages.folderId, folder.id),
+                eq(emailMessages.mailboxId, row.mailboxId),
+              ),
+            );
+        }
+      }
+    }
+
+    await tx
+      .delete(emailFolders)
+      .where(and(eq(emailFolders.accountId, args.accountId), eq(emailFolders.id, folder.id)));
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: folder.mailboxId,
+      folderId: folder.id,
+      eventType: 'folder.deleted',
+      metadata: { name: folder.name, moved_messages_to: 'inbox' },
+    });
+  });
+  return folder;
+}
+
+export async function deleteEmailAccount(args: {
+  accountId: string;
+  userId: string;
+  emailAccountId: string;
+}) {
+  const [account] = await db
+    .select()
+    .from(emailAccounts)
+    .where(and(eq(emailAccounts.accountId, args.accountId), eq(emailAccounts.id, args.emailAccountId)))
+    .limit(1);
+  if (!account) throw new Error('Email account not found.');
+  const [mailbox] = await db
+    .select()
+    .from(emailMailboxes)
+    .where(and(eq(emailMailboxes.accountId, args.accountId), eq(emailMailboxes.emailAccountId, account.id)))
+    .limit(1);
+
+  await db.transaction(async (tx) => {
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: mailbox?.id ?? null,
+      eventType: 'mailbox.deleted',
+      metadata: { email_account_id: account.id, address: account.emailAddress },
+    });
+    await tx
+      .delete(emailAccounts)
+      .where(and(eq(emailAccounts.accountId, args.accountId), eq(emailAccounts.id, account.id)));
+  });
+  return account;
 }
 
 export async function createPublicEmailFolder(args: {
@@ -799,23 +1150,32 @@ export async function listEmailMessages(args: {
   const workspace = await listEmailWorkspace(args);
   const allowedMailboxIds = workspace.mailboxes.map((mailbox) => mailbox.id);
   const allowedFolderIds = workspace.folders.map((folder) => folder.id);
-  if (allowedMailboxIds.length === 0 || allowedFolderIds.length === 0) {
+  if (allowedFolderIds.length === 0) {
     return { messages: [], ...workspace };
   }
 
-  const mailboxId = args.mailboxId && allowedMailboxIds.includes(args.mailboxId)
-    ? args.mailboxId
-    : allowedMailboxIds[0];
-  const folderId = args.folderId && allowedFolderIds.includes(args.folderId)
-    ? args.folderId
+  const folderId =
+    args.folderId && allowedFolderIds.includes(args.folderId) ? args.folderId : null;
+  const selectedFolder = folderId
+    ? workspace.folders.find((folder) => folder.id === folderId) ?? null
     : null;
+  const mailboxId =
+    selectedFolder?.mailbox_id ??
+    (args.mailboxId && allowedMailboxIds.includes(args.mailboxId)
+      ? args.mailboxId
+      : allowedMailboxIds[0] ?? null);
+
+  if (!selectedFolder && !mailboxId) {
+    return { messages: [], ...workspace };
+  }
+
   const q = clean(args.q);
   const from = clean(args.from);
   const to = clean(args.to);
 
   const filters = [
     eq(emailMessages.accountId, args.accountId),
-    inArray(emailMessages.mailboxId, [mailboxId]),
+    mailboxId ? inArray(emailMessages.mailboxId, [mailboxId]) : undefined,
     folderId ? eq(emailMessages.folderId, folderId) : inArray(emailMessages.folderId, allowedFolderIds),
     q
       ? or(

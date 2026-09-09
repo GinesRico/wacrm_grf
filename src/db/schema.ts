@@ -1348,9 +1348,9 @@ export const emailFolders = pgTable(
     accountId: uuid('account_id')
       .notNull()
       .references(() => crmAccounts.id, { onDelete: 'cascade' }),
-    mailboxId: uuid('mailbox_id')
-      .notNull()
-      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
     name: text('name').notNull(),
     slug: text('slug').notNull(),
     kind: text('kind').notNull().default('custom'),
@@ -1371,7 +1371,7 @@ export const emailFolders = pgTable(
     ),
     check(
       'email_folders_kind_check',
-      sql`${table.kind} in ('inbox', 'sent', 'archive', 'trash', 'custom')`
+      sql`${table.kind} in ('inbox', 'sent', 'archive', 'trash', 'custom', 'public')`
     ),
   ]
 );
@@ -1386,9 +1386,9 @@ export const emailPermissions = pgTable(
     departmentId: uuid('department_id')
       .notNull()
       .references(() => departments.id, { onDelete: 'cascade' }),
-    mailboxId: uuid('mailbox_id')
-      .notNull()
-      .references(() => emailMailboxes.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
     folderId: uuid('folder_id').references(() => emailFolders.id, {
       onDelete: 'cascade',
     }),
@@ -1410,6 +1410,43 @@ export const emailPermissions = pgTable(
       table.accountId,
       table.departmentId
     ),
+  ]
+);
+
+export const emailUserPermissions = pgTable(
+  'email_user_permissions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
+    folderId: uuid('folder_id').references(() => emailFolders.id, {
+      onDelete: 'cascade',
+    }),
+    canRead: boolean('can_read').notNull().default(true),
+    canMove: boolean('can_move').notNull().default(false),
+    canClassify: boolean('can_classify').notNull().default(false),
+    canSend: boolean('can_send').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    index('idx_email_user_permissions_account_user').on(
+      table.accountId,
+      table.userId
+    ),
+    index('idx_email_user_permissions_target').on(table.mailboxId, table.folderId),
   ]
 );
 
