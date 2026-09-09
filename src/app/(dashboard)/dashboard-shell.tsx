@@ -240,7 +240,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           <Menu className="size-5" />
         </button>
         {/* Thinner horizontal padding on mobile so cards have room to breathe. */}
-        <main className="flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6">
+        <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto p-4 sm:p-6">
           {children}
         </main>
       </div>
