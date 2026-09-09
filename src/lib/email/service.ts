@@ -817,9 +817,13 @@ export async function deleteEmailFolder(args: {
       accountId: args.accountId,
       userId: args.userId,
       mailboxId: folder.mailboxId,
-      folderId: folder.id,
+      folderId: null,
       eventType: 'folder.deleted',
-      metadata: { name: folder.name, moved_messages_to: 'inbox' },
+      metadata: {
+        deleted_folder_id: folder.id,
+        name: folder.name,
+        moved_messages_to: 'inbox',
+      },
     });
   });
   return folder;
