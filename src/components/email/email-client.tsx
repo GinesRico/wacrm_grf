@@ -1594,7 +1594,7 @@ export function EmailClient() {
   function renderMessageCell(message: Message, column: EmailColumnId) {
     if (column === 'status') {
       return (
-        <div className="flex items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
           <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
           {message.is_replied ? (
             <Reply className="size-3.5 shrink-0 text-primary" aria-label="Respondido" />
@@ -1618,11 +1618,11 @@ export function EmailClient() {
       );
     }
     if (column === 'from') {
-      return <span className="truncate pr-3">{message.from_name || message.from_address}</span>;
+      return <span className="block min-w-0 truncate pr-3">{message.from_name || message.from_address}</span>;
     }
     if (column === 'subject') {
       return (
-        <span className="min-w-0 pr-3">
+        <span className="block min-w-0 overflow-hidden pr-3">
           <span className="block truncate">{message.subject || '(Sin asunto)'}</span>
           {listTextMode !== 'compact' && message.snippet ? (
             <span className="block truncate text-xs font-normal text-muted-foreground">{message.snippet}</span>
@@ -2973,7 +2973,7 @@ export function EmailClient() {
                     title="Doble clic para abrir en pestana. Clic derecho para acciones."
                   >
                     {visibleMessageColumns.map((column) => (
-                      <div key={column} className="min-w-0">
+          <div key={column} className="min-w-0 overflow-hidden">
                         {renderMessageCell(message, column)}
                       </div>
                     ))}

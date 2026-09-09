@@ -2184,6 +2184,13 @@ type EmailSyncCursor = {
   uid_validity?: string;
 };
 
+function sameImapFlags(left: string[] | null | undefined, right: string[]) {
+  const normalize = (flags: string[] | null | undefined) => [...new Set((flags ?? []).map((flag) => flag.toLowerCase()))].sort();
+  const a = normalize(left);
+  const b = normalize(right);
+  return a.length === b.length && a.every((flag, index) => flag === b[index]);
+}
+
 async function ensureImapFolder(accountId: string, mailboxId: string, path: string, specialUse?: string) {
   const normalized = path.toLowerCase() === 'inbox' ? 'inbox' : path;
   const special = specialUse?.toLowerCase();
@@ -2436,6 +2443,7 @@ export async function importEmailAccount(args: {
     const folders = listed.filter((item) => item.listed && item.path && !item.flags.has('\\Noselect'));
     const existingRows = await db.select().from(emailMessages).where(eq(emailMessages.emailAccountId, account.id));
     const byMessageId = new Map(existingRows.filter((row) => row.messageId).map((row) => [row.messageId as string, row]));
+    const byImapIdentity = new Map(existingRows.map((row) => [`${row.imapMailbox}:${row.imapUidValidity}:${row.imapUid}`, row]));
     const rules = await rulesFor(args.accountId, mailbox.id);
 
     for (const remoteFolder of folders) {
@@ -2448,6 +2456,29 @@ export async function importEmailAccount(args: {
         const allUidsResult = await client.search({ all: true }, { uid: true });
         const allUids = Array.isArray(allUidsResult) ? allUidsResult : [];
         for (const uid of allUids) seen.add(`${remoteFolder.path}:${uidValidity}:${uid}`);
+
+        // Flags can change on old messages from another mail client. Fetch only
+        // metadata here so read/unread state stays realtime without redownloading
+        // bodies or attachments.
+        for await (const meta of client.fetch('1:*', { uid: true, flags: true }, { uid: true })) {
+          if (!meta.uid) continue;
+          const existing = byImapIdentity.get(`${remoteFolder.path}:${uidValidity}:${meta.uid}`);
+          if (!existing) continue;
+          const flags = [...(meta.flags ?? [])];
+          const isRead = flags.some((flag) => flag.toLowerCase() === '\\seen');
+          if (existing.isRead === isRead && sameImapFlags(existing.imapFlags, flags)) continue;
+          const [updated] = await db.update(emailMessages).set({
+            isRead,
+            imapFlags: flags,
+            externalState: 'present',
+            lastImapSyncAt: new Date(),
+            updatedAt: new Date(),
+          }).where(eq(emailMessages.id, existing.id)).returning();
+          if (updated) {
+            byImapIdentity.set(`${remoteFolder.path}:${uidValidity}:${meta.uid}`, updated);
+            await publishEmailMessageEvent('email.message.updated', updated, 'imap_flags_changed');
+          }
+        }
 
         const range = `${fromUid}:*`;
         let folderMaxUid = Math.max(0, fromUid - 1);
@@ -2490,6 +2521,7 @@ export async function importEmailAccount(args: {
               updatedAt: new Date(),
             }).where(eq(emailMessages.id, existing.id)).returning();
             row = updated;
+            byImapIdentity.set(`${remoteFolder.path}:${uidValidity}:${msg.uid}`, updated);
             if (updated.messageId) seenMessageIds.add(updated.messageId);
             if (existing.imapMailbox !== remoteFolder.path) moved++;
             await publishEmailMessageEvent('email.message.updated', updated, existing.imapMailbox !== remoteFolder.path ? 'moved_externally' : 'imap_refreshed');
@@ -2527,6 +2559,7 @@ export async function importEmailAccount(args: {
             }).onConflictDoNothing().returning();
             if (!created) { skipped++; continue; }
             row = created;
+            byImapIdentity.set(`${remoteFolder.path}:${uidValidity}:${msg.uid}`, created);
             if (created.messageId) seenMessageIds.add(created.messageId);
             for (const attachment of parsed.attachments) {
               const fileName = attachment.filename || 'attachment';
