@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import {
   Archive,
+  Building2,
+  Copy,
   Edit2,
   Folder,
   FolderPlus,
+  Grid2X2,
   Inbox,
   Loader2,
   Mail,
@@ -16,6 +19,7 @@ import {
   Send,
   ShieldCheck,
   Trash2,
+  User,
   Upload,
   Users,
   X,
@@ -25,9 +29,10 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { SettingsPanelHead } from './settings-panel-head';
@@ -120,6 +125,24 @@ interface AdminState {
 }
 
 type SectionId = 'mailboxes' | 'folders' | 'permissions' | 'rules' | 'audit';
+type PermissionScope = 'department' | 'user';
+type PermissionMatrixView = 'group' | 'user' | 'resource';
+
+interface PermissionTarget {
+  key: string;
+  type: 'mailbox' | 'folder';
+  id: string;
+  label: string;
+  description: string;
+  mailboxId: string | null;
+  folderId: string | null;
+}
+
+interface PermissionPreset {
+  id: string;
+  label: string;
+  permissions: Pick<PermissionRow, 'can_read' | 'can_move' | 'can_classify' | 'can_send'>;
+}
 
 const emptyState: AdminState = {
   accounts: [],
@@ -159,6 +182,34 @@ const defaultMailboxForm = {
   owner_user_id: '',
 };
 
+const permissionPresets: PermissionPreset[] = [
+  {
+    id: 'read',
+    label: 'Solo lectura',
+    permissions: { can_read: true, can_move: false, can_classify: false, can_send: false },
+  },
+  {
+    id: 'work',
+    label: 'Trabajo completo',
+    permissions: { can_read: true, can_move: true, can_classify: true, can_send: true },
+  },
+  {
+    id: 'move',
+    label: 'Lectura + mover',
+    permissions: { can_read: true, can_move: true, can_classify: false, can_send: false },
+  },
+  {
+    id: 'send',
+    label: 'Enviar permitido',
+    permissions: { can_read: true, can_move: false, can_classify: false, can_send: true },
+  },
+  {
+    id: 'none',
+    label: 'Sin acceso',
+    permissions: { can_read: false, can_move: false, can_classify: false, can_send: false },
+  },
+];
+
 export function EmailAdminSettings() {
   const [state, setState] = useState<AdminState>(emptyState);
   const [loading, setLoading] = useState(true);
@@ -170,18 +221,13 @@ export function EmailAdminSettings() {
   const [selectedMailboxId, setSelectedMailboxId] = useState('');
   const [newInternalFolder, setNewInternalFolder] = useState('');
   const [newPublicFolder, setNewPublicFolder] = useState('');
-  const [permissionDraft, setPermissionDraft] = useState({
-    scope: 'user' as 'user' | 'department',
-    user_id: '',
-    department_id: '',
-    target_type: 'mailbox' as 'mailbox' | 'folder',
-    mailbox_id: '',
-    folder_id: '',
-    can_read: true,
-    can_move: false,
-    can_classify: false,
-    can_send: false,
-  });
+  const [permissionView, setPermissionView] = useState<PermissionMatrixView>('group');
+  const [permissionSearch, setPermissionSearch] = useState('');
+  const [permissionTargetFilter, setPermissionTargetFilter] = useState<'all' | 'mailboxes' | 'public' | 'with' | 'without'>('all');
+  const [selectedPermissionSubjects, setSelectedPermissionSubjects] = useState<string[]>([]);
+  const [selectedPermissionTargets, setSelectedPermissionTargets] = useState<string[]>([]);
+  const [copyFromSubjectId, setCopyFromSubjectId] = useState('');
+  const [resourceSubjectScope, setResourceSubjectScope] = useState<PermissionScope>('department');
   const [rulesSource, setRulesSource] = useState('');
   const [editingRuleId, setEditingRuleId] = useState('');
   const [savingRuleId, setSavingRuleId] = useState('');
@@ -201,8 +247,30 @@ export function EmailAdminSettings() {
   const publicFolders = state.folders.filter((folder) => folder.kind === 'public' || folder.mailbox_id === null);
   const internalFolders = state.folders.filter((folder) => folder.mailbox_id === selectedMailbox?.id);
   const systemFolderCount = state.folders.filter((folder) => folder.kind !== 'custom' && folder.kind !== 'public').length;
-  const permissionFolderTargets = state.folders.filter((folder) => folder.kind === 'public' || folder.kind === 'custom');
   const visibleRules = ruleMailboxFilter ? state.rules.filter((rule) => rule.mailbox_id === ruleMailboxFilter) : state.rules;
+  const permissionTargets = useMemo<PermissionTarget[]>(
+    () => [
+      ...state.mailboxes.map((mailbox) => ({
+        key: `mailbox:${mailbox.id}`,
+        type: 'mailbox' as const,
+        id: mailbox.id,
+        label: mailbox.display_name || mailbox.address,
+        description: mailbox.address,
+        mailboxId: mailbox.id,
+        folderId: null,
+      })),
+      ...publicFolders.map((folder) => ({
+        key: `folder:${folder.id}`,
+        type: 'folder' as const,
+        id: folder.id,
+        label: folder.name,
+        description: 'Carpeta publica',
+        mailboxId: null,
+        folderId: folder.id,
+      })),
+    ],
+    [publicFolders, state.mailboxes],
+  );
 
   const mailboxName = useCallback((mailboxId: string | null) => {
     if (!mailboxId) return 'Carpetas publicas';
@@ -241,20 +309,12 @@ export function EmailAdminSettings() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo cargar Email');
       const nextState: AdminState = { ...emptyState, ...payload };
-      const nextPublicFolders = nextState.folders.filter((folder) => folder.kind === 'public' || folder.mailbox_id === null);
       setState(nextState);
       setSelectedMailboxId((current) =>
         current && nextState.mailboxes.some((mailbox) => mailbox.id === current)
           ? current
           : nextState.mailboxes[0]?.id ?? '',
       );
-      setPermissionDraft((current) => ({
-        ...current,
-        user_id: current.user_id || nextState.users[0]?.user_id || '',
-        department_id: current.department_id || nextState.departments[0]?.id || '',
-        mailbox_id: current.mailbox_id || nextState.mailboxes[0]?.id || '',
-        folder_id: current.folder_id || nextPublicFolders[0]?.id || '',
-      }));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar Email');
     } finally {
@@ -351,29 +411,150 @@ export function EmailAdminSettings() {
     await post({ action: 'delete_folder', folder_id: folder.id }, 'Carpeta borrada');
   }
 
-  async function savePermission() {
-    const isFolderTarget = permissionDraft.target_type === 'folder';
-    const folder = isFolderTarget ? state.folders.find((item) => item.id === permissionDraft.folder_id) : null;
-    const mailboxId = isFolderTarget ? folder?.mailbox_id ?? null : permissionDraft.mailbox_id;
-    const folderId = isFolderTarget ? permissionDraft.folder_id : null;
-    await post(
-      {
-        action: permissionDraft.scope === 'user' ? 'grant_user_permission' : 'grant_permission',
-        target_user_id: permissionDraft.scope === 'user' ? permissionDraft.user_id : undefined,
-        department_id: permissionDraft.scope === 'department' ? permissionDraft.department_id : undefined,
-        mailbox_id: mailboxId,
-        folder_id: folderId,
-        can_read: permissionDraft.can_read,
-        can_move: permissionDraft.can_move,
-        can_classify: permissionDraft.can_classify,
-        can_send: permissionDraft.can_send,
-      },
-      'Permiso guardado',
+  async function deletePermission(permission: PermissionRow, scope: 'user' | 'department') {
+    await post({ action: 'delete_permission', permission_id: permission.id, scope }, 'Permiso revocado');
+  }
+
+  function rowsForScope(scope: PermissionScope) {
+    return scope === 'user' ? state.user_permissions : state.permissions;
+  }
+
+  function permissionSubjectOptions(scope: PermissionScope) {
+    return scope === 'user'
+      ? state.users.map((user) => ({
+          id: user.user_id,
+          label: user.full_name || user.email || user.user_id,
+          description: user.email || user.role,
+        }))
+      : state.departments.map((department) => ({
+          id: department.id,
+          label: department.name,
+          description: 'Grupo/departamento',
+      }));
+  }
+
+  function permissionScopeForView(): PermissionScope {
+    if (permissionView === 'user') return 'user';
+    if (permissionView === 'resource') return resourceSubjectScope;
+    return 'department';
+  }
+
+  function findPermission(scope: PermissionScope, subjectId: string, target: PermissionTarget) {
+    return rowsForScope(scope).find((row) => {
+      const ownerMatches = scope === 'user' ? row.user_id === subjectId : row.department_id === subjectId;
+      return ownerMatches && row.mailbox_id === target.mailboxId && row.folder_id === target.folderId;
+    }) ?? null;
+  }
+
+  function permissionSummary(permission: PermissionRow | null) {
+    if (!permission) return 'Sin acceso';
+    const parts = [
+      permission.can_read ? 'L' : '',
+      permission.can_move ? 'M' : '',
+      permission.can_classify ? 'C' : '',
+      permission.can_send ? 'E' : '',
+    ].filter(Boolean);
+    return parts.length ? parts.join(' ') : 'Sin acceso';
+  }
+
+  function targetHasAnyPermission(target: PermissionTarget) {
+    return [...state.permissions, ...state.user_permissions].some(
+      (row) => row.mailbox_id === target.mailboxId && row.folder_id === target.folderId,
     );
   }
 
-  async function deletePermission(permission: PermissionRow, scope: 'user' | 'department') {
-    await post({ action: 'delete_permission', permission_id: permission.id, scope }, 'Permiso revocado');
+  const filteredPermissionTargets = permissionTargets.filter((target) => {
+    const search = permissionSearch.trim().toLowerCase();
+    const matchesSearch = !search || `${target.label} ${target.description}`.toLowerCase().includes(search);
+    const matchesFilter =
+      permissionTargetFilter === 'all' ||
+      (permissionTargetFilter === 'mailboxes' && target.type === 'mailbox') ||
+      (permissionTargetFilter === 'public' && target.type === 'folder') ||
+      (permissionTargetFilter === 'with' && targetHasAnyPermission(target)) ||
+      (permissionTargetFilter === 'without' && !targetHasAnyPermission(target));
+    return matchesSearch && matchesFilter;
+  });
+
+  function toggleSelection(list: string[], value: string) {
+    return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+  }
+
+  function selectedTargetsOrVisible() {
+    const selected = permissionTargets.filter((target) => selectedPermissionTargets.includes(target.key));
+    return selected.length ? selected : filteredPermissionTargets;
+  }
+
+  async function applyPermissionPreset(scope: PermissionScope, subjectIds: string[], targets: PermissionTarget[], preset: PermissionPreset) {
+    if (subjectIds.length === 0 || targets.length === 0) {
+      toast.error('Selecciona al menos una fila y un destino.');
+      return;
+    }
+    await post(
+      {
+        action: 'upsert_permissions_bulk',
+        scope,
+        subject_ids: subjectIds,
+        targets: targets.map((target) => ({
+          mailbox_id: target.mailboxId,
+          folder_id: target.folderId,
+        })),
+        can_read: preset.permissions.can_read,
+        can_move: preset.permissions.can_move,
+        can_classify: preset.permissions.can_classify,
+        can_send: preset.permissions.can_send,
+      },
+      preset.id === 'none' ? 'Permisos revocados' : 'Permisos aplicados',
+    );
+  }
+
+  async function applyPresetToSelection(preset: PermissionPreset) {
+    const scope = permissionScopeForView();
+    const fallbackSubjects = permissionSubjectOptions(scope).map((subject) => subject.id);
+    const subjectIds = selectedPermissionSubjects.length ? selectedPermissionSubjects : fallbackSubjects;
+    await applyPermissionPreset(scope, subjectIds, selectedTargetsOrVisible(), preset);
+  }
+
+  async function copyPermissionsFromSubject() {
+    const scope = permissionScopeForView();
+    if (!copyFromSubjectId) {
+      toast.error('Elige de quien copiar permisos.');
+      return;
+    }
+    const subjectIds = selectedPermissionSubjects.filter((subjectId) => subjectId !== copyFromSubjectId);
+    const targets = selectedTargetsOrVisible();
+    if (subjectIds.length === 0) {
+      toast.error('Selecciona destinatarios distintos al origen.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      for (const target of targets) {
+        const sourcePermission = findPermission(scope, copyFromSubjectId, target);
+        const res = await fetch('/api/email/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'upsert_permissions_bulk',
+            scope,
+            subject_ids: subjectIds,
+            targets: [{ mailbox_id: target.mailboxId, folder_id: target.folderId }],
+            can_read: sourcePermission?.can_read ?? false,
+            can_move: sourcePermission?.can_move ?? false,
+            can_classify: sourcePermission?.can_classify ?? false,
+            can_send: sourcePermission?.can_send ?? false,
+          }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload.error || 'No se pudieron copiar permisos');
+      }
+      toast.success('Permisos copiados');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron copiar permisos');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function importRules() {
@@ -615,57 +796,111 @@ export function EmailAdminSettings() {
       {activeSection === 'permissions' && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Permisos de acceso</CardTitle>
+            <CardTitle className="text-base">Permisos de acceso en masa</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 rounded-md border border-border p-3 lg:grid-cols-4">
-              <SelectLabel label="Asignar a" value={permissionDraft.scope} onChange={(value) => setPermissionDraft({ ...permissionDraft, scope: value as 'user' | 'department' })}>
-                <option value="user">Usuario</option>
-                <option value="department">Grupo/departamento</option>
-              </SelectLabel>
-              {permissionDraft.scope === 'user' ? (
-                <SelectLabel label="Usuario" value={permissionDraft.user_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, user_id: value })}>
-                  {state.users.map((user) => (
-                    <option key={user.user_id} value={user.user_id}>{user.full_name || user.email || user.user_id}</option>
-                  ))}
-                </SelectLabel>
-              ) : (
-                <SelectLabel label="Grupo" value={permissionDraft.department_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, department_id: value })}>
-                  {state.departments.map((department) => (
-                    <option key={department.id} value={department.id}>{department.name}</option>
-                  ))}
-                </SelectLabel>
-              )}
-              <SelectLabel label="Destino" value={permissionDraft.target_type} onChange={(value) => setPermissionDraft({ ...permissionDraft, target_type: value as 'mailbox' | 'folder' })}>
-                <option value="mailbox">Buzon completo</option>
-                <option value="folder">Carpeta concreta</option>
-              </SelectLabel>
-              {permissionDraft.target_type === 'mailbox' ? (
-                <SelectLabel label="Buzon" value={permissionDraft.mailbox_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, mailbox_id: value })}>
-                  {state.mailboxes.map((mailbox) => (
-                    <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
-                  ))}
-                </SelectLabel>
-              ) : (
-                <SelectLabel label="Carpeta" value={permissionDraft.folder_id} onChange={(value) => setPermissionDraft({ ...permissionDraft, folder_id: value })}>
-                  {permissionFolderTargets.map((folder) => (
-                    <option key={folder.id} value={folder.id}>{folder.name} · {mailboxName(folder.mailbox_id)}</option>
-                  ))}
-                </SelectLabel>
-              )}
-              <div className="flex flex-wrap items-center gap-4 lg:col-span-3">
-                <PermissionSwitch label="Leer" checked={permissionDraft.can_read} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_read: value })} />
-                <PermissionSwitch label="Mover" checked={permissionDraft.can_move} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_move: value })} />
-                <PermissionSwitch label="Clasificar" checked={permissionDraft.can_classify} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_classify: value })} />
-                <PermissionSwitch label="Enviar" checked={permissionDraft.can_send} onChange={(value) => setPermissionDraft({ ...permissionDraft, can_send: value })} />
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3">
+              <div className="flex flex-wrap gap-1">
+                {[
+                  { id: 'group', label: 'Por grupo', icon: Building2 },
+                  { id: 'user', label: 'Por usuario', icon: User },
+                  { id: 'resource', label: 'Por recurso', icon: Grid2X2 },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <Button
+                      key={item.id}
+                      type="button"
+                      size="sm"
+                      variant={permissionView === item.id ? 'default' : 'outline'}
+                      onClick={() => {
+                        setPermissionView(item.id as PermissionMatrixView);
+                        setSelectedPermissionSubjects([]);
+                        setSelectedPermissionTargets([]);
+                      }}
+                    >
+                      <Icon className="size-4" />
+                      {item.label}
+                    </Button>
+                  );
+                })}
               </div>
-              <div className="flex justify-end">
-                <Button onClick={savePermission} disabled={saving}>
-                  <ShieldCheck className="size-4" />
-                  Guardar permiso
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={permissionSearch}
+                  onChange={(event) => setPermissionSearch(event.target.value)}
+                  placeholder="Buscar buzón o carpeta"
+                  className="h-9 w-56"
+                />
+                <select
+                  value={permissionTargetFilter}
+                  onChange={(event) => setPermissionTargetFilter(event.target.value as typeof permissionTargetFilter)}
+                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                >
+                  <option value="all">Todos</option>
+                  <option value="mailboxes">Buzones</option>
+                  <option value="public">Carpetas publicas</option>
+                  <option value="with">Con permisos</option>
+                  <option value="without">Sin permisos</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Presets</span>
+              {permissionPresets.map((preset) => (
+                <Button key={preset.id} type="button" size="sm" variant="outline" onClick={() => applyPresetToSelection(preset)} disabled={saving}>
+                  {preset.label}
+                </Button>
+              ))}
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {permissionView === 'resource' ? (
+                  <select
+                    value={resourceSubjectScope}
+                    onChange={(event) => {
+                      setResourceSubjectScope(event.target.value as PermissionScope);
+                      setSelectedPermissionSubjects([]);
+                      setCopyFromSubjectId('');
+                    }}
+                    className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                  >
+                    <option value="department">Grupos</option>
+                    <option value="user">Usuarios</option>
+                  </select>
+                ) : null}
+                <select
+                  value={copyFromSubjectId}
+                  onChange={(event) => setCopyFromSubjectId(event.target.value)}
+                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                >
+                  <option value="">Copiar permisos de...</option>
+                  {permissionSubjectOptions(permissionScopeForView()).map((subject) => (
+                    <option key={subject.id} value={subject.id}>{subject.label}</option>
+                  ))}
+                </select>
+                <Button type="button" size="sm" variant="outline" onClick={copyPermissionsFromSubject} disabled={saving || !copyFromSubjectId}>
+                  <Copy className="size-4" />
+                  Copiar
                 </Button>
               </div>
             </div>
+
+            <PermissionMatrix
+              view={permissionView}
+              scope={permissionScopeForView()}
+              subjects={permissionSubjectOptions(permissionScopeForView())}
+              targets={filteredPermissionTargets}
+              selectedSubjects={selectedPermissionSubjects}
+              selectedTargets={selectedPermissionTargets}
+              onToggleSubject={(id) => setSelectedPermissionSubjects((current) => toggleSelection(current, id))}
+              onToggleTarget={(key) => setSelectedPermissionTargets((current) => toggleSelection(current, key))}
+              onToggleAllSubjects={(ids) => setSelectedPermissionSubjects((current) => current.length === ids.length ? [] : ids)}
+              onToggleAllTargets={(keys) => setSelectedPermissionTargets((current) => current.length === keys.length ? [] : keys)}
+              getPermission={findPermission}
+              permissionSummary={permissionSummary}
+              applyCellPreset={(scope, subjectId, target, preset) => applyPermissionPreset(scope, [subjectId], [target], preset)}
+              saving={saving}
+            />
 
             <div className="grid gap-4 lg:grid-cols-2">
               <PermissionList title="Usuarios" rows={state.user_permissions} owner={(row) => userName(row.user_id)} mailboxName={mailboxName} folderName={folderName} onDelete={(row) => deletePermission(row, 'user')} />
@@ -829,23 +1064,6 @@ function SelectLabel({
   );
 }
 
-function PermissionSwitch({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-sm">
-      <Switch checked={checked} onCheckedChange={onChange} />
-      {label}
-    </label>
-  );
-}
-
 function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (folder: FolderRow) => void }) {
   if (folders.length === 0) return <EmptyLine icon={Folder} text="No hay carpetas." />;
   return (
@@ -865,6 +1083,219 @@ function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (fo
         </div>
       ))}
     </div>
+  );
+}
+
+function PermissionMatrix({
+  view,
+  scope,
+  subjects,
+  targets,
+  selectedSubjects,
+  selectedTargets,
+  onToggleSubject,
+  onToggleTarget,
+  onToggleAllSubjects,
+  onToggleAllTargets,
+  getPermission,
+  permissionSummary,
+  applyCellPreset,
+  saving,
+}: {
+  view: PermissionMatrixView;
+  scope: PermissionScope;
+  subjects: Array<{ id: string; label: string; description: string }>;
+  targets: PermissionTarget[];
+  selectedSubjects: string[];
+  selectedTargets: string[];
+  onToggleSubject: (id: string) => void;
+  onToggleTarget: (key: string) => void;
+  onToggleAllSubjects: (ids: string[]) => void;
+  onToggleAllTargets: (keys: string[]) => void;
+  getPermission: (scope: PermissionScope, subjectId: string, target: PermissionTarget) => PermissionRow | null;
+  permissionSummary: (permission: PermissionRow | null) => string;
+  applyCellPreset: (scope: PermissionScope, subjectId: string, target: PermissionTarget, preset: PermissionPreset) => void;
+  saving: boolean;
+}) {
+  if (subjects.length === 0 || targets.length === 0) {
+    return <EmptyLine icon={ShieldCheck} text="No hay suficientes usuarios/grupos o destinos para pintar la matriz." />;
+  }
+
+  const allSubjectIds = subjects.map((subject) => subject.id);
+  const allTargetKeys = targets.map((target) => target.key);
+
+  if (view === 'resource') {
+    return (
+      <div className="overflow-auto rounded-md border border-border">
+        <table className="w-full min-w-[760px] border-collapse text-sm">
+          <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+            <tr>
+              <th className="w-56 border-b border-r border-border px-3 py-2 text-left">
+                <label className="flex items-center gap-2">
+                  <Checkbox
+                    checked={selectedTargets.length === allTargetKeys.length && allTargetKeys.length > 0}
+                    onCheckedChange={() => onToggleAllTargets(allTargetKeys)}
+                  />
+                  Recurso
+                </label>
+              </th>
+              {subjects.map((subject) => (
+                <th key={subject.id} className="min-w-32 border-b border-r border-border px-2 py-2 text-left">
+                  <label className="flex items-center gap-2">
+                    <Checkbox
+                      checked={selectedSubjects.includes(subject.id)}
+                      onCheckedChange={() => onToggleSubject(subject.id)}
+                    />
+                    <span className="truncate">{subject.label}</span>
+                  </label>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {targets.map((target) => (
+              <tr key={target.key} className="hover:bg-muted/40">
+                <td className="border-r border-border px-3 py-2">
+                  <label className="flex items-start gap-2">
+                    <Checkbox
+                      checked={selectedTargets.includes(target.key)}
+                      onCheckedChange={() => onToggleTarget(target.key)}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{target.label}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{target.description}</span>
+                    </span>
+                  </label>
+                </td>
+                {subjects.map((subject) => (
+                  <td key={`${target.key}-${subject.id}`} className="border-r border-t border-border px-2 py-1.5">
+                    <PermissionCell
+                      permission={getPermission(scope, subject.id, target)}
+                      summary={permissionSummary(getPermission(scope, subject.id, target))}
+                      onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)}
+                      saving={saving}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-auto rounded-md border border-border">
+      <table className="w-full min-w-[820px] border-collapse text-sm">
+        <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+          <tr>
+            <th className="w-56 border-b border-r border-border px-3 py-2 text-left">
+              <label className="flex items-center gap-2">
+                <Checkbox
+                  checked={selectedSubjects.length === allSubjectIds.length && allSubjectIds.length > 0}
+                  onCheckedChange={() => onToggleAllSubjects(allSubjectIds)}
+                />
+                {scope === 'user' ? 'Usuario' : 'Grupo'}
+              </label>
+            </th>
+            {targets.map((target) => (
+              <th key={target.key} className="min-w-36 border-b border-r border-border px-2 py-2 text-left">
+                <label className="flex items-start gap-2">
+                  <Checkbox
+                    checked={selectedTargets.includes(target.key)}
+                    onCheckedChange={() => onToggleTarget(target.key)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate">{target.label}</span>
+                    <span className="block truncate text-[11px] font-normal text-muted-foreground">{target.type === 'mailbox' ? 'Buzon' : 'Publica'}</span>
+                  </span>
+                </label>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {subjects.map((subject) => (
+            <tr key={subject.id} className="hover:bg-muted/40">
+              <td className="border-r border-border px-3 py-2">
+                <label className="flex items-start gap-2">
+                  <Checkbox
+                    checked={selectedSubjects.includes(subject.id)}
+                    onCheckedChange={() => onToggleSubject(subject.id)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{subject.label}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{subject.description}</span>
+                  </span>
+                </label>
+              </td>
+              {targets.map((target) => {
+                const permission = getPermission(scope, subject.id, target);
+                return (
+                  <td key={`${subject.id}-${target.key}`} className="border-r border-t border-border px-2 py-1.5">
+                    <PermissionCell
+                      permission={permission}
+                      summary={permissionSummary(permission)}
+                      onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)}
+                      saving={saving}
+                    />
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PermissionCell({
+  permission,
+  summary,
+  onApply,
+  saving,
+}: {
+  permission: PermissionRow | null;
+  summary: string;
+  onApply: (preset: PermissionPreset) => void;
+  saving: boolean;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        className={cn(
+          'flex min-h-8 w-full items-center justify-center rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted',
+          permission ? 'border-primary/30 bg-primary/10 text-primary' : 'border-dashed border-border text-muted-foreground',
+        )}
+      >
+        {summary}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64">
+        <div className="space-y-2">
+          <div>
+            <p className="text-sm font-medium">Aplicar permiso</p>
+            <p className="text-xs text-muted-foreground">El preset reemplaza el permiso actual de esta celda.</p>
+          </div>
+          <div className="grid gap-1">
+            {permissionPresets.map((preset) => (
+              <Button key={preset.id} type="button" size="sm" variant="ghost" className="justify-start" onClick={() => onApply(preset)} disabled={saving}>
+                {preset.label}
+              </Button>
+            ))}
+          </div>
+          {permission ? (
+            <div className="grid grid-cols-2 gap-1 border-t border-border pt-2 text-xs text-muted-foreground">
+              <span>Leer: {permission.can_read ? 'si' : 'no'}</span>
+              <span>Mover: {permission.can_move ? 'si' : 'no'}</span>
+              <span>Clasificar: {permission.can_classify ? 'si' : 'no'}</span>
+              <span>Enviar: {permission.can_send ? 'si' : 'no'}</span>
+            </div>
+          ) : null}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -960,7 +1391,9 @@ function RulesTable({
         {rules.map((rule) => {
           const editing = editingRuleId === rule.id;
           const draft = ruleDraft(rule);
-          const folderOptions = folders.filter((folder) => folder.mailbox_id === rule.mailbox_id);
+          const folderOptions = folders.filter(
+            (folder) => folder.mailbox_id === rule.mailbox_id || folder.kind === 'public' || folder.mailbox_id === null,
+          );
           return (
             <div key={rule.id} className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0">
               <span className="truncate text-muted-foreground">{mailboxName(rule.mailbox_id)}</span>
@@ -983,7 +1416,9 @@ function RulesTable({
                   <Input value={draft.value} onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })} className="h-8" />
                   <select value={draft.target_folder_id} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
                     {folderOptions.map((folder) => (
-                      <option key={folder.id} value={folder.id}>{folder.name}</option>
+                      <option key={folder.id} value={folder.id}>
+                        {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
+                      </option>
                     ))}
                   </select>
                   <label className="flex items-center gap-2 text-xs text-muted-foreground">

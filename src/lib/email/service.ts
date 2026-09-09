@@ -634,6 +634,131 @@ export async function grantEmailUserPermission(args: {
   });
 }
 
+export async function upsertEmailPermissionsBulk(args: {
+  accountId: string;
+  actorUserId: string;
+  scope: 'department' | 'user';
+  subjectIds: string[];
+  targets: Array<{ mailboxId?: string | null; folderId?: string | null }>;
+  canRead: boolean;
+  canMove: boolean;
+  canClassify: boolean;
+  canSend: boolean;
+}) {
+  const subjectIds = [...new Set(args.subjectIds.filter(Boolean))];
+  const targets = args.targets
+    .map((target) => ({
+      mailboxId: target.mailboxId ?? null,
+      folderId: target.folderId ?? null,
+    }))
+    .filter((target) => target.mailboxId || target.folderId);
+  if (subjectIds.length === 0 || targets.length === 0) {
+    throw new Error('Choose at least one subject and one target.');
+  }
+
+  for (const subjectId of subjectIds) {
+    if (args.scope === 'user') {
+      await assertUserInAccount(args.accountId, subjectId);
+    } else {
+      await assertDepartmentInAccount(args.accountId, subjectId);
+    }
+  }
+  for (const target of targets) {
+    await assertEmailPermissionTarget(args.accountId, target.mailboxId, target.folderId);
+  }
+
+  const shouldGrant = args.canRead || args.canMove || args.canClassify || args.canSend;
+  let changed = 0;
+
+  await db.transaction(async (tx) => {
+    for (const subjectId of subjectIds) {
+      for (const target of targets) {
+        if (args.scope === 'user') {
+          const deleted = await tx
+            .delete(emailUserPermissions)
+            .where(
+              and(
+                eq(emailUserPermissions.accountId, args.accountId),
+                eq(emailUserPermissions.userId, subjectId),
+                target.mailboxId
+                  ? eq(emailUserPermissions.mailboxId, target.mailboxId)
+                  : isNull(emailUserPermissions.mailboxId),
+                target.folderId
+                  ? eq(emailUserPermissions.folderId, target.folderId)
+                  : isNull(emailUserPermissions.folderId),
+              ),
+            )
+            .returning({ id: emailUserPermissions.id });
+          changed += deleted.length;
+          if (shouldGrant) {
+            await tx.insert(emailUserPermissions).values({
+              accountId: args.accountId,
+              userId: subjectId,
+              mailboxId: target.mailboxId,
+              folderId: target.folderId,
+              canRead: args.canRead,
+              canMove: args.canMove,
+              canClassify: args.canClassify,
+              canSend: args.canSend,
+            });
+            changed += 1;
+          }
+        } else {
+          const deleted = await tx
+            .delete(emailPermissions)
+            .where(
+              and(
+                eq(emailPermissions.accountId, args.accountId),
+                eq(emailPermissions.departmentId, subjectId),
+                target.mailboxId
+                  ? eq(emailPermissions.mailboxId, target.mailboxId)
+                  : isNull(emailPermissions.mailboxId),
+                target.folderId
+                  ? eq(emailPermissions.folderId, target.folderId)
+                  : isNull(emailPermissions.folderId),
+              ),
+            )
+            .returning({ id: emailPermissions.id });
+          changed += deleted.length;
+          if (shouldGrant) {
+            await tx.insert(emailPermissions).values({
+              accountId: args.accountId,
+              departmentId: subjectId,
+              mailboxId: target.mailboxId,
+              folderId: target.folderId,
+              canRead: args.canRead,
+              canMove: args.canMove,
+              canClassify: args.canClassify,
+              canSend: args.canSend,
+            });
+            changed += 1;
+          }
+        }
+      }
+    }
+
+    await tx.insert(emailAuditEvents).values({
+      accountId: args.accountId,
+      userId: args.actorUserId,
+      eventType: shouldGrant ? 'permission.bulk_updated' : 'permission.bulk_revoked',
+      metadata: {
+        scope: args.scope,
+        subject_count: subjectIds.length,
+        target_count: targets.length,
+        changed,
+        permissions: {
+          can_read: args.canRead,
+          can_move: args.canMove,
+          can_classify: args.canClassify,
+          can_send: args.canSend,
+        },
+      },
+    });
+  });
+
+  return { changed, subject_count: subjectIds.length, target_count: targets.length };
+}
+
 export async function deleteEmailPermission(args: {
   accountId: string;
   userId: string;
@@ -948,10 +1073,15 @@ export async function createEmailRule(args: {
     userId: args.userId,
     role: args.role,
     mailboxId: args.mailboxId,
+  });
+  const targetPermission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
     folderId: args.targetFolderId,
   });
-  if (!permission.canClassify) {
-    throw new Error('You do not have permission to create rules for this mailbox.');
+  if (!permission.canClassify || !targetPermission.canClassify) {
+    throw new Error('You do not have permission to create rules for this mailbox or target folder.');
   }
   const [rule] = await db
     .insert(emailRules)
@@ -1002,10 +1132,15 @@ export async function updateEmailRuleForUser(args: {
     userId: args.userId,
     role: args.role,
     mailboxId: existing.mailboxId,
+  });
+  const targetPermission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
     folderId: args.targetFolderId,
   });
-  if (!permission.canClassify) {
-    throw new Error('You do not have permission to update rules for this mailbox.');
+  if (!permission.canClassify || !targetPermission.canClassify) {
+    throw new Error('You do not have permission to update rules for this mailbox or target folder.');
   }
 
   const [rule] = await db
@@ -1372,6 +1507,45 @@ export async function updateEmailMessagesBatch(args: {
     );
   }
   return updated;
+}
+
+export async function markEmailMailboxAsRead(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId: string;
+}) {
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: args.mailboxId,
+  });
+  if (!permission.canRead) {
+    throw new Error('You do not have permission to read this mailbox.');
+  }
+
+  const updated = await db
+    .update(emailMessages)
+    .set({ isRead: true, updatedAt: new Date() })
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        eq(emailMessages.mailboxId, args.mailboxId),
+        eq(emailMessages.isRead, false),
+      ),
+    )
+    .returning({ id: emailMessages.id });
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: args.mailboxId,
+    eventType: 'mailbox.marked_read',
+    metadata: { message_count: updated.length },
+  });
+
+  return { updated: updated.length };
 }
 
 export async function listEmailAttachmentsForUser(args: {

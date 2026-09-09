@@ -192,6 +192,12 @@ interface ContextMenuState {
   messageId: string;
 }
 
+interface MailboxContextMenuState {
+  x: number;
+  y: number;
+  mailboxId: string;
+}
+
 type AttachmentPreviewKind = 'image' | 'pdf' | 'spreadsheet' | 'file';
 
 interface SpreadsheetPreview {
@@ -605,6 +611,38 @@ function MessageContextMenu({
   );
 }
 
+function MailboxContextMenu({
+  x,
+  y,
+  mailboxName,
+  onMarkAllRead,
+}: {
+  x: number;
+  y: number;
+  mailboxName: string;
+  onMarkAllRead: () => void;
+}) {
+  return (
+    <div
+      className="fixed z-50 w-64 rounded-md border border-border bg-popover p-1 text-sm text-popover-foreground shadow-lg"
+      style={{ left: x, top: y }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="border-b border-border px-2 py-1.5 text-xs font-medium text-muted-foreground">
+        {mailboxName}
+      </div>
+      <button
+        type="button"
+        onClick={onMarkAllRead}
+        className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+      >
+        <MailOpen className="size-4" />
+        <span className="truncate">Marcar todos como leidos</span>
+      </button>
+    </div>
+  );
+}
+
 function ResizableMessageHeader({
   label,
   column,
@@ -848,6 +886,7 @@ export function EmailClient() {
   const [tabs, setTabs] = useState<MailTab[]>([]);
   const [activeTabId, setActiveTabId] = useState('folder');
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [mailboxContextMenu, setMailboxContextMenu] = useState<MailboxContextMenuState | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [columnWidths, setColumnWidths] = useState<EmailColumnWidths>(() => initialEmailColumnWidths());
   const [columnSettings, setColumnSettings] = useState<EmailColumnSettings>(() => initialEmailColumnSettings());
@@ -875,7 +914,18 @@ export function EmailClient() {
     [folders],
   );
 
-  const visibleFolders = mailboxFolders;
+  const ruleTargetFolders = useMemo(
+    () =>
+      [...mailboxFolders, ...publicFolders]
+        .filter((folder, index, all) => all.findIndex((item) => item.id === folder.id) === index)
+        .sort((a, b) => {
+          const aPublic = !a.mailbox_id || a.kind === 'public';
+          const bPublic = !b.mailbox_id || b.kind === 'public';
+          if (aPublic !== bPublic) return aPublic ? 1 : -1;
+          return a.position - b.position || a.name.localeCompare(b.name);
+        }),
+    [mailboxFolders, publicFolders],
+  );
 
   const selectedMessage = useMemo(
     () => messages.find((message) => message.id === selectedMessageId) ?? null,
@@ -1004,6 +1054,7 @@ export function EmailClient() {
   useEffect(() => {
     function closeMenus() {
       setContextMenu(null);
+      setMailboxContextMenu(null);
     }
     window.addEventListener('click', closeMenus);
     window.addEventListener('scroll', closeMenus, true);
@@ -1094,11 +1145,11 @@ export function EmailClient() {
     setRuleDraft((current) => ({
       ...current,
       targetFolderId:
-        current.targetFolderId && visibleFolders.some((folder) => folder.id === current.targetFolderId)
+        current.targetFolderId && ruleTargetFolders.some((folder) => folder.id === current.targetFolderId)
           ? current.targetFolderId
-          : visibleFolders.find((folder) => folder.id !== selectedMessage?.folder_id)?.id ?? visibleFolders[0]?.id ?? '',
+          : ruleTargetFolders.find((folder) => folder.id !== selectedMessage?.folder_id)?.id ?? ruleTargetFolders[0]?.id ?? '',
     }));
-  }, [selectedMessage?.folder_id, visibleFolders]);
+  }, [selectedMessage?.folder_id, ruleTargetFolders]);
 
   async function patchMessageById(messageId: string, body: Record<string, unknown>, reload = true) {
     const res = await fetch('/api/email/messages', {
@@ -1386,10 +1437,21 @@ export function EmailClient() {
   function openMessageContextMenu(event: MouseEvent, message: Message) {
     event.preventDefault();
     setSelectedMessageId(message.id);
+    setMailboxContextMenu(null);
     setContextMenu({
       x: Math.min(event.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_GAP),
       y: Math.min(event.clientY, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_GAP),
       messageId: message.id,
+    });
+  }
+
+  function openMailboxContextMenu(event: MouseEvent, mailbox: Mailbox) {
+    event.preventDefault();
+    setContextMenu(null);
+    setMailboxContextMenu({
+      x: Math.min(event.clientX, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_GAP),
+      y: Math.min(event.clientY, window.innerHeight - 120 - VIEWPORT_GAP),
+      mailboxId: mailbox.id,
     });
   }
 
@@ -1411,6 +1473,29 @@ export function EmailClient() {
     next.searchParams.set('message_id', message.id);
     await navigator.clipboard.writeText(next.toString());
     toast.success('Enlace del correo copiado');
+  }
+
+  async function markMailboxAsRead(mailboxId: string) {
+    setMailboxContextMenu(null);
+    setMessages((current) =>
+      current.map((message) =>
+        message.mailbox_id === mailboxId ? { ...message, is_read: true } : message,
+      ),
+    );
+    try {
+      const res = await fetch('/api/email/messages/batch', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_mailbox_read', mailbox_id: mailboxId }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudo marcar el buzon como leido');
+      toast.success(`${payload.updated ?? 0} correos marcados como leidos`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo marcar el buzon como leido');
+      await load();
+    }
   }
 
   function printMessage(message: Message) {
@@ -2055,6 +2140,7 @@ export function EmailClient() {
                     <div key={mailbox.id}>
                       <button
                         type="button"
+                        onContextMenu={(event) => openMailboxContextMenu(event, mailbox)}
                         onClick={() => {
                           const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
                           setSelectedMailboxId(mailbox.id);
@@ -2067,6 +2153,7 @@ export function EmailClient() {
                           'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors',
                           selectedMailbox?.id === mailbox.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted',
                         )}
+                        title="Clic derecho para opciones del buzon"
                       >
                         <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold">
                           {(mailbox.display_name || mailbox.address).slice(0, 2).toUpperCase()}
@@ -2463,6 +2550,18 @@ export function EmailClient() {
               onAction={(action) => void runContextAction(action)}
             />
           ) : null}
+          {mailboxContextMenu ? (
+            <MailboxContextMenu
+              x={mailboxContextMenu.x}
+              y={mailboxContextMenu.y}
+              mailboxName={
+                mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.display_name ||
+                mailboxes.find((mailbox) => mailbox.id === mailboxContextMenu.mailboxId)?.address ||
+                'Buzon'
+              }
+              onMarkAllRead={() => void markMailboxAsRead(mailboxContextMenu.mailboxId)}
+            />
+          ) : null}
         </section>
 
         {isBottomReaderLayout ? (
@@ -2723,9 +2822,9 @@ export function EmailClient() {
                   onChange={(event) => setRuleDraft((current) => ({ ...current, targetFolderId: event.target.value }))}
                   className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
                 >
-                  {visibleFolders.map((folder) => (
+                  {ruleTargetFolders.map((folder) => (
                     <option key={folder.id} value={folder.id}>
-                      Mover a {folder.name}
+                      Mover a {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
                     </option>
                   ))}
                 </select>

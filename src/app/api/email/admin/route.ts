@@ -13,6 +13,7 @@ import {
   grantEmailUserPermission,
   listEmailAdminState,
   updateEmailAccount,
+  upsertEmailPermissionsBulk,
 } from '@/lib/email/service';
 
 export async function GET() {
@@ -193,6 +194,33 @@ export async function POST(request: Request) {
         scope: body.scope === 'user' ? 'user' : 'department',
       });
       return NextResponse.json({ permission });
+    }
+
+    if (action === 'upsert_permissions_bulk') {
+      const scope = body.scope === 'user' ? 'user' : 'department';
+      const subjectIds = Array.isArray(body.subject_ids)
+        ? body.subject_ids.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+      const targets = Array.isArray(body.targets)
+        ? body.targets
+            .filter((target: unknown): target is Record<string, unknown> => Boolean(target) && typeof target === 'object')
+            .map((target: Record<string, unknown>) => ({
+              mailboxId: typeof target.mailbox_id === 'string' && target.mailbox_id ? target.mailbox_id : null,
+              folderId: typeof target.folder_id === 'string' && target.folder_id ? target.folder_id : null,
+            }))
+        : [];
+      const result = await upsertEmailPermissionsBulk({
+        accountId: ctx.accountId,
+        actorUserId: ctx.userId,
+        scope,
+        subjectIds,
+        targets,
+        canRead: body.can_read === true,
+        canMove: body.can_move === true,
+        canClassify: body.can_classify === true,
+        canSend: body.can_send === true,
+      });
+      return NextResponse.json(result);
     }
 
     return NextResponse.json({ error: 'Invalid action.' }, { status: 400 });
