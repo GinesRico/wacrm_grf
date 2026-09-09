@@ -14,12 +14,14 @@ import {
 function serializeRule(row: {
   id: string;
   mailboxId: string | null;
-  targetFolderId: string;
+  targetFolderId: string | null;
   name: string;
   field: string;
   operator: string;
   value: string;
   enabled: boolean;
+  action: string;
+  actionValue: string | null;
 }) {
   return {
     id: row.id,
@@ -30,6 +32,8 @@ function serializeRule(row: {
     operator: row.operator,
     value: row.value,
     enabled: row.enabled,
+    action: row.action,
+    action_value: row.actionValue,
   };
 }
 
@@ -75,7 +79,7 @@ export async function POST(request: Request) {
 
     if (
       typeof body?.mailbox_id !== 'string' ||
-      typeof body?.target_folder_id !== 'string'
+      (typeof body?.target_folder_id !== 'string' && body?.target_folder_id !== null)
     ) {
       return NextResponse.json(
         { error: 'mailbox_id and target_folder_id are required.' },
@@ -92,6 +96,8 @@ export async function POST(request: Request) {
       field: String(body.field ?? 'from'),
       operator: String(body.operator ?? 'contains'),
       value: String(body.value ?? ''),
+      action: String(body.action ?? 'move_to'),
+      actionValue: typeof body.action_value === 'string' ? body.action_value : null,
     });
     return NextResponse.json({ rule: serializeRule(rule) });
   } catch (err) {
@@ -106,7 +112,7 @@ export async function PATCH(request: Request) {
   try {
     const ctx = await requireDbRole('agent');
     const body = await request.json().catch(() => ({}));
-    if (typeof body?.rule_id !== 'string' || typeof body?.target_folder_id !== 'string') {
+    if (typeof body?.rule_id !== 'string' || (typeof body?.target_folder_id !== 'string' && body?.target_folder_id !== null)) {
       return NextResponse.json(
         { error: 'rule_id and target_folder_id are required.' },
         { status: 400 },
@@ -123,6 +129,8 @@ export async function PATCH(request: Request) {
       operator: String(body.operator ?? 'contains'),
       value: String(body.value ?? ''),
       enabled: typeof body.enabled === 'boolean' ? body.enabled : true,
+      action: String(body.action ?? 'move_to'),
+      actionValue: typeof body.action_value === 'string' ? body.action_value : null,
     });
     return NextResponse.json({ rule: serializeRule(rule) });
   } catch (err) {

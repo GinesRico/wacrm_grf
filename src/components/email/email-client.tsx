@@ -241,6 +241,8 @@ interface RuleDraft {
   operator: string;
   value: string;
   targetFolderId: string;
+  action: string;
+  actionValue: string;
 }
 
 const emptyCompose: ComposeState = {
@@ -259,6 +261,8 @@ const emptyRuleDraft: RuleDraft = {
   operator: 'contains',
   value: '',
   targetFolderId: '',
+  action: 'move_to',
+  actionValue: '',
 };
 
 const CONTEXT_MENU_WIDTH = 240;
@@ -382,7 +386,9 @@ function PdfPreview({ url }: { url: string }) {
           'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
           import.meta.url,
         ).toString();
-        const document = await pdfjs.getDocument({ url }).promise;
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) throw new Error('No se pudo descargar el PDF');
+        const document = await pdfjs.getDocument({ data: await response.arrayBuffer() }).promise;
         const page = await document.getPage(1);
         const viewport = page.getViewport({ scale: 1.35 });
         const canvas = canvasRef.current;
@@ -878,6 +884,7 @@ export function EmailClient() {
   const [listTextMode, setListTextMode] = useState<EmailListTextMode>(() => initialEmailListTextMode());
   const [ruleBuilderOpen, setRuleBuilderOpen] = useState(false);
   const [ruleDraft, setRuleDraft] = useState<RuleDraft>(emptyRuleDraft);
+  const [ruleBuilderPosition, setRuleBuilderPosition] = useState({ x: 320, y: 96 });
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
   const [searchScope, setSearchScope] = useState<'folder' | 'mailbox'>('folder');
@@ -1434,6 +1441,25 @@ export function EmailClient() {
     window.addEventListener('mouseup', stopDrag);
   }
 
+  function startRuleBuilderDrag(event: MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = ruleBuilderPosition;
+    const onMove = (moveEvent: globalThis.MouseEvent) => {
+      setRuleBuilderPosition({
+        x: Math.min(Math.max(VIEWPORT_GAP, origin.x + moveEvent.clientX - startX), window.innerWidth - 420),
+        y: Math.min(Math.max(VIEWPORT_GAP, origin.y + moveEvent.clientY - startY), window.innerHeight - 180),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   function openMessageContextMenu(event: MouseEvent, message: Message) {
     event.preventDefault();
     setSelectedMessageId(message.id);
@@ -1609,7 +1635,9 @@ export function EmailClient() {
   }
 
   async function createRuleFromBuilder() {
-    if (!selectedMailbox || !ruleDraft.value.trim() || !ruleDraft.targetFolderId) return;
+    const needsTarget = ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to';
+    const needsValue = !['exists', 'not_exists'].includes(ruleDraft.operator);
+    if (!selectedMailbox || (needsValue && !ruleDraft.value.trim()) || (needsTarget && !ruleDraft.targetFolderId)) return;
     const res = await fetch('/api/email/rules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1620,6 +1648,8 @@ export function EmailClient() {
         field: ruleDraft.field,
         operator: ruleDraft.operator,
         value: ruleDraft.value.trim(),
+        action: ruleDraft.action,
+        action_value: ruleDraft.actionValue.trim() || null,
       }),
     });
     const payload = await res.json().catch(() => ({}));
@@ -1896,12 +1926,14 @@ export function EmailClient() {
     }
   }
 
-  async function downloadAttachment(attachment: Attachment) {
-    const url = attachmentPreview?.attachment.id === attachment.id
-      ? attachmentPreview.url
-      : await getAttachmentUrl(attachment);
-    if (!url) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
+  function downloadAttachment(attachment: Attachment) {
+    const link = document.createElement('a');
+    link.href = `/api/email/attachments/${encodeURIComponent(attachment.id)}?download=1`;
+    link.download = attachment.file_name;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   async function addComposeFiles(files: FileList | null) {
@@ -2730,13 +2762,13 @@ export function EmailClient() {
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation();
-                              void downloadAttachment(attachment);
+                              downloadAttachment(attachment);
                             }}
                             onKeyDown={(event) => {
                               if (event.key !== 'Enter' && event.key !== ' ') return;
                               event.preventDefault();
                               event.stopPropagation();
-                              void downloadAttachment(attachment);
+                              downloadAttachment(attachment);
                             }}
                             className="rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
                             title="Descargar adjunto"
@@ -2774,8 +2806,8 @@ export function EmailClient() {
           ) : null}
 
           {ruleBuilderOpen ? (
-            <div className="absolute right-4 top-4 z-10 w-[min(460px,calc(100%-2rem))] rounded-lg border border-border bg-background shadow-xl">
-              <div className="flex min-h-12 items-center justify-between border-b border-border px-3">
+            <div className="fixed z-50 w-[min(700px,calc(100vw-24px))] rounded-lg border border-border bg-background shadow-2xl" style={{ left: ruleBuilderPosition.x, top: ruleBuilderPosition.y }}>
+              <div className="flex min-h-12 cursor-move items-center justify-between border-b border-border px-3" onMouseDown={startRuleBuilderDrag}>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">Nueva regla</p>
                   <p className="truncate text-xs text-muted-foreground">{selectedMailbox?.address}</p>
@@ -2790,7 +2822,7 @@ export function EmailClient() {
                   onChange={(event) => setRuleDraft((current) => ({ ...current, name: event.target.value }))}
                   placeholder="Nombre de la regla"
                 />
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <select
                     value={ruleDraft.field}
                     onChange={(event) => setRuleDraft((current) => ({ ...current, field: event.target.value }))}
@@ -2799,7 +2831,14 @@ export function EmailClient() {
                     <option value="from">Remitente</option>
                     <option value="from_domain">Dominio</option>
                     <option value="subject">Asunto</option>
-                    <option value="to">Destinatario</option>
+                    <option value="body">Cuerpo</option>
+                    <option value="to">A</option>
+                    <option value="cc">Cc</option>
+                    <option value="to_or_cc">Para o CC</option>
+                    <option value="recipients">Todos los destinatarios</option>
+                    <option value="age_days">Antigüedad (días)</option>
+                    <option value="size_kb">Tamaño (KB)</option>
+                    <option value="has_attachment">Tiene adjunto</option>
                   </select>
                   <select
                     value={ruleDraft.operator}
@@ -2810,14 +2849,32 @@ export function EmailClient() {
                     <option value="equals">Es igual</option>
                     <option value="starts_with">Empieza por</option>
                     <option value="ends_with">Termina por</option>
+                    <option value="not_contains">No contiene</option>
+                    <option value="not_equals">No es</option>
+                    <option value="exists">Existe</option>
+                    <option value="not_exists">No existe</option>
+                    <option value="greater_than">Mayor que</option>
+                    <option value="less_than">Menor que</option>
+                  </select>
+                  <select value={ruleDraft.action} onChange={(event) => setRuleDraft((current) => ({ ...current, action: event.target.value }))} className="h-8 rounded-lg border border-border bg-card px-2 text-sm">
+                    <option value="move_to">Mover a</option>
+                    <option value="copy_to">Copiar a</option>
+                    <option value="mark_read">Marcar como leído</option>
+                    <option value="mark_unread">Marcar como no leído</option>
+                    <option value="star">Añadir estrella</option>
+                    <option value="label">Etiquetar mensaje</option>
                   </select>
                 </div>
-                <Input
+                {!['exists', 'not_exists'].includes(ruleDraft.operator) ? <Input
                   value={ruleDraft.value}
                   onChange={(event) => setRuleDraft((current) => ({ ...current, value: event.target.value }))}
                   placeholder="Valor"
-                />
-                <select
+                /> : null}
+                {ruleDraft.action === 'label' ? <select value={ruleDraft.actionValue} onChange={(event) => setRuleDraft((current) => ({ ...current, actionValue: event.target.value }))} className="h-8 rounded-lg border border-border bg-card px-2 text-sm">
+                  <option value="">Selecciona una etiqueta</option>
+                  {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
+                </select> : null}
+                {ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to' ? <select
                   value={ruleDraft.targetFolderId}
                   onChange={(event) => setRuleDraft((current) => ({ ...current, targetFolderId: event.target.value }))}
                   className="h-8 rounded-lg border border-border bg-card px-2 text-sm"
@@ -2827,12 +2884,12 @@ export function EmailClient() {
                       Mover a {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
                     </option>
                   ))}
-                </select>
+                </select> : null}
                 <div className="flex justify-end gap-2">
                   <Button size="sm" variant="outline" onClick={() => setRuleBuilderOpen(false)}>
                     Cancelar
                   </Button>
-                  <Button size="sm" onClick={createRuleFromBuilder} disabled={!ruleDraft.value.trim() || !ruleDraft.targetFolderId}>
+                  <Button size="sm" onClick={createRuleFromBuilder} disabled={(['exists', 'not_exists'].includes(ruleDraft.operator) ? false : !ruleDraft.value.trim()) || ((ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to') && !ruleDraft.targetFolderId)}>
                     <Wand2 className="size-4" />
                     Crear regla
                   </Button>
@@ -3088,7 +3145,7 @@ export function EmailClient() {
                     <Button size="sm" variant="outline" onClick={() => window.open(attachmentPreview.rawUrl, '_blank', 'noopener,noreferrer')}>
                       Abrir
                     </Button>
-                    <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.attachment)}>
+                    <Button size="sm" onClick={() => downloadAttachment(attachmentPreview.attachment)}>
                       <Download className="size-4" />
                       Descargar
                     </Button>

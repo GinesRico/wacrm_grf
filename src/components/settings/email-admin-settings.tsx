@@ -94,12 +94,14 @@ interface UserRow {
 interface RuleRow {
   id: string;
   mailbox_id: string | null;
-  target_folder_id: string;
+  target_folder_id: string | null;
   name: string;
   value: string;
   field: string;
   operator: string;
   enabled: boolean;
+  action: string;
+  action_value: string | null;
 }
 
 interface AuditRow {
@@ -237,8 +239,10 @@ export function EmailAdminSettings() {
     field: string;
     operator: string;
     value: string;
-    target_folder_id: string;
+    target_folder_id: string | null;
     enabled: boolean;
+    action: string;
+    action_value: string | null;
   }>>({});
 
   const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId) ?? null;
@@ -300,6 +304,8 @@ export function EmailAdminSettings() {
       value: rule.value,
       target_folder_id: rule.target_folder_id,
       enabled: rule.enabled,
+      action: rule.action || 'move_to',
+      action_value: rule.action_value || null,
     };
 
   const load = useCallback(async () => {
@@ -590,6 +596,8 @@ export function EmailAdminSettings() {
         value: rule.value,
         target_folder_id: rule.target_folder_id,
         enabled: rule.enabled,
+        action: rule.action || 'move_to',
+        action_value: rule.action_value || null,
       },
     }));
   }
@@ -602,7 +610,9 @@ export function EmailAdminSettings() {
 
   async function saveRule(rule: RuleRow) {
     const draft = ruleDraft(rule);
-    if (!draft.name.trim() || !draft.value.trim() || !draft.target_folder_id) return;
+    const needsTarget = draft.action === 'move_to' || draft.action === 'copy_to';
+    const needsValue = !['exists', 'not_exists'].includes(draft.operator);
+    if (!draft.name.trim() || (needsValue && !draft.value.trim()) || (needsTarget && !draft.target_folder_id)) return;
     setSavingRuleId(rule.id);
     try {
       const res = await fetch('/api/email/rules', {
@@ -615,6 +625,8 @@ export function EmailAdminSettings() {
           operator: draft.operator,
           value: draft.value.trim(),
           target_folder_id: draft.target_folder_id,
+          action: draft.action,
+          action_value: draft.action_value,
           enabled: draft.enabled,
         }),
       });
@@ -1367,7 +1379,7 @@ function RulesTable({
   folderName: (folderId: string | null) => string;
   editingRuleId: string;
   savingRuleId: string;
-  ruleDraft: (rule: RuleRow) => { name: string; field: string; operator: string; value: string; target_folder_id: string; enabled: boolean };
+  ruleDraft: (rule: RuleRow) => { name: string; field: string; operator: string; value: string; target_folder_id: string | null; enabled: boolean; action: string; action_value: string | null };
   updateRuleDraft: (ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) => void;
   startEditRule: (rule: RuleRow) => void;
   saveRule: (rule: RuleRow) => void;
@@ -1384,7 +1396,7 @@ function RulesTable({
           <span>Campo</span>
           <span>Operador</span>
           <span>Valor</span>
-          <span>Destino</span>
+          <span>Accion / destino</span>
           <span>Activa</span>
           <span className="text-right">Acciones</span>
         </div>
@@ -1406,15 +1418,35 @@ function RulesTable({
                     <option value="to">Para</option>
                     <option value="cc">Cc</option>
                     <option value="subject">Asunto</option>
+                    <option value="body">Cuerpo</option>
+                    <option value="to_or_cc">Para o CC</option>
+                    <option value="recipients">Destinatarios</option>
+                    <option value="age_days">Antiguedad</option>
+                    <option value="size_kb">Tamano</option>
+                    <option value="has_attachment">Adjunto</option>
                   </select>
                   <select value={draft.operator} onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
                     <option value="contains">Contiene</option>
                     <option value="equals">Igual</option>
                     <option value="starts_with">Empieza por</option>
                     <option value="ends_with">Termina por</option>
+                    <option value="not_contains">No contiene</option>
+                    <option value="not_equals">No es</option>
+                    <option value="exists">Existe</option>
+                    <option value="not_exists">No existe</option>
+                    <option value="greater_than">Mayor que</option>
+                    <option value="less_than">Menor que</option>
                   </select>
                   <Input value={draft.value} onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })} className="h-8" />
-                  <select value={draft.target_folder_id} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                  <select value={draft.action} onChange={(event) => updateRuleDraft(rule.id, { action: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                    <option value="move_to">Mover a</option>
+                    <option value="copy_to">Copiar a</option>
+                    <option value="mark_read">Marcar leído</option>
+                    <option value="mark_unread">Marcar no leído</option>
+                    <option value="star">Añadir estrella</option>
+                    <option value="label">Etiquetar</option>
+                  </select>
+                  <select value={draft.target_folder_id ?? ''} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value || null })} className="h-8 rounded-md border border-border bg-card px-2">
                     {folderOptions.map((folder) => (
                       <option key={folder.id} value={folder.id}>
                         {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
@@ -1440,7 +1472,7 @@ function RulesTable({
                   <span className="truncate text-muted-foreground">{rule.field}</span>
                   <span className="truncate text-muted-foreground">{rule.operator}</span>
                   <span className="truncate">{rule.value}</span>
-                  <span className="truncate text-muted-foreground">{folderName(rule.target_folder_id)}</span>
+                  <span className="truncate text-muted-foreground">{rule.action || 'move_to'} · {folderName(rule.target_folder_id)}</span>
                   <span className={rule.enabled ? 'text-emerald-600' : 'text-muted-foreground'}>{rule.enabled ? 'Si' : 'No'}</span>
                   <div className="flex justify-end gap-1">
                     <Button size="icon-sm" variant="ghost" onClick={() => startEditRule(rule)} title="Editar regla">

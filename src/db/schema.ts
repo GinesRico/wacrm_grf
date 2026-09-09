@@ -1609,9 +1609,11 @@ export const emailRules = pgTable(
     mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
       onDelete: 'cascade',
     }),
-    targetFolderId: uuid('target_folder_id')
-      .notNull()
-      .references(() => emailFolders.id, { onDelete: 'cascade' }),
+    targetFolderId: uuid('target_folder_id').references(() => emailFolders.id, {
+      onDelete: 'cascade',
+    }),
+    action: text('action').notNull().default('move_to'),
+    actionValue: text('action_value'),
     name: text('name').notNull(),
     field: text('field').notNull(),
     operator: text('operator').notNull().default('contains'),
@@ -1630,11 +1632,19 @@ export const emailRules = pgTable(
     index('idx_email_rules_account_position').on(table.accountId, table.position),
     check(
       'email_rules_field_check',
-      sql`${table.field} in ('from', 'from_domain', 'subject', 'to', 'cc')`
+      sql`${table.field} in ('from', 'from_domain', 'subject', 'body', 'to', 'cc', 'to_or_cc', 'recipients', 'age_days', 'size_kb', 'has_attachment')`
     ),
     check(
       'email_rules_operator_check',
-      sql`${table.operator} in ('contains', 'equals', 'starts_with', 'ends_with')`
+      sql`${table.operator} in ('contains', 'not_contains', 'equals', 'not_equals', 'starts_with', 'ends_with', 'exists', 'not_exists', 'greater_than', 'less_than')`
+    ),
+    check(
+      'email_rules_action_check',
+      sql`${table.action} in ('move_to', 'copy_to', 'mark_read', 'mark_unread', 'star', 'label')`
+    ),
+    check(
+      'email_rules_target_required_check',
+      sql`(${table.action} in ('move_to', 'copy_to') and ${table.targetFolderId} is not null) or (${table.action} not in ('move_to', 'copy_to'))`
     ),
   ]
 );

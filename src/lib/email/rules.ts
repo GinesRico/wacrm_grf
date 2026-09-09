@@ -1,5 +1,6 @@
 import type {
   EmailRuleField,
+  EmailRuleAction,
   EmailRuleOperator,
   ThunderbirdRuleInput,
 } from './types';
@@ -9,16 +10,22 @@ export interface RuleCandidate {
   toAddresses: string[];
   ccAddresses: string[];
   subject: string;
+  bodyText?: string;
+  sizeBytes?: number;
+  hasAttachment?: boolean;
+  date?: Date | string;
 }
 
 export interface EmailRuleLike {
   id?: string;
   mailboxId?: string | null;
-  targetFolderId: string;
+  targetFolderId: string | null;
   field: EmailRuleField | string;
   operator: EmailRuleOperator | string;
   value: string;
   enabled: boolean;
+  action?: EmailRuleAction | string;
+  actionValue?: string | null;
 }
 
 function compare(operator: string, haystack: string, needle: string): boolean {
@@ -27,6 +34,10 @@ function compare(operator: string, haystack: string, needle: string): boolean {
   switch (operator) {
     case 'equals':
       return source === target;
+    case 'not_equals':
+      return source !== target;
+    case 'not_contains':
+      return !source.includes(target);
     case 'starts_with':
       return source.startsWith(target);
     case 'ends_with':
@@ -37,36 +48,58 @@ function compare(operator: string, haystack: string, needle: string): boolean {
   }
 }
 
+function isPresent(value: unknown): boolean {
+  return value !== undefined && value !== null && String(value).trim().length > 0;
+}
+
 export function matchEmailRule(
   rule: EmailRuleLike,
   message: RuleCandidate,
 ): boolean {
-  if (!rule.enabled || !rule.value.trim()) return false;
+  if (!rule.enabled) return false;
 
-  if (rule.field === 'from_domain') {
-    const domain = message.fromAddress.split('@')[1] ?? '';
-    return compare(rule.operator, domain, rule.value.replace(/^@/, ''));
+  if (rule.operator === 'exists' || rule.operator === 'not_exists') {
+    const present = rule.field === 'has_attachment'
+      ? message.hasAttachment === true
+      : isPresent(ruleValue(rule, message));
+    return rule.operator === 'exists' ? present : !present;
   }
+  if (!rule.value.trim()) return false;
 
-  const value =
-    rule.field === 'from'
-      ? message.fromAddress
-      : rule.field === 'subject'
-        ? message.subject
-        : rule.field === 'to'
-          ? message.toAddresses.join(', ')
-          : rule.field === 'cc'
-            ? message.ccAddresses.join(', ')
-            : '';
+  if (rule.field === 'age_days' || rule.field === 'size_kb') {
+    const numericValue = rule.field === 'size_kb'
+      ? (message.sizeBytes ?? 0) / 1024
+      : message.date ? Math.max(0, (Date.now() - new Date(message.date).getTime()) / 86400000) : 0;
+    const target = Number(rule.value);
+    if (!Number.isFinite(target)) return false;
+    return rule.operator === 'greater_than' ? numericValue > target : numericValue < target;
+  }
+  return compare(
+    rule.operator,
+    ruleValue(rule, message),
+    rule.field === 'from_domain' ? rule.value.replace(/^@/, '') : rule.value,
+  );
+}
 
-  return compare(rule.operator, value, rule.value);
+function ruleValue(rule: EmailRuleLike, message: RuleCandidate): string {
+  if (rule.field === 'from_domain') return message.fromAddress.split('@')[1] ?? '';
+  if (rule.field === 'from') return message.fromAddress;
+  if (rule.field === 'subject') return message.subject;
+  if (rule.field === 'body') return message.bodyText ?? '';
+  if (rule.field === 'to') return message.toAddresses.join(', ');
+  if (rule.field === 'cc') return message.ccAddresses.join(', ');
+  if (rule.field === 'to_or_cc') return [...message.toAddresses, ...message.ccAddresses].join(', ');
+  if (rule.field === 'recipients') return [message.fromAddress, ...message.toAddresses, ...message.ccAddresses].join(', ');
+  return message.hasAttachment ? 'true' : '';
 }
 
 export function resolveRuleTargetFolder(
   rules: EmailRuleLike[],
   message: RuleCandidate,
 ): string | null {
-  return rules.find((rule) => matchEmailRule(rule, message))?.targetFolderId ?? null;
+  return rules.find((rule) =>
+    (!rule.action || rule.action === 'move_to') && rule.targetFolderId && matchEmailRule(rule, message),
+  )?.targetFolderId ?? null;
 }
 
 function unquote(value: string): string {
@@ -77,6 +110,12 @@ function normalizeField(value: string): EmailRuleField {
   const lower = value.toLowerCase();
   if (lower.includes('sender') || lower.includes('from')) return 'from';
   if (lower.includes('subject')) return 'subject';
+  if (lower.includes('body') || lower.includes('body')) return 'body';
+  if (lower.includes('age') || lower.includes('old')) return 'age_days';
+  if (lower.includes('size')) return 'size_kb';
+  if (lower.includes('attach')) return 'has_attachment';
+  if (lower.includes('recipient') || lower.includes('to,cc')) return 'recipients';
+  if (lower.includes('to or cc') || lower.includes('to_or_cc')) return 'to_or_cc';
   if (lower.includes('to')) return 'to';
   if (lower.includes('cc')) return 'cc';
   return 'from';
@@ -84,6 +123,11 @@ function normalizeField(value: string): EmailRuleField {
 
 function normalizeOperator(value: string): EmailRuleOperator {
   const lower = value.toLowerCase();
+  if (lower.includes('not contain')) return 'not_contains';
+  if (lower.includes('not') && (lower.includes('is') || lower.includes('equal'))) return 'not_equals';
+  if (lower.includes('greater') || lower.includes('more')) return 'greater_than';
+  if (lower.includes('less') || lower.includes('fewer')) return 'less_than';
+  if (lower.includes('exist')) return 'exists';
   if (lower.includes('is') || lower.includes('equals')) return 'equals';
   if (lower.includes('begins') || lower.includes('starts')) return 'starts_with';
   if (lower.includes('ends')) return 'ends_with';
@@ -116,6 +160,8 @@ export function parseThunderbirdRules(text: string): ThunderbirdRuleInput[] {
       operator: normalizeOperator(conditionMatch?.[2] ?? ''),
       value,
       targetFolderName,
+      action: 'move_to',
+      actionValue: targetFolderName,
       enabled: entries.get('enabled') !== 'no',
     };
   });

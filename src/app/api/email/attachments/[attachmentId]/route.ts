@@ -15,7 +15,8 @@ export async function GET(
     const ctx = await requireDbRole('viewer');
     const { attachmentId } = await context.params;
     const url = new URL(request.url);
-    if (url.searchParams.get('raw') === '1') {
+    const isDownload = url.searchParams.get('download') === '1';
+    if (url.searchParams.get('raw') === '1' || isDownload) {
       const attachment = await getEmailAttachmentFileForUser({
         accountId: ctx.accountId,
         userId: ctx.userId,
@@ -28,7 +29,7 @@ export async function GET(
         headers: {
           'Content-Type': attachment.content_type || 'application/octet-stream',
           'Content-Length': String(attachment.bytes.byteLength),
-          'Content-Disposition': `inline; filename="${attachment.file_name.replaceAll('"', '')}"`,
+          'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="${attachment.file_name.replaceAll('"', '')}"`,
           'Cache-Control': 'private, max-age=300',
           'X-Content-Type-Options': 'nosniff',
         },

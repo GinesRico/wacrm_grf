@@ -26,7 +26,7 @@ import { decryptEmailCredentials, encryptEmailCredentials } from './credentials'
 import { resolveEmailPermission } from './permissions';
 import { resolveRuleTargetFolder } from './rules';
 import type { AccountRole } from '@/lib/auth/roles';
-import type { CreateEmailAccountInput, ThunderbirdRuleInput } from './types';
+import type { CreateEmailAccountInput, EmailRuleAction, ThunderbirdRuleInput } from './types';
 
 const DEFAULT_FOLDERS = [
   { name: 'Entrada', slug: 'inbox', kind: 'inbox', position: 0 },
@@ -1062,24 +1062,30 @@ export async function createEmailRule(args: {
   userId: string;
   role: AccountRole;
   mailboxId: string;
-  targetFolderId: string;
+  targetFolderId: string | null;
+  action?: EmailRuleAction | string;
+  actionValue?: string | null;
   name: string;
   field: string;
   operator: string;
   value: string;
 }) {
+  const action = clean(args.action) || 'move_to';
+  if ((action === 'move_to' || action === 'copy_to') && !args.targetFolderId) {
+    throw new Error('Esta acción necesita una carpeta de destino.');
+  }
   const permission = await resolveEmailPermission({
     accountId: args.accountId,
     userId: args.userId,
     role: args.role,
     mailboxId: args.mailboxId,
   });
-  const targetPermission = await resolveEmailPermission({
+  const targetPermission = args.targetFolderId ? await resolveEmailPermission({
     accountId: args.accountId,
     userId: args.userId,
     role: args.role,
     folderId: args.targetFolderId,
-  });
+  }) : permission;
   if (!permission.canClassify || !targetPermission.canClassify) {
     throw new Error('You do not have permission to create rules for this mailbox or target folder.');
   }
@@ -1089,6 +1095,8 @@ export async function createEmailRule(args: {
       accountId: args.accountId,
       mailboxId: args.mailboxId,
       targetFolderId: args.targetFolderId,
+      action,
+      actionValue: args.actionValue ?? null,
       name: clean(args.name) || 'Regla',
       field: args.field,
       operator: args.operator,
@@ -1113,13 +1121,19 @@ export async function updateEmailRuleForUser(args: {
   userId: string;
   role: AccountRole;
   ruleId: string;
-  targetFolderId: string;
+  targetFolderId: string | null;
+  action?: EmailRuleAction | string;
+  actionValue?: string | null;
   name: string;
   field: string;
   operator: string;
   value: string;
   enabled: boolean;
 }) {
+  const action = clean(args.action) || 'move_to';
+  if ((action === 'move_to' || action === 'copy_to') && !args.targetFolderId) {
+    throw new Error('Esta acción necesita una carpeta de destino.');
+  }
   const [existing] = await db
     .select()
     .from(emailRules)
@@ -1133,12 +1147,12 @@ export async function updateEmailRuleForUser(args: {
     role: args.role,
     mailboxId: existing.mailboxId,
   });
-  const targetPermission = await resolveEmailPermission({
+  const targetPermission = args.targetFolderId ? await resolveEmailPermission({
     accountId: args.accountId,
     userId: args.userId,
     role: args.role,
     folderId: args.targetFolderId,
-  });
+  }) : permission;
   if (!permission.canClassify || !targetPermission.canClassify) {
     throw new Error('You do not have permission to update rules for this mailbox or target folder.');
   }
@@ -1147,6 +1161,8 @@ export async function updateEmailRuleForUser(args: {
     .update(emailRules)
     .set({
       targetFolderId: args.targetFolderId,
+      action,
+      actionValue: args.actionValue ?? null,
       name: clean(args.name) || existing.name,
       field: args.field,
       operator: args.operator,
@@ -1187,7 +1203,7 @@ export async function deleteEmailRuleForUser(args: {
     userId: args.userId,
     role: args.role,
     mailboxId: existing.mailboxId,
-    folderId: existing.targetFolderId,
+    folderId: existing.targetFolderId ?? undefined,
   });
   if (!permission.canClassify) {
     throw new Error('You do not have permission to delete rules for this mailbox.');
@@ -1202,7 +1218,7 @@ export async function deleteEmailRuleForUser(args: {
     accountId: args.accountId,
     userId: args.userId,
     mailboxId: existing.mailboxId,
-    folderId: existing.targetFolderId,
+    folderId: existing.targetFolderId ?? undefined,
     eventType: 'rule.deleted',
     metadata: { rule_id: existing.id, name: existing.name },
   });
@@ -1235,22 +1251,28 @@ export async function applyEmailRuleToMessage(args: {
     .limit(1);
   if (!rule) throw new Error('Rule not found for this mailbox.');
 
-  const [targetFolder] = await db
+  const [targetFolder] = rule.targetFolderId ? await db
     .select()
     .from(emailFolders)
     .where(
       and(
         eq(emailFolders.accountId, args.accountId),
         eq(emailFolders.id, rule.targetFolderId),
-        eq(emailFolders.mailboxId, current.message.mailboxId),
+        or(eq(emailFolders.mailboxId, current.message.mailboxId), isNull(emailFolders.mailboxId)),
       ),
     )
-    .limit(1);
-  if (!targetFolder) throw new Error('Rule target folder not found.');
+    .limit(1) : [null];
+  if ((rule.action === 'move_to' || rule.action === 'copy_to') && !targetFolder) throw new Error('Rule target folder not found.');
+
+  const action = rule.action || 'move_to';
+  const update = action === 'mark_read' ? { isRead: true, updatedAt: new Date() } :
+    action === 'mark_unread' ? { isRead: false, updatedAt: new Date() } :
+    action === 'star' ? { isStarred: true, updatedAt: new Date() } :
+    targetFolder ? { folderId: targetFolder.id, updatedAt: new Date() } : { updatedAt: new Date() };
 
   const [updated] = await db
     .update(emailMessages)
-    .set({ folderId: targetFolder.id, updatedAt: new Date() })
+    .set(update)
     .where(
       and(
         eq(emailMessages.accountId, args.accountId),
@@ -1263,10 +1285,10 @@ export async function applyEmailRuleToMessage(args: {
     accountId: args.accountId,
     userId: args.userId,
     mailboxId: updated.mailboxId,
-    folderId: targetFolder.id,
+    folderId: targetFolder?.id ?? updated.folderId,
     messageId: updated.id,
     eventType: 'rule.applied',
-    metadata: { rule_id: rule.id, rule_name: rule.name },
+    metadata: { rule_id: rule.id, rule_name: rule.name, action },
   });
   return updated;
 }

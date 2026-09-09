@@ -75,6 +75,8 @@ condition="OR (subject,contains,Ticket)"`);
         operator: 'contains',
         value: 'cliente.com',
         targetFolderName: 'Ventas',
+        action: 'move_to',
+        actionValue: 'Ventas',
         enabled: true,
       },
       {
@@ -83,6 +85,8 @@ condition="OR (subject,contains,Ticket)"`);
         operator: 'contains',
         value: 'Ticket',
         targetFolderName: 'Soporte',
+        action: 'move_to',
+        actionValue: 'Soporte',
         enabled: false,
       },
     ]);
