@@ -1012,6 +1012,7 @@ export function EmailClient() {
   const [selectedMailboxId, setSelectedMailboxId] = useState<string | null>(() => initialSearchParam('mailbox_id'));
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() => initialSearchParam('folder_id'));
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(() => initialSearchParam('message_id'));
+  const [readerMessage, setReaderMessage] = useState<Message | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -1034,6 +1035,7 @@ export function EmailClient() {
   const [ruleBuilderPosition, setRuleBuilderPosition] = useState({ x: 320, y: 96 });
   const [publicFolderDialogOpen, setPublicFolderDialogOpen] = useState(false);
   const [publicFolderName, setPublicFolderName] = useState('');
+  const [sharedFolderFilter, setSharedFolderFilter] = useState<'all' | 'unread' | 'read'>('all');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
   const [searchScope, setSearchScope] = useState<'folder' | 'mailbox'>('folder');
@@ -1051,7 +1053,13 @@ export function EmailClient() {
   const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
   const attachmentUrlsRef = useRef(new Map<string, string>());
   const hasLoadedRef = useRef(false);
+  const readerMessageRef = useRef<Message | null>(null);
   const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const keepReaderMessage = useCallback((message: Message | null) => {
+    readerMessageRef.current = message;
+    setReaderMessage(message);
+  }, []);
 
   const selectedMailbox = useMemo(
     () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
@@ -1089,6 +1097,16 @@ export function EmailClient() {
     [folders],
   );
 
+  const visiblePublicFolders = useMemo(
+    () => publicFolders.filter((folder) => {
+      const unread = (folder.unread_count ?? 0) > 0;
+      if (sharedFolderFilter === 'unread') return unread;
+      if (sharedFolderFilter === 'read') return !unread;
+      return true;
+    }),
+    [publicFolders, sharedFolderFilter],
+  );
+
   const ruleTargetFolders = useMemo(
     () =>
       [...mailboxFolders, ...publicFolders]
@@ -1103,8 +1121,8 @@ export function EmailClient() {
   );
 
   const selectedMessage = useMemo(
-    () => messages.find((message) => message.id === selectedMessageId) ?? null,
-    [messages, selectedMessageId],
+    () => messages.find((message) => message.id === selectedMessageId) ?? readerMessage,
+    [messages, readerMessage, selectedMessageId],
   );
 
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? null;
@@ -1148,7 +1166,7 @@ export function EmailClient() {
   const isSplitReaderLayout = layout === 'three-pane' && hasReaderPane && !isContentTabActive;
   const isBottomReaderLayout = layout === 'bottom-pane' && hasReaderPane && !isContentTabActive;
   const shouldShowMessageList = !isContentTabActive;
-  const shouldShowContentPane = composeOpen || hasReaderPane || isMessageTabActive;
+  const shouldShowContentPane = composeOpen || isMessageTabActive || (hasReaderPane && layout !== 'focused-list');
   const visibleMessageColumns = columnSettings.order.filter((column) => columnSettings.visibility[column]);
   const messageGridTemplate = emailMessageGridTemplate(columnWidths, visibleMessageColumns);
   const messageGridMinWidth = visibleMessageColumns.reduce((total, column) => total + columnWidths[column], 0);
@@ -1236,7 +1254,11 @@ export function EmailClient() {
       if (eventName === 'deleted' || !messageMatchesCurrentView(message)) return withoutCurrent;
       return sortMessagesByCurrentSort([message, ...withoutCurrent]).slice(0, 200);
     });
-  }, [messageMatchesCurrentView, sortMessagesByCurrentSort]);
+    if (readerMessageRef.current?.id === message.id) {
+      if (eventName === 'deleted') keepReaderMessage(null);
+      else keepReaderMessage(message);
+    }
+  }, [keepReaderMessage, messageMatchesCurrentView, sortMessagesByCurrentSort]);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? hasLoadedRef.current;
@@ -1266,11 +1288,11 @@ export function EmailClient() {
       setMessages(nextMessages);
       setSelectedMailboxId(nextMailboxId);
       setSelectedFolderId(nextFolderId);
-      setSelectedMessageId((current) =>
-        current && nextMessages.some((message) => message.id === current)
-          ? current
-          : nextMessages[0]?.id ?? null,
-      );
+      setSelectedMessageId((current) => {
+        if (current && nextMessages.some((message) => message.id === current)) return current;
+        if (current && readerMessageRef.current?.id === current) return current;
+        return null;
+      });
       hasLoadedRef.current = true;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar el correo');
@@ -1454,6 +1476,7 @@ export function EmailClient() {
   }
 
   async function selectMessage(message: Message) {
+    keepReaderMessage(message);
     setSelectedMessageId(message.id);
     setActiveTabId((current) => current || 'folder');
     if (!message.is_read) {
@@ -1488,6 +1511,7 @@ export function EmailClient() {
     if (activeTabId === tabId) {
       setActiveTabId('folder');
       setSelectedMessageId(null);
+      keepReaderMessage(null);
       if (tabId === 'compose') setComposeOpen(false);
     }
   }
@@ -1497,6 +1521,7 @@ export function EmailClient() {
       setTabs((current) => current.filter((tab) => tab.id !== activeTabId));
     }
     setSelectedMessageId(null);
+    keepReaderMessage(null);
     setActiveTabId('folder');
   }
 
@@ -1737,6 +1762,7 @@ export function EmailClient() {
 
   function openMessageContextMenu(event: MouseEvent, message: Message) {
     event.preventDefault();
+    keepReaderMessage(message);
     setSelectedMessageId(message.id);
     setMailboxContextMenu(null);
     setContextMenu({
@@ -1930,7 +1956,7 @@ export function EmailClient() {
     }
   }
 
-  async function applyCurrentRules() {
+  async function applyCurrentRules(folderId: string | null = selectedFolderId) {
     if (!selectedMailbox) return;
     setApplyingRules(true);
     try {
@@ -1940,7 +1966,7 @@ export function EmailClient() {
         body: JSON.stringify({
           action: 'apply_all',
           mailbox_id: selectedMailbox.id,
-          folder_id: selectedFolderId,
+          folder_id: folderId,
         }),
       });
       const payload = await res.json().catch(() => ({}));
@@ -1973,7 +1999,7 @@ export function EmailClient() {
     await load();
   }
 
-  async function createRuleFromBuilder() {
+  async function createRuleFromBuilder(applyAfterCreate = false) {
     const needsTarget = ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to';
     const needsValue = !['exists', 'not_exists'].includes(ruleDraft.operator);
     if (!selectedMailbox || (needsValue && !ruleDraft.value.trim()) || (needsTarget && !ruleDraft.targetFolderId)) return;
@@ -1999,6 +2025,7 @@ export function EmailClient() {
     setRuleDraft(emptyRuleDraft);
     setRuleBuilderOpen(false);
     toast.success('Regla creada');
+    if (applyAfterCreate) await applyCurrentRules(null);
   }
 
   async function createLabel() {
@@ -2510,7 +2537,7 @@ export function EmailClient() {
           <Button
             size="icon-sm"
             variant="outline"
-            onClick={applyCurrentRules}
+            onClick={() => void applyCurrentRules()}
             disabled={applyingRules || !selectedMailbox}
             title="Aplicar reglas"
             aria-label="Aplicar reglas"
@@ -2560,7 +2587,7 @@ export function EmailClient() {
               </div>
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3">
             <div>
               <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Buzones</p>
               {mailboxes.length === 0 ? (
@@ -2578,7 +2605,6 @@ export function EmailClient() {
                           const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
                           setSelectedMailboxId(mailbox.id);
                           setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
-                          setSelectedMessageId(null);
                           setActiveTabId('folder');
                           setComposeOpen(false);
                         }}
@@ -2613,7 +2639,6 @@ export function EmailClient() {
                               onClick={() => {
                                 setSelectedMailboxId(mailbox.id);
                                 setSelectedFolderId(folder.id);
-                                setSelectedMessageId(null);
                                 setActiveTabId('folder');
                                 setComposeOpen(false);
                               }}
@@ -2635,14 +2660,35 @@ export function EmailClient() {
             </div>
 
             <div>
-              <div className="mb-2 flex items-center justify-between px-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas compartidas</p>
-                <Button size="icon-xs" variant="ghost" onClick={() => setPublicFolderDialogOpen(true)} title="Crear carpeta compartida">
-                  <FolderPlus className="size-3.5" />
-                </Button>
+              <div className="mb-2 space-y-2 px-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas compartidas</p>
+                  <Button size="icon-xs" variant="ghost" onClick={() => setPublicFolderDialogOpen(true)} title="Crear carpeta compartida">
+                    <FolderPlus className="size-3.5" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-3 gap-1 rounded-md border border-border p-1 text-[11px]">
+                  {([
+                    ['all', 'Todas'],
+                    ['unread', 'Pendientes'],
+                    ['read', 'Sin pendientes'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setSharedFolderFilter(value)}
+                      className={cn(
+                        'rounded px-1.5 py-1 transition-colors',
+                        sharedFolderFilter === value ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-1">
-                {publicFolders.map((folder) => {
+                {visiblePublicFolders.map((folder) => {
                   const count = folder.unread_count ?? 0;
                   return (
                     <button
@@ -2652,7 +2698,6 @@ export function EmailClient() {
                       onClick={() => {
                         setSelectedMailboxId(folder.mailbox_id ?? selectedMailboxId);
                         setSelectedFolderId(folder.id);
-                        setSelectedMessageId(null);
                         setActiveTabId('folder');
                         setComposeOpen(false);
                       }}
@@ -3304,9 +3349,18 @@ export function EmailClient() {
                   <Button size="sm" variant="outline" onClick={() => setRuleBuilderOpen(false)}>
                     Cancelar
                   </Button>
-                  <Button size="sm" onClick={createRuleFromBuilder} disabled={(['exists', 'not_exists'].includes(ruleDraft.operator) ? false : !ruleDraft.value.trim()) || ((ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to') && !ruleDraft.targetFolderId)}>
+                  <Button size="sm" onClick={() => void createRuleFromBuilder()} disabled={(['exists', 'not_exists'].includes(ruleDraft.operator) ? false : !ruleDraft.value.trim()) || ((ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to') && !ruleDraft.targetFolderId)}>
                     <Wand2 className="size-4" />
                     Crear regla
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void createRuleFromBuilder(true)}
+                    disabled={applyingRules || (['exists', 'not_exists'].includes(ruleDraft.operator) ? false : !ruleDraft.value.trim()) || ((ruleDraft.action === 'move_to' || ruleDraft.action === 'copy_to') && !ruleDraft.targetFolderId)}
+                  >
+                    <Wand2 className="size-4" />
+                    Crear y aplicar
                   </Button>
                 </div>
               </div>

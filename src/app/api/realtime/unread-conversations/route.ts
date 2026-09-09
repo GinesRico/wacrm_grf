@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { conversations } from "@/db/schema";
@@ -14,7 +14,12 @@ export async function GET() {
         unread_count: conversations.unreadCount,
       })
       .from(conversations)
-      .where(eq(conversations.accountId, accountId));
+      .where(
+        and(
+          eq(conversations.accountId, accountId),
+          ne(conversations.status, "closed"),
+        ),
+      );
 
     return NextResponse.json({ conversations: rows });
   } catch (err) {
