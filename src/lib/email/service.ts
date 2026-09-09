@@ -1498,11 +1498,13 @@ export async function listEmailMessages(args: {
   const selectedFolder = folderId
     ? workspace.folders.find((folder) => folder.id === folderId) ?? null
     : null;
-  const mailboxId =
-    selectedFolder?.mailbox_id ??
-    (args.mailboxId && allowedMailboxIds.includes(args.mailboxId)
+  // A public folder can contain messages from multiple source mailboxes. Once
+  // it is selected, its own folder access is the boundary for the query.
+  const mailboxId = selectedFolder
+    ? selectedFolder.mailbox_id
+    : args.mailboxId && allowedMailboxIds.includes(args.mailboxId)
       ? args.mailboxId
-      : allowedMailboxIds[0] ?? null);
+      : allowedMailboxIds[0] ?? null;
 
   if (!selectedFolder && !mailboxId) {
     return { messages: [], ...workspace };
