@@ -10,7 +10,7 @@ import {
 
 export async function PATCH(request: Request) {
   try {
-    const ctx = await requireDbRole('agent');
+    const ctx = await requireDbRole('viewer');
     const body = await request.json().catch(() => ({}));
     if (body?.action === 'mark_mailbox_read') {
       if (typeof body.mailbox_id !== 'string') {

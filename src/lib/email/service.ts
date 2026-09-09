@@ -24,7 +24,7 @@ import {
 import { getObjectBytes, putObject, signedObjectUrl } from '@/lib/storage/alarik';
 import { publishRealtimeEvent } from '@/lib/realtime/soketi-server';
 import { decryptEmailCredentials, encryptEmailCredentials } from './credentials';
-import { resolveEmailPermission } from './permissions';
+import { listAccessibleFolders, resolveEmailPermission } from './permissions';
 import { resolveRuleTargetFolder } from './rules';
 import type { AccountRole } from '@/lib/auth/roles';
 import type { CreateEmailAccountInput, EmailRuleAction, ThunderbirdRuleInput } from './types';
@@ -1568,17 +1568,32 @@ export async function markEmailMailboxAsRead(args: {
     throw new Error('You do not have permission to read this mailbox.');
   }
 
-  const updated = await db
-    .update(emailMessages)
-    .set({ isRead: true, updatedAt: new Date() })
-    .where(
-      and(
-        eq(emailMessages.accountId, args.accountId),
-        eq(emailMessages.mailboxId, args.mailboxId),
-        eq(emailMessages.isRead, false),
-      ),
-    )
-    .returning({ id: emailMessages.id });
+  // A folder-only grant must never expand into access to the complete mailbox.
+  // Resolve the actual readable folders before applying the bulk update.
+  const accessibleFolders = await listAccessibleFolders({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxIds: [args.mailboxId],
+  });
+  const accessibleFolderIds = accessibleFolders
+    .filter((folder) => folder.mailboxId === args.mailboxId || folder.mailboxId === null)
+    .map((folder) => folder.id);
+
+  const updated = accessibleFolderIds.length === 0
+    ? []
+    : await db
+        .update(emailMessages)
+        .set({ isRead: true, updatedAt: new Date() })
+        .where(
+          and(
+            eq(emailMessages.accountId, args.accountId),
+            eq(emailMessages.mailboxId, args.mailboxId),
+            inArray(emailMessages.folderId, accessibleFolderIds),
+            eq(emailMessages.isRead, false),
+          ),
+        )
+        .returning({ id: emailMessages.id });
 
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
@@ -1588,11 +1603,13 @@ export async function markEmailMailboxAsRead(args: {
     metadata: { message_count: updated.length },
   });
 
-  const mailboxRows = await db
-    .select()
-    .from(emailMessages)
-    .where(and(eq(emailMessages.accountId, args.accountId), eq(emailMessages.mailboxId, args.mailboxId)));
-  await Promise.all(mailboxRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'mailbox_marked_read')));
+  if (updated.length > 0) {
+    const mailboxRows = await db
+      .select()
+      .from(emailMessages)
+      .where(inArray(emailMessages.id, updated.map((row) => row.id)));
+    await Promise.all(mailboxRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'mailbox_marked_read')));
+  }
 
   return { updated: updated.length };
 }
@@ -2006,6 +2023,7 @@ export async function importEmailAccount(args: {
     port: account.imapPort,
     secure: account.imapSecure,
     auth: { user: credentials.imap_user, pass: credentials.imap_password },
+    logger: false,
   });
 
   let imported = 0;
