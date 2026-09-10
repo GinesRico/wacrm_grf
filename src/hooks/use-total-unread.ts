@@ -30,9 +30,9 @@ export function useTotalUnread(): number {
       const versionAtStart = versionRef.current;
       const response = await fetch("/api/realtime/unread-conversations", {
         cache: "no-store",
-      });
-      if (cancelled || !response.ok || versionAtStart !== versionRef.current) return;
-      const { conversations } = (await response.json()) as {
+      }).catch(() => null);
+      if (cancelled || !response?.ok || versionAtStart !== versionRef.current) return;
+      const { conversations } = (await response.json().catch(() => ({ conversations: [] }))) as {
         conversations: { id: string; unread_count: number }[];
       };
 

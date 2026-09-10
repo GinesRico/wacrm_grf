@@ -1660,10 +1660,20 @@ export async function updateEmailMessageState(args: {
       isStarred: typeof args.isStarred === 'boolean' ? args.isStarred : current.message.isStarred,
       folderId: args.folderId ?? current.message.folderId,
       folderSource: args.folderId ? 'local' : current.message.folderSource,
+      imapFlags: typeof args.isRead === 'boolean' ? readFlags(current.message.imapFlags, args.isRead) : current.message.imapFlags,
       updatedAt: new Date(),
     })
     .where(and(eq(emailMessages.id, args.messageId), eq(emailMessages.accountId, args.accountId)))
     .returning();
+
+  if (typeof args.isRead === 'boolean' && args.isRead !== current.message.isRead) {
+    await syncReadStateToImap({
+      accountId: args.accountId,
+      userId: args.userId,
+      messages: [updated],
+      isRead: args.isRead,
+    });
+  }
 
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
@@ -1746,7 +1756,7 @@ export async function markEmailMailboxAsRead(args: {
     ? []
     : await db
         .update(emailMessages)
-        .set({ isRead: true, updatedAt: new Date() })
+        .set({ isRead: true, imapFlags: sql`array_append(array_remove(${emailMessages.imapFlags}, '\\Seen'), '\\Seen')`, updatedAt: new Date() })
         .where(
           and(
             eq(emailMessages.accountId, args.accountId),
@@ -1755,7 +1765,14 @@ export async function markEmailMailboxAsRead(args: {
             eq(emailMessages.isRead, false),
           ),
         )
-        .returning({ id: emailMessages.id });
+        .returning();
+
+  await syncReadStateToImap({
+    accountId: args.accountId,
+    userId: args.userId,
+    messages: updated,
+    isRead: true,
+  });
 
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
@@ -1766,11 +1783,7 @@ export async function markEmailMailboxAsRead(args: {
   });
 
   if (updated.length > 0) {
-    const mailboxRows = await db
-      .select()
-      .from(emailMessages)
-      .where(inArray(emailMessages.id, updated.map((row) => row.id)));
-    await Promise.all(mailboxRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'mailbox_marked_read')));
+    await Promise.all(updated.map((row) => publishEmailMessageEvent('email.message.updated', row, 'mailbox_marked_read')));
   }
 
   return { updated: updated.length };
@@ -1802,7 +1815,7 @@ export async function markEmailFolderAsRead(args: {
 
   const updated = await db
     .update(emailMessages)
-    .set({ isRead: true, updatedAt: new Date() })
+    .set({ isRead: true, imapFlags: sql`array_append(array_remove(${emailMessages.imapFlags}, '\\Seen'), '\\Seen')`, updatedAt: new Date() })
     .where(
       and(
         eq(emailMessages.accountId, args.accountId),
@@ -1810,7 +1823,14 @@ export async function markEmailFolderAsRead(args: {
         eq(emailMessages.isRead, false),
       ),
     )
-    .returning({ id: emailMessages.id });
+    .returning();
+
+  await syncReadStateToImap({
+    accountId: args.accountId,
+    userId: args.userId,
+    messages: updated,
+    isRead: true,
+  });
 
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
@@ -1822,11 +1842,7 @@ export async function markEmailFolderAsRead(args: {
   });
 
   if (updated.length > 0) {
-    const folderRows = await db
-      .select()
-      .from(emailMessages)
-      .where(inArray(emailMessages.id, updated.map((row) => row.id)));
-    await Promise.all(folderRows.map((row) => publishEmailMessageEvent('email.message.updated', row, 'folder_marked_read')));
+    await Promise.all(updated.map((row) => publishEmailMessageEvent('email.message.updated', row, 'folder_marked_read')));
   }
 
   return { updated: updated.length };
@@ -2189,6 +2205,78 @@ function sameImapFlags(left: string[] | null | undefined, right: string[]) {
   const a = normalize(left);
   const b = normalize(right);
   return a.length === b.length && a.every((flag, index) => flag === b[index]);
+}
+
+function readFlags(flags: string[] | null | undefined, isRead: boolean) {
+  const next = (flags ?? []).filter((flag) => flag.toLowerCase() !== '\\seen');
+  if (isRead) next.push('\\Seen');
+  return [...new Set(next)];
+}
+
+async function syncReadStateToImap(
+  args: {
+    accountId: string;
+    userId: string | null;
+    messages: (typeof emailMessages.$inferSelect)[];
+    isRead: boolean;
+  },
+) {
+  const rows = args.messages.filter((message) => message.imapUid > 0 && message.imapMailbox);
+  if (rows.length === 0) return;
+
+  const emailAccountIds = [...new Set(rows.map((message) => message.emailAccountId))];
+  const accounts = await db
+    .select()
+    .from(emailAccounts)
+    .where(and(eq(emailAccounts.accountId, args.accountId), inArray(emailAccounts.id, emailAccountIds)));
+  const accountsById = new Map(accounts.map((account) => [account.id, account]));
+
+  for (const emailAccountId of emailAccountIds) {
+    const account = accountsById.get(emailAccountId);
+    if (!account || !account.enabled) continue;
+
+    const credentials = decryptEmailCredentials(account.encryptedCredentials as Record<string, unknown>);
+    const client = new ImapFlow({
+      host: account.imapHost,
+      port: account.imapPort,
+      secure: account.imapSecure,
+      auth: { user: credentials.imap_user, pass: credentials.imap_password },
+      logger: false,
+    });
+
+    try {
+      await client.connect();
+      const byMailbox = new Map<string, number[]>();
+      for (const message of rows.filter((row) => row.emailAccountId === emailAccountId)) {
+        byMailbox.set(message.imapMailbox, [...(byMailbox.get(message.imapMailbox) ?? []), message.imapUid]);
+      }
+
+      for (const [imapMailbox, uids] of byMailbox) {
+        const lock = await client.getMailboxLock(imapMailbox);
+        try {
+          await client.mailboxOpen(imapMailbox);
+          if (args.isRead) {
+            await client.messageFlagsAdd(uids, ['\\Seen'], { uid: true, silent: true });
+          } else {
+            await client.messageFlagsRemove(uids, ['\\Seen'], { uid: true, silent: true });
+          }
+        } finally {
+          lock.release();
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not update IMAP flags.';
+      console.warn('[email] failed to sync read state to IMAP', { emailAccountId, isRead: args.isRead, error: message });
+      await db.insert(emailAuditEvents).values({
+        accountId: args.accountId,
+        userId: args.userId,
+        eventType: 'message.read_state_imap_failed',
+        metadata: { email_account_id: emailAccountId, is_read: args.isRead, error: message },
+      });
+    } finally {
+      await client.logout().catch(() => undefined);
+    }
+  }
 }
 
 async function ensureImapFolder(accountId: string, mailboxId: string, path: string, specialUse?: string) {

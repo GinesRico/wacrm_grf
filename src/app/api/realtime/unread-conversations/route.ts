@@ -1,4 +1,4 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, gt, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { conversations } from "@/db/schema";
@@ -18,6 +18,7 @@ export async function GET() {
         and(
           eq(conversations.accountId, accountId),
           ne(conversations.status, "closed"),
+          gt(conversations.unreadCount, 0),
         ),
       );
 

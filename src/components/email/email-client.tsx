@@ -568,8 +568,12 @@ function isAppDarkMode() {
 }
 
 function emailHtml(html: string, allowExternalContent: boolean) {
-  if (allowExternalContent) return html;
-  return html
+  const withoutScripts = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/\son[a-z]+=(["']).*?\1/gi, '')
+    .replace(/\son[a-z]+=[^\s>]+/gi, '');
+  if (allowExternalContent) return withoutScripts;
+  return withoutScripts
     .replace(/\s(src|srcset)=["']https?:\/\/[^"']+["']/gi, ' data-external-content-blocked="true"')
     .replace(/\sbackground=["']https?:\/\/[^"']+["']/gi, ' data-external-background-blocked="true"');
 }
@@ -1106,6 +1110,11 @@ export function EmailClient() {
     }),
     [publicFolders, sharedFolderFilter],
   );
+  const sharedFolderFilterLabel = sharedFolderFilter === 'unread'
+    ? 'Pendientes'
+    : sharedFolderFilter === 'read'
+      ? 'Sin pendientes'
+      : 'Todas';
 
   const ruleTargetFolders = useMemo(
     () =>
@@ -2660,32 +2669,23 @@ export function EmailClient() {
             </div>
 
             <div>
-              <div className="mb-2 space-y-2 px-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Carpetas compartidas</p>
-                  <Button size="icon-xs" variant="ghost" onClick={() => setPublicFolderDialogOpen(true)} title="Crear carpeta compartida">
-                    <FolderPlus className="size-3.5" />
-                  </Button>
-                </div>
-                <div className="grid grid-cols-3 gap-1 rounded-md border border-border p-1 text-[11px]">
-                  {([
-                    ['all', 'Todas'],
-                    ['unread', 'Pendientes'],
-                    ['read', 'Sin pendientes'],
-                  ] as const).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setSharedFolderFilter(value)}
-                      className={cn(
-                        'rounded px-1.5 py-1 transition-colors',
-                        sharedFolderFilter === value ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <div className="mb-2 flex items-center justify-between gap-2 px-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSharedFolderFilter((current) =>
+                      current === 'all' ? 'unread' : current === 'unread' ? 'read' : 'all',
+                    );
+                  }}
+                  className="min-w-0 truncate text-left text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                  title={`Filtro: ${sharedFolderFilterLabel}`}
+                  aria-label={`Carpetas compartidas, filtro ${sharedFolderFilterLabel}`}
+                >
+                  Carpetas compartidas · {sharedFolderFilterLabel}
+                </button>
+                <Button size="icon-xs" variant="ghost" onClick={() => setPublicFolderDialogOpen(true)} title="Crear carpeta compartida">
+                  <FolderPlus className="size-3.5" />
+                </Button>
               </div>
               <div className="space-y-1">
                 {visiblePublicFolders.map((folder) => {
