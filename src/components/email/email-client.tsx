@@ -337,6 +337,7 @@ interface EmailPanelWidths {
 
 const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390, bottomList: 360 };
 const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300, bottomList: 180 };
+const MAX_VIEW_CACHE_ENTRIES = 100;
 const SPREADSHEET_PREVIEW_MAX_ROWS = 5000;
 const SPREADSHEET_PREVIEW_MAX_COLUMNS = 10;
 const SPREADSHEET_EXTENSIONS = new Set(['xls', 'xlsx', 'csv']);
@@ -557,6 +558,46 @@ function formatBytes(value: number | null) {
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function sortMessagesForView(items: Message[], sort: string | null) {
+  const sorted = [...items];
+  sorted.sort((a, b) => {
+    if (sort === 'oldest') return new Date(a.received_at).getTime() - new Date(b.received_at).getTime();
+    if (sort === 'sender') return a.from_address.localeCompare(b.from_address);
+    if (sort === 'subject_asc') return a.subject.localeCompare(b.subject);
+    if (sort === 'subject_desc') return b.subject.localeCompare(a.subject);
+    if (sort === 'size_asc') return (a.raw_size ?? 0) - (b.raw_size ?? 0);
+    if (sort === 'size_desc') return (b.raw_size ?? 0) - (a.raw_size ?? 0);
+    return new Date(b.received_at).getTime() - new Date(a.received_at).getTime();
+  });
+  return sorted;
+}
+
+function messageMatchesViewParams(message: Message, key: string) {
+  const keyParams = new URLSearchParams(key);
+  const folderId = keyParams.get('folder_id');
+  const mailboxId = keyParams.get('mailbox_id');
+  if (folderId && message.folder_id !== folderId) return false;
+  if (!folderId && mailboxId && message.mailbox_id !== mailboxId) return false;
+  if (keyParams.get('unread') === 'true' && message.is_read) return false;
+  if (keyParams.get('attachments') === 'true' && !message.has_attachments) return false;
+  if (keyParams.get('starred') === 'true' && !message.is_starred) return false;
+  const labelId = keyParams.get('label_id');
+  if (labelId && !message.labels?.some((label) => label.id === labelId)) return false;
+  const from = keyParams.get('from')?.trim().toLowerCase();
+  if (from && !message.from_address.toLowerCase().includes(from)) return false;
+  const to = keyParams.get('to')?.trim().toLowerCase();
+  if (to && !message.to_addresses.join(',').toLowerCase().includes(to)) return false;
+  const textQuery = keyParams.get('q')?.trim().toLowerCase();
+  if (textQuery) {
+    const haystack = [message.subject, message.from_address, message.from_name, message.snippet, message.body_text]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    if (!haystack.includes(textQuery)) return false;
+  }
+  return true;
+}
+
 function isAppDarkMode() {
   if (typeof document === 'undefined') return false;
   return (
@@ -771,6 +812,7 @@ function MailboxContextMenu({
   target,
   onMarkAllRead,
   onDownloadUnreadPdfs,
+  onAccumulateUnreadPdfs,
 }: {
   x: number;
   y: number;
@@ -778,6 +820,7 @@ function MailboxContextMenu({
   target: 'mailbox' | 'folder';
   onMarkAllRead: () => void;
   onDownloadUnreadPdfs?: () => void;
+  onAccumulateUnreadPdfs?: () => void;
 }) {
   return (
     <div
@@ -804,6 +847,16 @@ function MailboxContextMenu({
         >
           <Download className="size-4" />
           <span className="truncate">Descargar PDFs</span>
+        </button>
+      ) : null}
+      {target === 'folder' && onAccumulateUnreadPdfs ? (
+        <button
+          type="button"
+          onClick={onAccumulateUnreadPdfs}
+          className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+        >
+          <Plus className="size-4" />
+          <span className="truncate">Acumular PDFs</span>
         </button>
       ) : null}
     </div>
@@ -1053,6 +1106,8 @@ export function EmailClient() {
   const [ruleBuilderPosition, setRuleBuilderPosition] = useState({ x: 320, y: 96 });
   const [publicFolderDialogOpen, setPublicFolderDialogOpen] = useState(false);
   const [publicFolderName, setPublicFolderName] = useState('');
+  const [pdfFolderCartOpen, setPdfFolderCartOpen] = useState(false);
+  const [pdfFolderCartIds, setPdfFolderCartIds] = useState<Set<string>>(() => new Set());
   const [sharedFolderFilter, setSharedFolderFilter] = useState<'all' | 'unread' | 'read'>('all');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [advanced, setAdvanced] = useState({ from: '', to: '', sort: 'newest' });
@@ -1134,6 +1189,10 @@ export function EmailClient() {
     : sharedFolderFilter === 'read'
       ? 'Sin pendientes'
       : 'Todas';
+  const pdfFolderCart = useMemo(
+    () => folders.filter((folder) => pdfFolderCartIds.has(folder.id)),
+    [folders, pdfFolderCartIds],
+  );
 
   const ruleTargetFolders = useMemo(
     () =>
@@ -1232,17 +1291,7 @@ export function EmailClient() {
   ].filter(Boolean) as Array<{ id: string; label: string }>;
 
   const sortMessagesByCurrentSort = useCallback((items: Message[]) => {
-    const sorted = [...items];
-    sorted.sort((a, b) => {
-      if (advanced.sort === 'oldest') return new Date(a.received_at).getTime() - new Date(b.received_at).getTime();
-      if (advanced.sort === 'sender') return a.from_address.localeCompare(b.from_address);
-      if (advanced.sort === 'subject_asc') return a.subject.localeCompare(b.subject);
-      if (advanced.sort === 'subject_desc') return b.subject.localeCompare(a.subject);
-      if (advanced.sort === 'size_asc') return (a.raw_size ?? 0) - (b.raw_size ?? 0);
-      if (advanced.sort === 'size_desc') return (b.raw_size ?? 0) - (a.raw_size ?? 0);
-      return new Date(b.received_at).getTime() - new Date(a.received_at).getTime();
-    });
-    return sorted;
+    return sortMessagesForView(items, advanced.sort);
   }, [advanced.sort]);
 
   const messageMatchesCurrentView = useCallback((message: Message) => {
@@ -1265,10 +1314,23 @@ export function EmailClient() {
     return true;
   }, [activeFilter, advanced.from, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
 
+  const applyRealtimeMessageToViewCache = useCallback((eventName: 'created' | 'updated' | 'deleted', message: Message) => {
+    for (const key of [...viewCacheRef.current.keys()]) {
+      const cached = viewCacheRef.current.get(key);
+      if (!cached) continue;
+      const withoutCurrent = cached.messages.filter((item) => item.id !== message.id);
+      const matches = eventName !== 'deleted' && messageMatchesViewParams(message, key);
+      const nextMessages = matches
+        ? sortMessagesForView([message, ...withoutCurrent], new URLSearchParams(key).get('sort')).slice(0, 200)
+        : withoutCurrent;
+      viewCacheRef.current.set(key, { ...cached, messages: nextMessages });
+    }
+  }, []);
+
   const applyRealtimeMessage = useCallback((eventName: 'created' | 'updated' | 'deleted', event: RealtimeEmailEvent) => {
     const message = event.payload?.message;
     if (!message) return;
-    viewCacheRef.current.clear();
+    applyRealtimeMessageToViewCache(eventName, message);
 
     setFolders((current) =>
       current.map((folder) => {
@@ -1301,7 +1363,7 @@ export function EmailClient() {
       if (eventName === 'deleted') keepReaderMessage(null);
       else keepReaderMessage(message);
     }
-  }, [keepReaderMessage, messageMatchesCurrentView, sortMessagesByCurrentSort]);
+  }, [applyRealtimeMessageToViewCache, keepReaderMessage, messageMatchesCurrentView, sortMessagesByCurrentSort]);
 
   const load = useCallback(async (options?: { silent?: boolean; useCache?: boolean; includeWorkspace?: boolean }) => {
     const requestParams = params;
@@ -1353,7 +1415,7 @@ export function EmailClient() {
         folders: nextFolders,
         messages: nextMessages,
       });
-      if (viewCacheRef.current.size > 20) {
+      if (viewCacheRef.current.size > MAX_VIEW_CACHE_ENTRIES) {
         const oldest = viewCacheRef.current.keys().next().value;
         if (oldest) viewCacheRef.current.delete(oldest);
       }
@@ -2018,6 +2080,26 @@ export function EmailClient() {
     }
   }
 
+  async function savePdfZipResponse(res: Response) {
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') ?? '';
+    const match = disposition.match(/filename="([^"]+)"/i);
+    const fileName = match?.[1] ?? 'pdfs-pendientes.zip';
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    return {
+      attachmentCount: Number(res.headers.get('X-Email-Pdf-Attachments') ?? 0),
+      messageCount: Number(res.headers.get('X-Email-Pdf-Messages') ?? 0),
+    };
+  }
+
   async function downloadUnreadFolderPdfs(folderId: string) {
     if (downloadingPdfFolderId) return;
     setMailboxContextMenu(null);
@@ -2032,25 +2114,46 @@ export function EmailClient() {
         throw new Error(payload.error || 'No se pudieron descargar los PDFs pendientes');
       }
 
-      const blob = await res.blob();
-      const disposition = res.headers.get('Content-Disposition') ?? '';
-      const match = disposition.match(/filename="([^"]+)"/i);
-      const fileName = match?.[1] ?? 'pdfs-pendientes.zip';
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-
-      const attachmentCount = Number(res.headers.get('X-Email-Pdf-Attachments') ?? 0);
-      const messageCount = Number(res.headers.get('X-Email-Pdf-Messages') ?? 0);
+      const { attachmentCount, messageCount } = await savePdfZipResponse(res);
       toast.success(`${attachmentCount} PDFs descargados de ${messageCount} correos`, { id: toastId });
       await load({ silent: true, useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudieron descargar los PDFs pendientes', { id: toastId });
+    } finally {
+      setDownloadingPdfFolderId(null);
+    }
+  }
+
+  function accumulateFolderPdfs(folderId: string) {
+    const folder = folders.find((item) => item.id === folderId);
+    setMailboxContextMenu(null);
+    setPdfFolderCartIds((current) => new Set([...current, folderId]));
+    setPdfFolderCartOpen(true);
+    toast.success(`${folder?.name ?? 'Carpeta'} acumulada`);
+  }
+
+  async function downloadAccumulatedFolderPdfs() {
+    if (downloadingPdfFolderId || pdfFolderCartIds.size === 0) return;
+    setDownloadingPdfFolderId('cart');
+    const toastId = toast.loading('Preparando PDFs acumulados...');
+    try {
+      const res = await fetch('/api/email/pdf-attachments/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_ids: [...pdfFolderCartIds] }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || 'No se pudieron descargar los PDFs acumulados');
+      }
+
+      const { attachmentCount, messageCount } = await savePdfZipResponse(res);
+      toast.success(`${attachmentCount} PDFs descargados de ${messageCount} correos`, { id: toastId });
+      setPdfFolderCartIds(new Set());
+      setPdfFolderCartOpen(false);
+      await load({ silent: true, useCache: false, includeWorkspace: true });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron descargar los PDFs acumulados', { id: toastId });
     } finally {
       setDownloadingPdfFolderId(null);
     }
@@ -2736,6 +2839,18 @@ export function EmailClient() {
           ))}
         </div>
         <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
+          {pdfFolderCartIds.size > 0 ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setPdfFolderCartOpen(true)}
+              title="PDFs acumulados"
+              aria-label="PDFs acumulados"
+            >
+              <Download className="size-4" />
+              {pdfFolderCartIds.size}
+            </Button>
+          ) : null}
           <Button size="icon-sm" variant="outline" onClick={sync} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
             {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           </Button>
@@ -3283,6 +3398,11 @@ export function EmailClient() {
                   ? () => void downloadUnreadFolderPdfs(mailboxContextMenu.folderId as string)
                   : undefined
               }
+              onAccumulateUnreadPdfs={
+                mailboxContextMenu.folderId
+                  ? () => accumulateFolderPdfs(mailboxContextMenu.folderId as string)
+                  : undefined
+              }
             />
           ) : null}
         </section>
@@ -3630,6 +3750,70 @@ export function EmailClient() {
                 <Button type="button" onClick={() => void createPublicFolder()} disabled={!publicFolderName.trim()}>
                   <FolderPlus className="size-4" />
                   Crear carpeta
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={pdfFolderCartOpen} onOpenChange={setPdfFolderCartOpen}>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>PDFs acumulados</DialogTitle>
+                <DialogDescription>
+                  Se descargará un ZIP único con PDFs pendientes de las carpetas acumuladas.
+                </DialogDescription>
+              </DialogHeader>
+              {pdfFolderCart.length === 0 ? (
+                <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                  No hay carpetas acumuladas.
+                </div>
+              ) : (
+                <div className="max-h-72 space-y-1 overflow-y-auto pr-1">
+                  {pdfFolderCart.map((folder) => (
+                    <div key={folder.id} className="flex min-h-9 items-center gap-2 rounded-md border border-border px-2 text-sm">
+                      <Archive className="size-4 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                      {(folder.unread_count ?? 0) > 0 ? (
+                        <span className="rounded-full bg-primary/10 px-1.5 text-xs font-medium text-primary">
+                          {folder.unread_count}
+                        </span>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        onClick={() => {
+                          setPdfFolderCartIds((current) => {
+                            const next = new Set(current);
+                            next.delete(folder.id);
+                            return next;
+                          });
+                        }}
+                        title="Quitar carpeta"
+                        aria-label="Quitar carpeta"
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setPdfFolderCartIds(new Set())}
+                  disabled={pdfFolderCartIds.size === 0 || Boolean(downloadingPdfFolderId)}
+                >
+                  Vaciar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void downloadAccumulatedFolderPdfs()}
+                  disabled={pdfFolderCartIds.size === 0 || Boolean(downloadingPdfFolderId)}
+                >
+                  {downloadingPdfFolderId === 'cart' ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                  Descargar ZIP
                 </Button>
               </DialogFooter>
             </DialogContent>

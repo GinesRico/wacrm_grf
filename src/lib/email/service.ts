@@ -1970,28 +1970,32 @@ export async function getEmailAttachmentFileForUser(args: {
   };
 }
 
-export async function exportUnreadFolderPdfAttachmentsForUser(args: {
+async function exportUnreadFoldersPdfAttachmentsForUser(args: {
   accountId: string;
   userId: string;
   role: AccountRole;
-  folderId: string;
+  folderIds: string[];
 }) {
-  const [folder] = await db
+  const folderIds = [...new Set(args.folderIds)].filter(Boolean).slice(0, 50);
+  if (folderIds.length === 0) throw new Error('Choose at least one folder.');
+
+  const folders = await db
     .select()
     .from(emailFolders)
-    .where(and(eq(emailFolders.accountId, args.accountId), eq(emailFolders.id, args.folderId)))
-    .limit(1);
-  if (!folder) throw new Error('Folder not found.');
+    .where(and(eq(emailFolders.accountId, args.accountId), inArray(emailFolders.id, folderIds)));
+  if (folders.length !== folderIds.length) throw new Error('Folder not found.');
 
-  const permission = await resolveEmailPermission({
-    accountId: args.accountId,
-    userId: args.userId,
-    role: args.role,
-    mailboxId: folder.mailboxId,
-    folderId: folder.id,
-  });
-  if (!permission.canRead) {
-    throw new Error('You do not have permission to read this folder.');
+  for (const folder of folders) {
+    const permission = await resolveEmailPermission({
+      accountId: args.accountId,
+      userId: args.userId,
+      role: args.role,
+      mailboxId: folder.mailboxId,
+      folderId: folder.id,
+    });
+    if (!permission.canRead) {
+      throw new Error('You do not have permission to read this folder.');
+    }
   }
 
   const rows = await db
@@ -2004,7 +2008,8 @@ export async function exportUnreadFolderPdfAttachmentsForUser(args: {
     .where(
       and(
         eq(emailMessages.accountId, args.accountId),
-        eq(emailMessages.folderId, folder.id),
+        eq(emailAttachments.accountId, args.accountId),
+        inArray(emailMessages.folderId, folderIds),
         eq(emailMessages.isRead, false),
         eq(emailMessages.externalState, 'present'),
         or(
@@ -2025,7 +2030,6 @@ export async function exportUnreadFolderPdfAttachmentsForUser(args: {
   }
 
   const zip = new JSZip();
-  const folderName = safeZipName(folder.name, 'carpeta');
   const seenPaths = new Set<string>();
   const includedMessageIds = new Set<string>();
   let totalBytes = 0;
@@ -2037,11 +2041,8 @@ export async function exportUnreadFolderPdfAttachmentsForUser(args: {
       throw new Error('Los PDFs pendientes superan 250 MB. Divide la descarga en partes mas pequenas.');
     }
 
-    const date = row.message.receivedAt.toISOString().slice(0, 10);
-    const sender = safeZipName(row.message.fromName || row.message.fromAddress, 'remitente');
-    const subject = safeZipName(row.message.subject || 'sin asunto', 'sin asunto');
     const fileName = safeZipName(row.attachment.fileName, 'adjunto.pdf');
-    const path = uniqueZipPath(`${folderName}/${date} - ${sender} - ${subject}/${fileName}`, seenPaths);
+    const path = uniqueZipPath(fileName, seenPaths);
     zip.file(path, bytes);
     includedMessageIds.add(row.message.id);
   }
@@ -2075,11 +2076,12 @@ export async function exportUnreadFolderPdfAttachmentsForUser(args: {
   await db.insert(emailAuditEvents).values({
     accountId: args.accountId,
     userId: args.userId,
-    mailboxId: folder.mailboxId,
-    folderId: folder.id,
+    mailboxId: folders.length === 1 ? folders[0]?.mailboxId ?? null : null,
+    folderId: folders.length === 1 ? folders[0]?.id ?? null : null,
     eventType: 'folder.unread_pdfs_exported',
     metadata: {
-      folder_name: folder.name,
+      folder_ids: folderIds,
+      folder_names: folders.map((folder) => folder.name),
       message_count: messageIds.length,
       attachment_count: rows.length,
       bytes: zipBytes.byteLength,
@@ -2092,10 +2094,35 @@ export async function exportUnreadFolderPdfAttachmentsForUser(args: {
 
   return {
     bytes: zipBytes,
-    fileName: `${folderName}-pdfs-pendientes.zip`,
+    fileName: folders.length === 1
+      ? `${safeZipName(folders[0]?.name ?? 'carpeta', 'carpeta')}-pdfs-pendientes.zip`
+      : `pdfs-pendientes-${folders.length}-carpetas.zip`,
     messageCount: messageIds.length,
     attachmentCount: rows.length,
   };
+}
+
+export async function exportUnreadFolderPdfAttachmentsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  folderId: string;
+}) {
+  return exportUnreadFoldersPdfAttachmentsForUser({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    folderIds: [args.folderId],
+  });
+}
+
+export async function exportUnreadPdfAttachmentsForFolders(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  folderIds: string[];
+}) {
+  return exportUnreadFoldersPdfAttachmentsForUser(args);
 }
 
 export async function listEmailLabelsForUser(args: {
