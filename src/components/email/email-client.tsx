@@ -122,8 +122,8 @@ interface Message {
 }
 
 interface MessagesResponse {
-  mailboxes: Mailbox[];
-  folders: Folder[];
+  mailboxes?: Mailbox[];
+  folders?: Folder[];
   messages: Message[];
 }
 
@@ -1060,8 +1060,12 @@ export function EmailClient() {
   const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreviewState | null>(null);
   const attachmentUrlsRef = useRef(new Map<string, string>());
   const hasLoadedRef = useRef(false);
+  const mailboxesRef = useRef<Mailbox[]>([]);
+  const foldersRef = useRef<Folder[]>([]);
   const readerMessageRef = useRef<Message | null>(null);
   const selectionAnchorMessageIdRef = useRef<string | null>(null);
+  const viewCacheRef = useRef(new Map<string, MessagesResponse>());
+  const loadSeqRef = useRef(0);
   const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const keepReaderMessage = useCallback((message: Message | null) => {
@@ -1248,6 +1252,7 @@ export function EmailClient() {
   const applyRealtimeMessage = useCallback((eventName: 'created' | 'updated' | 'deleted', event: RealtimeEmailEvent) => {
     const message = event.payload?.message;
     if (!message) return;
+    viewCacheRef.current.clear();
 
     setFolders((current) =>
       current.map((folder) => {
@@ -1282,16 +1287,32 @@ export function EmailClient() {
     }
   }, [keepReaderMessage, messageMatchesCurrentView, sortMessagesByCurrentSort]);
 
-  const load = useCallback(async (options?: { silent?: boolean }) => {
-    const silent = options?.silent ?? hasLoadedRef.current;
+  const load = useCallback(async (options?: { silent?: boolean; useCache?: boolean; includeWorkspace?: boolean }) => {
+    const requestParams = params;
+    const requestId = loadSeqRef.current + 1;
+    loadSeqRef.current = requestId;
+    const cached = options?.useCache === false ? undefined : viewCacheRef.current.get(requestParams);
+    const hasWorkspace = mailboxesRef.current.length > 0 || foldersRef.current.length > 0;
+    const silent = options?.silent ?? (hasLoadedRef.current || Boolean(cached));
+    if (cached) {
+      setMessages(cached.messages);
+      setSelectedMessageIds((current) => {
+        const nextMessageIds = new Set(cached.messages.map((message) => message.id));
+        const nextSelection = [...current].filter((id) => nextMessageIds.has(id));
+        return nextSelection.length === current.size ? current : new Set(nextSelection);
+      });
+    }
     if (!silent) setLoading(true);
     try {
-      const res = await fetch(`/api/email/messages?${params}`, { cache: 'no-store' });
+      const fetchParams = new URLSearchParams(requestParams);
+      if (hasWorkspace && options?.includeWorkspace !== true) fetchParams.set('workspace', 'false');
+      const res = await fetch(`/api/email/messages?${fetchParams.toString()}`, { cache: 'no-store' });
       const payload = (await res.json().catch(() => ({}))) as Partial<MessagesResponse> & { error?: string };
       if (!res.ok) throw new Error(payload.error || 'No se pudo cargar el correo');
+      if (requestId !== loadSeqRef.current) return;
 
-      const nextMailboxes = payload.mailboxes ?? [];
-      const nextFolders = payload.folders ?? [];
+      const nextMailboxes = payload.mailboxes ?? mailboxesRef.current;
+      const nextFolders = payload.folders ?? foldersRef.current;
       const nextMessages = payload.messages ?? [];
       const retainedFolder = selectedFolderId
         ? nextFolders.find((folder) => folder.id === selectedFolderId) ?? null
@@ -1309,6 +1330,17 @@ export function EmailClient() {
             nextFolders.find((folder) => !folder.mailbox_id)?.id ??
             null;
 
+      mailboxesRef.current = nextMailboxes;
+      foldersRef.current = nextFolders;
+      viewCacheRef.current.set(requestParams, {
+        mailboxes: nextMailboxes,
+        folders: nextFolders,
+        messages: nextMessages,
+      });
+      if (viewCacheRef.current.size > 20) {
+        const oldest = viewCacheRef.current.keys().next().value;
+        if (oldest) viewCacheRef.current.delete(oldest);
+      }
       setMailboxes(nextMailboxes);
       setFolders(nextFolders);
       setMessages(nextMessages);
@@ -1328,7 +1360,7 @@ export function EmailClient() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar el correo');
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && requestId === loadSeqRef.current) setLoading(false);
     }
   }, [params, selectedFolderId, selectedMailboxId]);
 
@@ -1497,7 +1529,7 @@ export function EmailClient() {
       toast.error(payload.error || 'No se pudo actualizar');
       return false;
     }
-    if (reload) await load();
+    if (reload) await load({ useCache: false, includeWorkspace: true });
     return true;
   }
 
@@ -1509,7 +1541,7 @@ export function EmailClient() {
   async function selectMessage(message: Message) {
     keepReaderMessage(message);
     setSelectedMessageId(message.id);
-    setSelectedMessageIds(new Set([message.id]));
+    setSelectedMessageIds(new Set());
     selectionAnchorMessageIdRef.current = message.id;
     setActiveTabId((current) => current || 'folder');
     if (!message.is_read) {
@@ -1586,10 +1618,10 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo actualizar la seleccion');
       toast.success(`${messageIds.length} correos actualizados`);
-      await load({ silent: true });
+      await load({ silent: true, useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo actualizar la seleccion');
-      await load({ silent: true });
+      await load({ silent: true, useCache: false, includeWorkspace: true });
     }
   }
 
@@ -1940,10 +1972,10 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo marcar el buzon como leido');
       toast.success(`${payload.updated ?? 0} correos marcados como leidos`);
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo marcar el buzon como leido');
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     }
   }
 
@@ -1963,10 +1995,10 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo marcar la carpeta como leida');
       toast.success(`${payload.updated ?? 0} correos marcados como leidos`);
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo marcar la carpeta como leida');
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     }
   }
 
@@ -2067,7 +2099,7 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo sincronizar');
       toast.success(`Sincronizacion completada: ${payload.imported ?? 0} nuevos`);
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo sincronizar');
     } finally {
@@ -2091,7 +2123,7 @@ export function EmailClient() {
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudieron aplicar las reglas');
       toast.success(`Reglas aplicadas: ${payload.matched ?? 0} correos coincidentes, ${payload.updated ?? 0} actualizados`);
-      await load();
+      await load({ useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudieron aplicar las reglas');
     } finally {
@@ -2115,7 +2147,7 @@ export function EmailClient() {
     setPublicFolderName('');
     setPublicFolderDialogOpen(false);
     toast.success('Carpeta publica creada');
-    await load();
+    await load({ useCache: false, includeWorkspace: true });
   }
 
   async function createRuleFromBuilder(applyAfterCreate = false) {
@@ -3136,13 +3168,7 @@ export function EmailClient() {
                     tabIndex={0}
                     onClick={(event) => handleMessageClick(event, message)}
                     onDoubleClick={() => void openMessageTab(message)}
-                    onContextMenu={(event) => {
-                      if (!selectedMessageIds.has(message.id)) {
-                        setSelectedMessageIds(new Set([message.id]));
-                        selectionAnchorMessageIdRef.current = message.id;
-                      }
-                      openMessageContextMenu(event, message);
-                    }}
+                    onContextMenu={(event) => openMessageContextMenu(event, message)}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') void selectMessage(message);
                       if (event.key === ' ') {

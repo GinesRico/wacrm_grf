@@ -1042,6 +1042,7 @@ export async function listEmailWorkspace(args: {
   accountId: string;
   userId: string;
   role: AccountRole;
+  includeUnreadCounts?: boolean;
 }) {
   const { listAccessibleMailboxes, listAccessibleFolders } = await import('./permissions');
   const mailboxes = await listAccessibleMailboxes(args);
@@ -1050,7 +1051,7 @@ export async function listEmailWorkspace(args: {
     mailboxIds: mailboxes.map((mailbox) => mailbox.id),
   });
   const folderIds = folders.map((folder) => folder.id);
-  const unreadRows = folderIds.length > 0
+  const unreadRows = args.includeUnreadCounts !== false && folderIds.length > 0
     ? await db
         .select({
           folderId: emailMessages.folderId,
@@ -1485,8 +1486,10 @@ export async function listEmailMessages(args: {
   from?: string | null;
   to?: string | null;
   sort?: string | null;
+  includeWorkspace?: boolean;
 }) {
-  const workspace = await listEmailWorkspace(args);
+  const includeWorkspace = args.includeWorkspace !== false;
+  const workspace = await listEmailWorkspace({ ...args, includeUnreadCounts: includeWorkspace });
   const allowedMailboxIds = workspace.mailboxes.map((mailbox) => mailbox.id);
   const allowedFolderIds = workspace.folders.map((folder) => folder.id);
   if (allowedFolderIds.length === 0) {
@@ -1611,7 +1614,7 @@ export async function listEmailMessages(args: {
       ...serializeEmailMessage(row, { isReplied: repliedMessageIds.has(row.id) }),
       labels: labelsByMessage.get(row.id) ?? [],
     })),
-    ...workspace,
+    ...(includeWorkspace ? workspace : {}),
   };
 }
 

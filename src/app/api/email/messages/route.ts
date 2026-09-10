@@ -27,6 +27,7 @@ export async function GET(request: Request) {
         from: url.searchParams.get('from'),
         to: url.searchParams.get('to'),
         sort: url.searchParams.get('sort'),
+        includeWorkspace: url.searchParams.get('workspace') !== 'false',
       }),
     );
   } catch (err) {
