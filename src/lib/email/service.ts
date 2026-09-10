@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import crypto from 'crypto';
 import { ImapFlow } from 'imapflow';
+import JSZip from 'jszip';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import nodemailer from 'nodemailer';
 
@@ -54,6 +55,35 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'carpeta';
+}
+
+function safeZipName(value: string, fallback: string) {
+  return (value || fallback)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 120) || fallback;
+}
+
+function uniqueZipPath(path: string, seen: Set<string>) {
+  if (!seen.has(path)) {
+    seen.add(path);
+    return path;
+  }
+  const dot = path.lastIndexOf('.');
+  const base = dot > -1 ? path.slice(0, dot) : path;
+  const ext = dot > -1 ? path.slice(dot) : '';
+  let index = 2;
+  let next = `${base}-${index}${ext}`;
+  while (seen.has(next)) {
+    index += 1;
+    next = `${base}-${index}${ext}`;
+  }
+  seen.add(next);
+  return next;
 }
 
 function addressList(input?: AddressObject | AddressObject[] | null): string[] {
@@ -1823,6 +1853,7 @@ export async function markEmailFolderAsRead(args: {
     .where(
       and(
         eq(emailMessages.accountId, args.accountId),
+        eq(emailAttachments.accountId, args.accountId),
         eq(emailMessages.folderId, folder.id),
         eq(emailMessages.isRead, false),
       ),
@@ -1936,6 +1967,134 @@ export async function getEmailAttachmentFileForUser(args: {
   return {
     ...serializeEmailAttachment(attachment),
     bytes: await getObjectBytes(attachment.storageKey),
+  };
+}
+
+export async function exportUnreadFolderPdfAttachmentsForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  folderId: string;
+}) {
+  const [folder] = await db
+    .select()
+    .from(emailFolders)
+    .where(and(eq(emailFolders.accountId, args.accountId), eq(emailFolders.id, args.folderId)))
+    .limit(1);
+  if (!folder) throw new Error('Folder not found.');
+
+  const permission = await resolveEmailPermission({
+    accountId: args.accountId,
+    userId: args.userId,
+    role: args.role,
+    mailboxId: folder.mailboxId,
+    folderId: folder.id,
+  });
+  if (!permission.canRead) {
+    throw new Error('You do not have permission to read this folder.');
+  }
+
+  const rows = await db
+    .select({
+      message: emailMessages,
+      attachment: emailAttachments,
+    })
+    .from(emailAttachments)
+    .innerJoin(emailMessages, eq(emailMessages.id, emailAttachments.messageId))
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        eq(emailMessages.folderId, folder.id),
+        eq(emailMessages.isRead, false),
+        eq(emailMessages.externalState, 'present'),
+        or(
+          ilike(emailAttachments.contentType, '%pdf%'),
+          ilike(emailAttachments.fileName, '%.pdf'),
+          ilike(emailAttachments.fileName, '%.PDF'),
+        ),
+      ),
+    )
+    .orderBy(asc(emailMessages.receivedAt), asc(emailAttachments.fileName))
+    .limit(301);
+
+  if (rows.length === 0) {
+    return null;
+  }
+  if (rows.length > 300) {
+    throw new Error('Hay mas de 300 PDFs pendientes. Divide la descarga en carpetas mas pequenas.');
+  }
+
+  const zip = new JSZip();
+  const folderName = safeZipName(folder.name, 'carpeta');
+  const seenPaths = new Set<string>();
+  const includedMessageIds = new Set<string>();
+  let totalBytes = 0;
+
+  for (const row of rows) {
+    const bytes = await getObjectBytes(row.attachment.storageKey);
+    totalBytes += bytes.byteLength;
+    if (totalBytes > 250 * 1024 * 1024) {
+      throw new Error('Los PDFs pendientes superan 250 MB. Divide la descarga en partes mas pequenas.');
+    }
+
+    const date = row.message.receivedAt.toISOString().slice(0, 10);
+    const sender = safeZipName(row.message.fromName || row.message.fromAddress, 'remitente');
+    const subject = safeZipName(row.message.subject || 'sin asunto', 'sin asunto');
+    const fileName = safeZipName(row.attachment.fileName, 'adjunto.pdf');
+    const path = uniqueZipPath(`${folderName}/${date} - ${sender} - ${subject}/${fileName}`, seenPaths);
+    zip.file(path, bytes);
+    includedMessageIds.add(row.message.id);
+  }
+
+  const zipBytes = await zip.generateAsync({
+    type: 'uint8array',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+
+  const messageIds = [...includedMessageIds];
+  const updated = await db
+    .update(emailMessages)
+    .set({ isRead: true, imapFlags: sql`array_append(array_remove(${emailMessages.imapFlags}, '\\Seen'), '\\Seen')`, updatedAt: new Date() })
+    .where(
+      and(
+        eq(emailMessages.accountId, args.accountId),
+        inArray(emailMessages.id, messageIds),
+        eq(emailMessages.isRead, false),
+      ),
+    )
+    .returning();
+
+  await syncReadStateToImap({
+    accountId: args.accountId,
+    userId: args.userId,
+    messages: updated,
+    isRead: true,
+  });
+
+  await db.insert(emailAuditEvents).values({
+    accountId: args.accountId,
+    userId: args.userId,
+    mailboxId: folder.mailboxId,
+    folderId: folder.id,
+    eventType: 'folder.unread_pdfs_exported',
+    metadata: {
+      folder_name: folder.name,
+      message_count: messageIds.length,
+      attachment_count: rows.length,
+      bytes: zipBytes.byteLength,
+    },
+  });
+
+  if (updated.length > 0) {
+    await Promise.all(updated.map((row) => publishEmailMessageEvent('email.message.updated', row, 'folder_pdfs_exported')));
+  }
+
+  return {
+    bytes: zipBytes,
+    fileName: `${folderName}-pdfs-pendientes.zip`,
+    messageCount: messageIds.length,
+    attachmentCount: rows.length,
   };
 }
 

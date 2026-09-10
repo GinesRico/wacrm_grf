@@ -19,7 +19,6 @@ import {
   ArrowUp,
   Bold,
   Check,
-  CheckSquare,
   Columns3,
   Download,
   FileIcon,
@@ -48,7 +47,6 @@ import {
   Send,
   Settings,
   SlidersHorizontal,
-  Square,
   Star,
   Tag,
   Trash2,
@@ -315,7 +313,7 @@ const DEFAULT_EMAIL_COLUMN_VISIBILITY: EmailColumnVisibility = {
   size: true,
 };
 const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
-  status: 68,
+  status: 48,
   from: 170,
   subject: 360,
   labels: 140,
@@ -323,7 +321,7 @@ const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
   size: 84,
 };
 const MIN_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
-  status: 64,
+  status: 44,
   from: 120,
   subject: 220,
   labels: 96,
@@ -772,12 +770,14 @@ function MailboxContextMenu({
   mailboxName,
   target,
   onMarkAllRead,
+  onDownloadUnreadPdfs,
 }: {
   x: number;
   y: number;
   mailboxName: string;
   target: 'mailbox' | 'folder';
   onMarkAllRead: () => void;
+  onDownloadUnreadPdfs?: () => void;
 }) {
   return (
     <div
@@ -796,6 +796,16 @@ function MailboxContextMenu({
         <MailOpen className="size-4" />
         <span className="truncate">{target === 'folder' ? 'Marcar carpeta como leida' : 'Marcar todos como leidos'}</span>
       </button>
+      {target === 'folder' && onDownloadUnreadPdfs ? (
+        <button
+          type="button"
+          onClick={onDownloadUnreadPdfs}
+          className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+        >
+          <Download className="size-4" />
+          <span className="truncate">Descargar PDFs</span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1024,6 +1034,7 @@ export function EmailClient() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [applyingRules, setApplyingRules] = useState(false);
+  const [downloadingPdfFolderId, setDownloadingPdfFolderId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
@@ -1161,10 +1172,10 @@ export function EmailClient() {
   }, [activeFilter, messages]);
   const selectedVisibleMessageCount = filteredMessages.filter((message) => selectedMessageIds.has(message.id)).length;
 
-  const params = useMemo(() => {
+  const buildViewParams = useCallback((mailboxId: string | null, folderId: string | null) => {
     const next = new URLSearchParams();
-    if (selectedMailboxId) next.set('mailbox_id', selectedMailboxId);
-    if (selectedFolderId && searchScope === 'folder') next.set('folder_id', selectedFolderId);
+    if (mailboxId) next.set('mailbox_id', mailboxId);
+    if (folderId && searchScope === 'folder') next.set('folder_id', folderId);
     if (query.trim()) next.set('q', query.trim());
     if (advanced.from.trim()) next.set('from', advanced.from.trim());
     if (advanced.to.trim()) next.set('to', advanced.to.trim());
@@ -1174,7 +1185,12 @@ export function EmailClient() {
     if (activeFilter === 'attachments') next.set('attachments', 'true');
     if (activeFilter === 'starred') next.set('starred', 'true');
     return next.toString();
-  }, [activeFilter, advanced.from, advanced.sort, advanced.to, query, searchScope, selectedFolderId, selectedLabelId, selectedMailboxId]);
+  }, [activeFilter, advanced.from, advanced.sort, advanced.to, query, searchScope, selectedLabelId]);
+
+  const params = useMemo(
+    () => buildViewParams(selectedMailboxId, selectedFolderId),
+    [buildViewParams, selectedFolderId, selectedMailboxId],
+  );
 
   const trashFolderId = mailboxFolders.find((folder) => folder.kind === 'trash')?.id ?? '';
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
@@ -1293,7 +1309,7 @@ export function EmailClient() {
     loadSeqRef.current = requestId;
     const cached = options?.useCache === false ? undefined : viewCacheRef.current.get(requestParams);
     const hasWorkspace = mailboxesRef.current.length > 0 || foldersRef.current.length > 0;
-    const silent = options?.silent ?? (hasLoadedRef.current || Boolean(cached));
+    const silent = options?.silent ?? Boolean(cached);
     if (cached) {
       setMessages(cached.messages);
       setSelectedMessageIds((current) => {
@@ -1376,7 +1392,7 @@ export function EmailClient() {
       if (realtimeRefreshTimerRef.current) clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = setTimeout(() => {
         realtimeRefreshTimerRef.current = null;
-        void load({ silent: true });
+        void load({ silent: true, useCache: false, includeWorkspace: true });
       }, 450);
     };
     const created = (event: RealtimeEmailEvent) => {
@@ -1555,6 +1571,19 @@ export function EmailClient() {
   function clearMessageSelection() {
     setSelectedMessageIds(new Set());
     selectionAnchorMessageIdRef.current = null;
+  }
+
+  function previewMessageView(mailboxId: string | null, folderId: string | null) {
+    const cached = viewCacheRef.current.get(buildViewParams(mailboxId, folderId));
+    setSelectedMessageIds(new Set());
+    selectionAnchorMessageIdRef.current = null;
+    if (cached) {
+      setMessages(cached.messages);
+      setLoading(false);
+      return;
+    }
+    setMessages([]);
+    setLoading(true);
   }
 
   function toggleMessageSelection(message: Message) {
@@ -1756,21 +1785,8 @@ export function EmailClient() {
 
   function renderMessageCell(message: Message, column: EmailColumnId) {
     if (column === 'status') {
-      const isSelected = selectedMessageIds.has(message.id);
       return (
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleMessageSelection(message);
-            }}
-            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-primary"
-            title={isSelected ? 'Quitar de la seleccion' : 'Seleccionar correo'}
-            aria-label={isSelected ? 'Quitar de la seleccion' : 'Seleccionar correo'}
-          >
-            {isSelected ? <CheckSquare className="size-3.5 text-primary" /> : <Square className="size-3.5" />}
-          </button>
           <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
           {message.is_replied ? (
             <Reply className="size-3.5 shrink-0 text-primary" aria-label="Respondido" />
@@ -1999,6 +2015,44 @@ export function EmailClient() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo marcar la carpeta como leida');
       await load({ useCache: false, includeWorkspace: true });
+    }
+  }
+
+  async function downloadUnreadFolderPdfs(folderId: string) {
+    if (downloadingPdfFolderId) return;
+    setMailboxContextMenu(null);
+    setDownloadingPdfFolderId(folderId);
+    const toastId = toast.loading('Preparando PDFs pendientes...');
+    try {
+      const res = await fetch(`/api/email/folders/${encodeURIComponent(folderId)}/pdf-attachments/export`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || 'No se pudieron descargar los PDFs pendientes');
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const match = disposition.match(/filename="([^"]+)"/i);
+      const fileName = match?.[1] ?? 'pdfs-pendientes.zip';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      const attachmentCount = Number(res.headers.get('X-Email-Pdf-Attachments') ?? 0);
+      const messageCount = Number(res.headers.get('X-Email-Pdf-Messages') ?? 0);
+      toast.success(`${attachmentCount} PDFs descargados de ${messageCount} correos`, { id: toastId });
+      await load({ silent: true, useCache: false, includeWorkspace: true });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudieron descargar los PDFs pendientes', { id: toastId });
+    } finally {
+      setDownloadingPdfFolderId(null);
     }
   }
 
@@ -2620,8 +2674,8 @@ export function EmailClient() {
 
   return (
     <div className="-m-4 flex h-screen flex-col overflow-hidden bg-background sm:-m-6">
-      <div className="flex min-h-10 items-end gap-2 border-b border-border bg-card px-2">
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto">
+      <div className="flex min-h-10 items-end gap-2 border-b border-border bg-card pl-0 pr-2">
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto pl-0">
           <button
             type="button"
             onClick={() => {
@@ -2629,7 +2683,7 @@ export function EmailClient() {
               setComposeOpen(false);
             }}
             className={cn(
-              'flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
+              'ml-0 flex h-9 max-w-[240px] items-center gap-2 rounded-t-md border border-b-0 px-3 text-sm',
               activeTabId === 'folder' ? 'border-border bg-background text-primary' : 'border-transparent bg-muted/60 text-muted-foreground',
             )}
           >
@@ -2726,7 +2780,7 @@ export function EmailClient() {
         } as CSSProperties}
       >
         <aside className={cn(
-          'relative flex min-w-0 flex-col border-b border-border bg-card lg:border-b-0 lg:border-r',
+          'relative flex min-h-0 min-w-0 flex-col overflow-hidden border-b border-border bg-card lg:border-b-0 lg:border-r',
           isBottomReaderLayout && 'lg:row-span-3',
         )}>
           <PanelResizer label="Ajustar ancho del buzón" onResizeStart={(event) => startPanelResize('sidebar', event)} />
@@ -2738,7 +2792,7 @@ export function EmailClient() {
               </div>
             </div>
           </div>
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3">
+          <div className="h-0 min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain [scrollbar-gutter:stable] p-3">
             <div>
               <p className="mb-2 px-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Buzones</p>
               {mailboxes.length === 0 ? (
@@ -2754,10 +2808,11 @@ export function EmailClient() {
                         onContextMenu={(event) => openMailboxContextMenu(event, mailbox)}
                         onClick={() => {
                           const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
+                          const nextFolderId = inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null;
+                          previewMessageView(mailbox.id, nextFolderId);
                           setSelectedMailboxId(mailbox.id);
-                          setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
+                          setSelectedFolderId(nextFolderId);
                           setSelectedMessageId(null);
-                          clearMessageSelection();
                           setActiveTabId('folder');
                           setComposeOpen(false);
                         }}
@@ -2790,10 +2845,10 @@ export function EmailClient() {
                               type="button"
                               onContextMenu={(event) => openFolderContextMenu(event, folder, mailbox.id)}
                               onClick={() => {
+                                previewMessageView(mailbox.id, folder.id);
                                 setSelectedMailboxId(mailbox.id);
                                 setSelectedFolderId(folder.id);
                                 setSelectedMessageId(null);
-                                clearMessageSelection();
                                 setActiveTabId('folder');
                                 setComposeOpen(false);
                               }}
@@ -2842,10 +2897,10 @@ export function EmailClient() {
                       type="button"
                       onContextMenu={(event) => openFolderContextMenu(event, folder, selectedMailboxId)}
                       onClick={() => {
+                        previewMessageView(folder.mailbox_id, folder.id);
                         setSelectedMailboxId(folder.mailbox_id);
                         setSelectedFolderId(folder.id);
                         setSelectedMessageId(null);
-                        clearMessageSelection();
                         setActiveTabId('folder');
                         setComposeOpen(false);
                       }}
@@ -3223,6 +3278,11 @@ export function EmailClient() {
                 }
                 void markMailboxAsRead(mailboxContextMenu.mailboxId);
               }}
+              onDownloadUnreadPdfs={
+                mailboxContextMenu.folderId
+                  ? () => void downloadUnreadFolderPdfs(mailboxContextMenu.folderId as string)
+                  : undefined
+              }
             />
           ) : null}
         </section>
