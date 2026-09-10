@@ -2951,7 +2951,7 @@ export function EmailClient() {
                       </button>
                       <div className="ml-4 mt-1 space-y-0.5 border-l border-border pl-2">
                         {folders
-                          .filter((folder) => folder.mailbox_id === mailbox.id && folder.kind !== 'custom')
+                          .filter((folder) => folder.mailbox_id === mailbox.id)
                           .sort((a, b) => a.position - b.position)
                           .map((folder) => (
                             <button
