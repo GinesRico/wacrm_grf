@@ -1853,7 +1853,6 @@ export async function markEmailFolderAsRead(args: {
     .where(
       and(
         eq(emailMessages.accountId, args.accountId),
-        eq(emailAttachments.accountId, args.accountId),
         eq(emailMessages.folderId, folder.id),
         eq(emailMessages.isRead, false),
       ),

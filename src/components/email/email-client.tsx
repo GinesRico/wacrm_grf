@@ -2128,7 +2128,6 @@ export function EmailClient() {
     const folder = folders.find((item) => item.id === folderId);
     setMailboxContextMenu(null);
     setPdfFolderCartIds((current) => new Set([...current, folderId]));
-    setPdfFolderCartOpen(true);
     toast.success(`${folder?.name ?? 'Carpeta'} acumulada`);
   }
 
