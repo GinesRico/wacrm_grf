@@ -20,6 +20,7 @@ import {
   emailMessages,
   emailPermissions,
   emailRules,
+  emailSignatures,
   emailUserPermissions,
   profiles,
 } from '@/db/schema';
@@ -66,6 +67,12 @@ function safeZipName(value: string, fallback: string) {
     .trim()
     .replace(/^\.+|\.+$/g, '')
     .slice(0, 120) || fallback;
+}
+
+function displayEmailFolderName(row: Pick<typeof emailFolders.$inferSelect, 'name' | 'slug'>) {
+  const normalized = `${row.slug} ${row.name}`.toLowerCase();
+  if (/\b(junk|spam)\b/.test(normalized) || normalized.includes('correo-no-deseado')) return 'SPAM';
+  return row.name;
 }
 
 function uniqueZipPath(path: string, seen: Set<string>) {
@@ -185,7 +192,7 @@ export function serializeEmailFolder(
     id: row.id,
     account_id: row.accountId,
     mailbox_id: row.mailboxId,
-    name: row.name,
+    name: displayEmailFolderName(row),
     slug: row.slug,
     kind: row.kind,
     position: row.position,
@@ -305,6 +312,115 @@ export function serializeEmailDraft(row: typeof emailDrafts.$inferSelect) {
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
+}
+
+export function serializeEmailSignature(row: typeof emailSignatures.$inferSelect) {
+  return {
+    id: row.id,
+    account_id: row.accountId,
+    user_id: row.userId,
+    mailbox_id: row.mailboxId,
+    name: row.name,
+    body_text: row.bodyText,
+    body_html: row.bodyHtml,
+    enabled: row.enabled,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+export async function getEmailSignatureForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId?: string | null;
+}) {
+  if (args.mailboxId) {
+    const permission = await resolveEmailPermission({
+      accountId: args.accountId,
+      userId: args.userId,
+      role: args.role,
+      mailboxId: args.mailboxId,
+    });
+    if (!permission.canSend) throw new Error('You do not have permission to send from this mailbox.');
+  }
+
+  const filters = [
+    and(
+      eq(emailSignatures.accountId, args.accountId),
+      eq(emailSignatures.userId, args.userId),
+      isNull(emailSignatures.mailboxId),
+    ),
+  ];
+  if (args.mailboxId) {
+    filters.unshift(and(
+      eq(emailSignatures.accountId, args.accountId),
+      eq(emailSignatures.userId, args.userId),
+      eq(emailSignatures.mailboxId, args.mailboxId),
+    ));
+  }
+
+  for (const filter of filters) {
+    const [row] = await db.select().from(emailSignatures).where(filter).limit(1);
+    if (row) return row;
+  }
+  return null;
+}
+
+export async function saveEmailSignatureForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+  mailboxId?: string | null;
+  name?: string;
+  bodyText: string;
+  bodyHtml?: string | null;
+  enabled: boolean;
+}) {
+  if (args.mailboxId) {
+    const permission = await resolveEmailPermission({
+      accountId: args.accountId,
+      userId: args.userId,
+      role: args.role,
+      mailboxId: args.mailboxId,
+    });
+    if (!permission.canSend) throw new Error('You do not have permission to send from this mailbox.');
+  }
+
+  const where = and(
+    eq(emailSignatures.accountId, args.accountId),
+    eq(emailSignatures.userId, args.userId),
+    args.mailboxId ? eq(emailSignatures.mailboxId, args.mailboxId) : isNull(emailSignatures.mailboxId),
+  );
+  const [existing] = await db.select().from(emailSignatures).where(where).limit(1);
+  if (existing) {
+    const [updated] = await db
+      .update(emailSignatures)
+      .set({
+        name: args.name?.trim() || 'Firma',
+        bodyText: args.bodyText,
+        bodyHtml: args.bodyHtml || null,
+        enabled: args.enabled,
+        updatedAt: new Date(),
+      })
+      .where(eq(emailSignatures.id, existing.id))
+      .returning();
+    return updated;
+  }
+
+  const [created] = await db
+    .insert(emailSignatures)
+    .values({
+      accountId: args.accountId,
+      userId: args.userId,
+      mailboxId: args.mailboxId ?? null,
+      name: args.name?.trim() || 'Firma',
+      bodyText: args.bodyText,
+      bodyHtml: args.bodyHtml || null,
+      enabled: args.enabled,
+    })
+    .returning();
+  return created;
 }
 
 export async function createEmailAccount(args: {
@@ -1102,6 +1218,72 @@ export async function listEmailWorkspace(args: {
   return {
     mailboxes: mailboxes.map(serializeEmailMailbox),
     folders: folders.map((folder) => serializeEmailFolder(folder, { unreadCount: unreadByFolder.get(folder.id) ?? 0 })),
+  };
+}
+
+export async function getEmailSyncStateForUser(args: {
+  accountId: string;
+  userId: string;
+  role: AccountRole;
+}) {
+  const workspace = await listEmailWorkspace(args);
+  const folderIds = workspace.folders.map((folder) => folder.id);
+  const messageStateRows = folderIds.length > 0
+    ? await db
+        .select({
+          folderId: emailMessages.folderId,
+          unreadCount: sql<number>`count(*) filter (where ${emailMessages.isRead} = false)::int`,
+          presentCount: sql<number>`count(*)::int`,
+          latestMessageAt: sql<Date | null>`max(${emailMessages.receivedAt})`,
+          latestUpdatedAt: sql<Date | null>`max(${emailMessages.updatedAt})`,
+        })
+        .from(emailMessages)
+        .where(
+          and(
+            eq(emailMessages.accountId, args.accountId),
+            inArray(emailMessages.folderId, folderIds),
+            eq(emailMessages.externalState, 'present'),
+          ),
+        )
+        .groupBy(emailMessages.folderId)
+    : [];
+  const stateByFolder = new Map(messageStateRows.map((row) => [row.folderId, row]));
+  const folderState = workspace.folders.map((folder) => {
+    const state = stateByFolder.get(folder.id);
+    return {
+      id: folder.id,
+      mailbox_id: folder.mailbox_id,
+      unread_count: Number(state?.unreadCount ?? folder.unread_count ?? 0),
+      message_count: Number(state?.presentCount ?? 0),
+      latest_message_at: state?.latestMessageAt ? new Date(state.latestMessageAt).toISOString() : null,
+      latest_updated_at: state?.latestUpdatedAt ? new Date(state.latestUpdatedAt).toISOString() : null,
+    };
+  });
+  const mailboxState = workspace.mailboxes.map((mailbox) => {
+    const folders = folderState.filter((folder) => folder.mailbox_id === mailbox.id);
+    return {
+      id: mailbox.id,
+      unread_count: folders.reduce((sum, folder) => sum + folder.unread_count, 0),
+      message_count: folders.reduce((sum, folder) => sum + folder.message_count, 0),
+      latest_updated_at: folders
+        .map((folder) => folder.latest_updated_at)
+        .filter(Boolean)
+        .sort()
+        .at(-1) ?? null,
+    };
+  });
+  const version = crypto
+    .createHash('sha1')
+    .update(JSON.stringify({ folders: folderState, mailboxes: mailboxState }))
+    .digest('hex');
+
+  return {
+    ...workspace,
+    state: {
+      version,
+      folders: folderState,
+      mailboxes: mailboxState,
+    },
   };
 }
 
@@ -2471,15 +2653,18 @@ async function syncReadStateToImap(
 async function ensureImapFolder(accountId: string, mailboxId: string, path: string, specialUse?: string) {
   const normalized = path.toLowerCase() === 'inbox' ? 'inbox' : path;
   const special = specialUse?.toLowerCase();
+  const spamLike = special === '\\junk' || ['junk', 'spam', 'correo no deseado'].includes(path.trim().toLowerCase());
   const mapped = special === '\\sent'
     ? { slug: 'sent', name: 'Enviados', kind: 'sent' as const, position: 10 }
     : special === '\\trash'
       ? { slug: 'trash', name: 'Papelera', kind: 'trash' as const, position: 30 }
       : special === '\\archive'
         ? { slug: 'archive', name: 'Archivo', kind: 'archive' as const, position: 20 }
-        : normalized === 'inbox'
-          ? { slug: 'inbox', name: 'Entrada', kind: 'inbox' as const, position: 0 }
-          : { slug: `imap-${slugify(path)}`, name: path, kind: 'custom' as const, position: 100 };
+        : spamLike
+          ? { slug: `imap-${slugify(path)}`, name: 'SPAM', kind: 'custom' as const, position: 90 }
+          : normalized === 'inbox'
+            ? { slug: 'inbox', name: 'Entrada', kind: 'inbox' as const, position: 0 }
+            : { slug: `imap-${slugify(path)}`, name: path, kind: 'custom' as const, position: 100 };
 
   const [existing] = await db
     .select()
@@ -2937,8 +3122,9 @@ export async function sendEmail(args: {
   attachments?: {
     filename: string;
     contentType?: string;
-    contentBase64: string;
+    contentBase64?: string;
     contentId?: string;
+    sourceAttachmentId?: string;
   }[];
   inReplyToMessageId?: string | null;
 }) {
@@ -2964,6 +3150,46 @@ export async function sendEmail(args: {
     .limit(1);
   if (!account) throw new Error('SMTP account not found.');
 
+  const preparedAttachments: Array<{
+    filename: string;
+    contentType?: string;
+    bytes: Buffer;
+    contentId?: string;
+  }> = [];
+  let totalAttachmentBytes = 0;
+  for (const attachment of args.attachments ?? []) {
+    let bytes: Buffer;
+    let filename = attachment.filename || 'attachment';
+    let contentType = attachment.contentType;
+
+    if (attachment.sourceAttachmentId) {
+      const source = await getEmailAttachmentFileForUser({
+        accountId: args.accountId,
+        userId: args.userId,
+        role: args.role,
+        attachmentId: attachment.sourceAttachmentId,
+      });
+      bytes = Buffer.from(source.bytes);
+      filename = attachment.filename || source.file_name || filename;
+      contentType = attachment.contentType || source.content_type || undefined;
+    } else if (attachment.contentBase64) {
+      bytes = Buffer.from(attachment.contentBase64, 'base64');
+    } else {
+      continue;
+    }
+
+    totalAttachmentBytes += bytes.byteLength;
+    if (totalAttachmentBytes > 20 * 1024 * 1024) {
+      throw new Error('Attachments exceed the 20 MB limit.');
+    }
+    preparedAttachments.push({
+      filename,
+      contentType,
+      bytes,
+      contentId: attachment.contentId,
+    });
+  }
+
   const credentials = decryptEmailCredentials(account.encryptedCredentials as Record<string, unknown>);
   const transporter = nodemailer.createTransport({
     host: account.smtpHost,
@@ -2983,10 +3209,10 @@ export async function sendEmail(args: {
     subject: args.subject || '(Sin asunto)',
     text: args.text,
     html: args.html,
-    attachments: args.attachments?.map((attachment) => ({
+    attachments: preparedAttachments.map((attachment) => ({
       filename: attachment.filename || 'attachment',
       contentType: attachment.contentType,
-      content: Buffer.from(attachment.contentBase64, 'base64'),
+      content: attachment.bytes,
       cid: attachment.contentId,
     })),
   });
@@ -3033,7 +3259,7 @@ export async function sendEmail(args: {
         bodyText: args.text,
         bodyHtml: args.html ?? null,
         isRead: true,
-        hasAttachments: Boolean(args.attachments?.length),
+        hasAttachments: preparedAttachments.length > 0,
         rawHeaders: {},
         rawSize: null,
       })
@@ -3041,12 +3267,12 @@ export async function sendEmail(args: {
     sentMessage = createdSentMessage;
     sentMessageId = createdSentMessage.id;
 
-    for (const attachment of args.attachments ?? []) {
+    for (const attachment of preparedAttachments) {
       const fileName = attachment.filename || 'attachment';
       const storageKey = `email/${args.accountId}/${createdSentMessage.id}/${crypto.randomUUID()}-${fileName}`;
       await putObject({
         key: storageKey,
-        body: Buffer.from(attachment.contentBase64, 'base64'),
+        body: attachment.bytes,
         contentType: attachment.contentType,
       });
       await db.insert(emailAttachments).values({
@@ -3054,7 +3280,7 @@ export async function sendEmail(args: {
         messageId: createdSentMessage.id,
         fileName,
         contentType: attachment.contentType,
-        size: Math.ceil((attachment.contentBase64.length * 3) / 4),
+        size: attachment.bytes.byteLength,
         storageKey,
         contentId: attachment.contentId ?? null,
       });
@@ -3074,7 +3300,7 @@ export async function sendEmail(args: {
       to: args.to,
       cc: args.cc ?? [],
       bcc: args.bcc ?? [],
-      attachment_count: args.attachments?.length ?? 0,
+      attachment_count: preparedAttachments.length,
       in_reply_to_message_id: args.inReplyToMessageId ?? null,
     },
   });

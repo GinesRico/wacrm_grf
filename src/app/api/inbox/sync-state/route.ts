@@ -1,5 +1,6 @@
-import { and, eq, gt, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+
 import { db } from "@/db/client";
 import { conversations, departmentMembers, departments } from "@/db/schema";
 import { getCurrentDbAccount } from "@/lib/auth/current-account";
@@ -22,22 +23,35 @@ export async function GET() {
         : departmentIds.length > 0
           ? or(isNull(conversations.departmentId), inArray(conversations.departmentId, departmentIds))
           : isNull(conversations.departmentId);
-    const rows = await db
+    const [state] = await db
       .select({
-        id: conversations.id,
-        unread_count: conversations.unreadCount,
+        conversationCount: sql<number>`count(*)::int`,
+        unreadConversationCount: sql<number>`count(*) filter (where ${conversations.unreadCount} > 0)::int`,
+        totalUnreadCount: sql<number>`coalesce(sum(${conversations.unreadCount}), 0)::int`,
+        latestActivityAt: sql<Date | null>`max(coalesce(${conversations.lastMessageAt}, ${conversations.updatedAt}))`,
+        latestUpdatedAt: sql<Date | null>`max(${conversations.updatedAt})`,
       })
       .from(conversations)
       .where(
         and(
           eq(conversations.accountId, accountId),
           ne(conversations.status, "closed"),
-          gt(conversations.unreadCount, 0),
           departmentVisibility,
         ),
       );
 
-    return NextResponse.json({ conversations: rows });
+    const payload = {
+      conversation_count: Number(state?.conversationCount ?? 0),
+      unread_conversation_count: Number(state?.unreadConversationCount ?? 0),
+      total_unread_count: Number(state?.totalUnreadCount ?? 0),
+      latest_activity_at: state?.latestActivityAt ? new Date(state.latestActivityAt).toISOString() : null,
+      latest_updated_at: state?.latestUpdatedAt ? new Date(state.latestUpdatedAt).toISOString() : null,
+    };
+
+    return NextResponse.json({
+      ...payload,
+      version: JSON.stringify(payload),
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

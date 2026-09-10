@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
+import { useVisibilityResync } from "@/hooks/use-visibility-resync";
 import {
   subscribeRealtimeChannel,
   unsubscribeRealtimeChannel,
@@ -17,7 +18,7 @@ export function useTotalUnreadEmail(): number {
 
   const load = useCallback(async () => {
     if (!accountId) return;
-    const response = await fetch("/api/email/workspace", { cache: "no-store" });
+    const response = await fetch("/api/email/sync-state", { cache: "no-store" });
     if (!response.ok) return;
     const payload = (await response.json().catch(() => ({}))) as EmailWorkspaceResponse;
     const count = (payload.folders ?? []).reduce(
@@ -26,6 +27,11 @@ export function useTotalUnreadEmail(): number {
     );
     setTotal(count);
   }, [accountId]);
+
+  useVisibilityResync({
+    enabled: Boolean(accountId),
+    onResync: load,
+  });
 
   useEffect(() => {
     if (!accountId) return;

@@ -267,6 +267,13 @@
       "when": 1788943637193,
       "tag": "0037_curious_meggan",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1789039200000,
+      "tag": "0038_email_signatures",
+      "breakpoints": true
     }
   ]
 }

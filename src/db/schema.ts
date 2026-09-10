@@ -1772,6 +1772,44 @@ export const emailUserPreferences = pgTable(
   ]
 );
 
+export const emailSignatures = pgTable(
+  'email_signatures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => crmAccounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    mailboxId: uuid('mailbox_id').references(() => emailMailboxes.id, {
+      onDelete: 'cascade',
+    }),
+    name: text('name').notNull().default('Firma'),
+    bodyText: text('body_text').notNull().default(''),
+    bodyHtml: text('body_html'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex('email_signatures_account_user_default_key')
+      .on(table.accountId, table.userId)
+      .where(sql`${table.mailboxId} is null`),
+    uniqueIndex('email_signatures_account_user_mailbox_key').on(
+      table.accountId,
+      table.userId,
+      table.mailboxId
+    ).where(sql`${table.mailboxId} is not null`),
+    index('idx_email_signatures_account_user').on(table.accountId, table.userId),
+  ]
+);
+
 export const emailAuditEvents = pgTable(
   'email_audit_events',
   {

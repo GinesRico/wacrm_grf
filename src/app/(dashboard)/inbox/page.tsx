@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import type { Conversation, Message, Contact } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useAuth } from "@/hooks/use-auth";
+import { useVisibilityResync } from "@/hooks/use-visibility-resync";
 import {
   subscribeRealtimeChannel,
   unsubscribeRealtimeChannel,
@@ -111,6 +112,7 @@ export default function InboxPage() {
    */
   const [resyncToken, setResyncToken] = useState(0);
   const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inboxSyncVersionRef = useRef<string | null>(null);
   const scheduleInboxResync = useCallback(() => {
     if (resyncTimerRef.current) return;
     resyncTimerRef.current = setTimeout(() => {
@@ -418,6 +420,32 @@ export default function InboxPage() {
     enabled: true,
   });
 
+  const confirmInboxSyncState = useCallback(async () => {
+    if (!accountId) return;
+    const res = await fetch("/api/inbox/sync-state", { cache: "no-store" }).catch(() => null);
+    if (!res?.ok) return;
+    const payload = (await res.json().catch(() => ({}))) as { version?: string };
+    const nextVersion = typeof payload.version === "string" ? payload.version : JSON.stringify(payload);
+    const previousVersion = inboxSyncVersionRef.current;
+    inboxSyncVersionRef.current = nextVersion;
+    if (previousVersion && previousVersion !== nextVersion) {
+      scheduleInboxResync();
+    }
+  }, [accountId, scheduleInboxResync]);
+
+  useEffect(() => {
+    inboxSyncVersionRef.current = null;
+  }, [accountId]);
+
+  useEffect(() => {
+    if (inboxSyncVersionRef.current === null) void confirmInboxSyncState();
+  }, [confirmInboxSyncState]);
+
+  useVisibilityResync({
+    enabled: Boolean(accountId),
+    onResync: confirmInboxSyncState,
+  });
+
   /**
    * Bump `resyncToken` whenever the realtime channel transitions from
    * disconnected → connected *after* the initial connect. The initial
@@ -434,31 +462,13 @@ export default function InboxPage() {
     if (isConnected && !wasConnectedRef.current) {
       // false → true transition
       if (initialConnectDoneRef.current) {
-        setResyncToken((n) => n + 1);
+        void confirmInboxSyncState();
       } else {
         initialConnectDoneRef.current = true;
       }
     }
     wasConnectedRef.current = isConnected;
-  }, [isConnected]);
-
-  /**
-   * Refetch when the tab regains focus. Background tabs may have their
-   * WS throttled by the browser even without a full disconnect, so a
-   * visibilitychange → visible is a reliable signal that we may have
-   * missed events. Cheap to fire; the children dedupe on their own.
-   */
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        setResyncToken((n) => n + 1);
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
+  }, [confirmInboxSyncState, isConnected]);
 
   useEffect(() => {
     if (!accountId) return;

@@ -7,6 +7,7 @@ import {
   Building2,
   Copy,
   Edit2,
+  Flame,
   Folder,
   FolderPlus,
   Grid2X2,
@@ -70,6 +71,22 @@ interface FolderRow {
   name: string;
   slug: string;
   kind: 'inbox' | 'sent' | 'archive' | 'trash' | 'custom' | 'public';
+}
+
+function isSpamFolder(folder: Pick<FolderRow, 'name' | 'slug'>) {
+  const normalized = `${folder.slug} ${folder.name}`.toLowerCase();
+  return /\b(junk|spam)\b/.test(normalized) || normalized.includes('correo-no-deseado');
+}
+
+function emailFolderName(folder: Pick<FolderRow, 'name' | 'slug'>) {
+  return isSpamFolder(folder) ? 'SPAM' : folder.name;
+}
+
+function FolderRowIcon({ folder }: { folder: FolderRow }) {
+  if (isSpamFolder(folder)) return <Flame className="size-4 text-muted-foreground" />;
+  if (folder.kind === 'inbox') return <Inbox className="size-4 text-primary" />;
+  if (folder.kind === 'sent') return <Send className="size-4 text-muted-foreground" />;
+  return <Folder className="size-4 text-muted-foreground" />;
 }
 
 interface PermissionRow {
@@ -267,7 +284,7 @@ export function EmailAdminSettings() {
         key: `folder:${folder.id}`,
         type: 'folder' as const,
         id: folder.id,
-        label: folder.name,
+        label: emailFolderName(folder),
         description: 'Carpeta publica',
         mailboxId: null,
         folderId: folder.id,
@@ -284,7 +301,8 @@ export function EmailAdminSettings() {
 
   const folderName = useCallback((folderId: string | null) => {
     if (!folderId) return 'Todo el buzon';
-    return state.folders.find((item) => item.id === folderId)?.name ?? 'Carpeta';
+    const folder = state.folders.find((item) => item.id === folderId);
+    return folder ? emailFolderName(folder) : 'Carpeta';
   }, [state.folders]);
 
   const userName = useCallback((userId: string | undefined) => {
@@ -413,7 +431,7 @@ export function EmailAdminSettings() {
   }
 
   async function deleteFolder(folder: FolderRow) {
-    if (!window.confirm(`Borrar la carpeta ${folder.name}? Los correos volveran a Entrada.`)) return;
+    if (!window.confirm(`Borrar la carpeta ${emailFolderName(folder)}? Los correos volveran a Entrada.`)) return;
     await post({ action: 'delete_folder', folder_id: folder.id }, 'Carpeta borrada');
   }
 
@@ -1083,8 +1101,8 @@ function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (fo
       {folders.map((folder) => (
         <div key={folder.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
           <div className="flex min-w-0 items-center gap-2">
-            {folder.kind === 'inbox' ? <Inbox className="size-4 text-primary" /> : folder.kind === 'sent' ? <Send className="size-4 text-muted-foreground" /> : <Folder className="size-4 text-muted-foreground" />}
-            <span className="truncate">{folder.name}</span>
+            <FolderRowIcon folder={folder} />
+            <span className="truncate">{emailFolderName(folder)}</span>
             <Badge variant="outline">{folder.kind === 'public' ? 'Publica' : folder.kind}</Badge>
           </div>
           {folder.kind === 'custom' || folder.kind === 'public' ? (
@@ -1449,7 +1467,7 @@ function RulesTable({
                   <select value={draft.target_folder_id ?? ''} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value || null })} className="h-8 rounded-md border border-border bg-card px-2">
                     {folderOptions.map((folder) => (
                       <option key={folder.id} value={folder.id}>
-                        {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
+                        {emailFolderName(folder)} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
                       </option>
                     ))}
                   </select>

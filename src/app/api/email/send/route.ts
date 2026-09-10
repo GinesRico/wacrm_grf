@@ -4,6 +4,8 @@ import { requireDbRole } from '@/lib/auth/current-account';
 import { toErrorResponse } from '@/lib/auth/errors';
 import { sendEmail } from '@/lib/email/service';
 
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
 function list(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
   if (typeof value === 'string') return value.split(',').map((item) => item.trim()).filter(Boolean);
@@ -19,8 +21,9 @@ function attachments(value: unknown) {
       contentType: typeof item?.content_type === 'string' ? item.content_type : undefined,
       contentBase64: typeof item?.content_base64 === 'string' ? item.content_base64 : '',
       contentId: typeof item?.content_id === 'string' ? item.content_id : undefined,
+      sourceAttachmentId: typeof item?.source_attachment_id === 'string' ? item.source_attachment_id : undefined,
     }))
-    .filter((item) => item.contentBase64);
+    .filter((item) => item.contentBase64 || item.sourceAttachmentId);
 }
 
 export async function POST(request: Request) {
@@ -39,8 +42,8 @@ export async function POST(request: Request) {
       (total, item) => total + Math.ceil((item.contentBase64.length * 3) / 4),
       0,
     );
-    if (totalAttachmentBytes > 8 * 1024 * 1024) {
-      return NextResponse.json({ error: 'Attachments exceed the 8 MB limit.' }, { status: 400 });
+    if (totalAttachmentBytes > MAX_ATTACHMENT_BYTES) {
+      return NextResponse.json({ error: 'Attachments exceed the 20 MB limit.' }, { status: 400 });
     }
     const result = await sendEmail({
       accountId: ctx.accountId,

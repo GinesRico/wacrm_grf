@@ -6,6 +6,7 @@ import type { DragEvent, MouseEvent } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import Link from '@tiptap/extension-link';
+import TiptapImage from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -24,6 +25,7 @@ import {
   FileIcon,
   FileSpreadsheet,
   Filter,
+  Flame,
   FolderPlus,
   GripVertical,
   Info,
@@ -43,6 +45,7 @@ import {
   Printer,
   RefreshCw,
   Reply,
+  Save,
   Search,
   Send,
   Settings,
@@ -78,7 +81,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/use-auth';
+import { useVisibilityResync } from '@/hooks/use-visibility-resync';
 import { subscribeRealtimeChannel, unsubscribeRealtimeChannel } from '@/lib/realtime/soketi-client';
+import { uploadAccountMedia } from '@/lib/storage/upload-media';
 
 interface Mailbox {
   id: string;
@@ -125,6 +130,14 @@ interface MessagesResponse {
   messages: Message[];
 }
 
+interface EmailSyncStateResponse {
+  mailboxes?: Mailbox[];
+  folders?: Folder[];
+  state?: {
+    version?: string;
+  };
+}
+
 interface RealtimeEmailEvent {
   payload?: {
     message?: Message;
@@ -148,6 +161,15 @@ interface EmailLabel {
   color: string;
 }
 
+interface EmailSignature {
+  id: string;
+  mailbox_id: string | null;
+  name: string;
+  body_text: string;
+  body_html: string | null;
+  enabled: boolean;
+}
+
 interface Draft {
   id: string;
   mailbox_id: string;
@@ -166,8 +188,9 @@ interface ComposeAttachment {
   filename: string;
   content_type?: string;
   size: number;
-  content_base64: string;
+  content_base64?: string;
   content_id?: string | null;
+  source_attachment_id?: string;
 }
 
 interface ComposeState {
@@ -338,6 +361,8 @@ interface EmailPanelWidths {
 const DEFAULT_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 270, list: 390, bottomList: 360 };
 const MIN_EMAIL_PANEL_WIDTHS: EmailPanelWidths = { sidebar: 220, list: 300, bottomList: 180 };
 const MAX_VIEW_CACHE_ENTRIES = 100;
+const MAX_COMPOSE_ATTACHMENTS = 10;
+const MAX_COMPOSE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const SPREADSHEET_PREVIEW_MAX_ROWS = 5000;
 const SPREADSHEET_PREVIEW_MAX_COLUMNS = 10;
 const SPREADSHEET_EXTENSIONS = new Set(['xls', 'xlsx', 'csv']);
@@ -395,7 +420,7 @@ function spreadsheetRowsForSheet(workbook: XLSX.WorkBook, sheetName: string): Sp
   };
 }
 
-function PdfPreview({ url }: { url: string }) {
+function PdfPreview({ url, zoom }: { url: string; zoom: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
@@ -403,6 +428,7 @@ function PdfPreview({ url }: { url: string }) {
     let cancelled = false;
     async function renderPdf() {
       try {
+        setStatus('loading');
         const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
@@ -412,7 +438,7 @@ function PdfPreview({ url }: { url: string }) {
         if (!response.ok) throw new Error('No se pudo descargar el PDF');
         const document = await pdfjs.getDocument({ data: await response.arrayBuffer() }).promise;
         const page = await document.getPage(1);
-        const viewport = page.getViewport({ scale: 1.35 });
+        const viewport = page.getViewport({ scale: Math.max(0.5, Math.min(2.5, zoom)) * 1.35 });
         const canvas = canvasRef.current;
         if (!canvas || cancelled) return;
         const context = canvas.getContext('2d');
@@ -429,7 +455,7 @@ function PdfPreview({ url }: { url: string }) {
     return () => {
       cancelled = true;
     };
-  }, [url]);
+  }, [url, zoom]);
 
   if (status === 'error') {
     return (
@@ -442,7 +468,7 @@ function PdfPreview({ url }: { url: string }) {
   return (
     <div className="flex min-h-full items-start justify-center overflow-auto bg-muted/30 p-5">
       {status === 'loading' ? <Loader2 className="absolute top-1/2 size-7 animate-spin text-primary" /> : null}
-      <canvas ref={canvasRef} className="max-w-full bg-white shadow-md" aria-label="Vista previa del PDF" />
+      <canvas ref={canvasRef} className="bg-white shadow-md" aria-label="Vista previa del PDF" />
     </div>
   );
 }
@@ -708,6 +734,60 @@ function emailBodyFragment(html: string) {
 
 function normalizeContentId(value: string | null | undefined) {
   return value?.trim().replace(/^<|>$/g, '') || null;
+}
+
+function newContentId() {
+  return `wacrm-${crypto.randomUUID()}@inline`;
+}
+
+function stripUnsafeEmailHtml(html: string) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/\son[a-z]+=(["']).*?\1/gi, '')
+    .replace(/\son[a-z]+=[^\s>]+/gi, '');
+}
+
+function signatureHtml(signature: EmailSignature | null) {
+  if (!signature?.enabled) return '';
+  if (signature.body_html?.trim()) return stripUnsafeEmailHtml(signature.body_html.trim());
+  if (signature.body_text.trim()) {
+    return `<div>${escapeHtml(signature.body_text).replace(/\n/g, '<br>')}</div>`;
+  }
+  return '';
+}
+
+function withSignature(bodyHtml: string, signature: EmailSignature | null) {
+  const html = signatureHtml(signature);
+  if (!html) return bodyHtml;
+  return `${bodyHtml}<div data-wacrm-signature="true">${html}</div>`;
+}
+
+function withSignatureAtTop(bodyHtml: string, signature: EmailSignature | null) {
+  const html = signatureHtml(signature);
+  if (!html) return bodyHtml;
+  const block = `<div data-wacrm-signature="true">${html}</div>`;
+  return bodyHtml.replace('<p><br></p>', `<p><br></p>${block}`);
+}
+
+function withSignatureText(bodyText: string, signature: EmailSignature | null) {
+  if (!signature?.enabled || !signature.body_text.trim()) return bodyText;
+  return `${bodyText}\n\n${signature.body_text.trim()}`;
+}
+
+function isSpamFolder(folder: Pick<Folder, 'name' | 'slug'>) {
+  const normalized = `${folder.slug} ${folder.name}`.toLowerCase();
+  return /\b(junk|spam)\b/.test(normalized) || normalized.includes('correo-no-deseado');
+}
+
+function emailFolderName(folder: Pick<Folder, 'name' | 'slug'>) {
+  return isSpamFolder(folder) ? 'SPAM' : folder.name;
+}
+
+function EmailFolderIcon({ folder }: { folder: Pick<Folder, 'kind' | 'name' | 'slug'> }) {
+  if (isSpamFolder(folder)) return <Flame className="size-4" />;
+  if (folder.kind === 'inbox') return <Inbox className="size-4" />;
+  if (folder.kind === 'trash') return <Trash2 className="size-4" />;
+  return <Archive className="size-4" />;
 }
 
 function forwardedHtml(message: Message) {
@@ -997,14 +1077,21 @@ function fileToComposeAttachment(file: File): Promise<ComposeAttachment> {
 function RichTextEditor({
   initialHtml,
   onChange,
+  onInlineImage,
 }: {
   initialHtml: string;
   onChange: (html: string, text: string) => void;
+  onInlineImage?: (file: File) => Promise<{ src: string; alt: string } | null>;
 }) {
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const editor = useEditor({
     extensions: [
       StarterKit,
       Underline,
+      TiptapImage.configure({
+        inline: true,
+        allowBase64: false,
+      }),
       Link.configure({
         openOnClick: false,
       }),
@@ -1020,14 +1107,25 @@ function RichTextEditor({
     editorProps: {
       attributes: {
         class:
-          'min-h-56 px-3 py-3 text-sm leading-6 outline-none prose prose-sm max-w-none dark:prose-invert',
+          'min-h-full px-3 py-3 text-sm leading-6 outline-none prose prose-sm max-w-none dark:prose-invert',
+      },
+      handlePaste: (_view, event) => {
+        if (!onInlineImage) return false;
+        const file = Array.from(event.clipboardData?.files ?? []).find((item) => item.type.startsWith('image/'));
+        if (!file) return false;
+        event.preventDefault();
+        void onInlineImage(file).then((image) => {
+          if (!image) return;
+          editor?.chain().focus().setImage(image).run();
+        });
+        return true;
       },
     },
   });
 
   return (
-    <div className="min-h-64 flex-1">
-      <div className="flex min-h-9 items-center gap-1 border-b border-border px-2">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-9 shrink-0 items-center gap-1 border-b border-border px-2">
         <Button
           type="button"
           size="icon-xs"
@@ -1067,8 +1165,36 @@ function RichTextEditor({
         >
           <LinkIcon className="size-3.5" />
         </Button>
+        {onInlineImage ? (
+          <>
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              onClick={() => imageInputRef.current?.click()}
+              title="Imagen en linea"
+            >
+              <ImageIcon className="size-3.5" />
+            </Button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                event.currentTarget.value = '';
+                if (!file) return;
+                void onInlineImage(file).then((image) => {
+                  if (!image) return;
+                  editor?.chain().focus().setImage(image).run();
+                });
+              }}
+            />
+          </>
+        ) : null}
       </div>
-      <EditorContent editor={editor} />
+      <EditorContent editor={editor} className="min-h-0 flex-1 overflow-y-auto" />
     </div>
   );
 }
@@ -1094,6 +1220,14 @@ export function EmailClient() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [compose, setCompose] = useState<ComposeState>(emptyCompose);
   const [composeAttachments, setComposeAttachments] = useState<ComposeAttachment[]>([]);
+  const [signature, setSignature] = useState<EmailSignature | null>(null);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
+  const [uploadingSignatureImage, setUploadingSignatureImage] = useState(false);
+  const [signatureDraft, setSignatureDraft] = useState({
+    enabled: true,
+    bodyText: '',
+    bodyHtml: '',
+  });
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
   const [, setDrafts] = useState<Draft[]>([]);
   const [labels, setLabels] = useState<EmailLabel[]>([]);
@@ -1133,6 +1267,7 @@ export function EmailClient() {
   const viewCacheRef = useRef(new Map<string, MessagesResponse>());
   const loadSeqRef = useRef(0);
   const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const emailSyncVersionRef = useRef<string | null>(null);
 
   const keepReaderMessage = useCallback((message: Message | null) => {
     readerMessageRef.current = message;
@@ -1446,6 +1581,54 @@ export function EmailClient() {
     void load();
   }, [load]);
 
+  const confirmEmailSyncState = useCallback(async () => {
+    if (!accountId) return;
+    const res = await fetch('/api/email/sync-state', { cache: 'no-store' }).catch(() => null);
+    if (!res?.ok) return;
+    const payload = (await res.json().catch(() => ({}))) as EmailSyncStateResponse;
+    const nextVersion =
+      typeof payload.state?.version === 'string'
+        ? payload.state.version
+        : JSON.stringify({ mailboxes: payload.mailboxes ?? [], folders: payload.folders ?? [] });
+    const previousVersion = emailSyncVersionRef.current;
+    emailSyncVersionRef.current = nextVersion;
+
+    if (payload.mailboxes) {
+      mailboxesRef.current = payload.mailboxes;
+      setMailboxes(payload.mailboxes);
+    }
+    if (payload.folders) {
+      foldersRef.current = payload.folders;
+      setFolders(payload.folders);
+    }
+    if (payload.mailboxes || payload.folders) {
+      for (const [key, cached] of viewCacheRef.current.entries()) {
+        viewCacheRef.current.set(key, {
+          ...cached,
+          mailboxes: payload.mailboxes ?? cached.mailboxes,
+          folders: payload.folders ?? cached.folders,
+        });
+      }
+    }
+
+    if (previousVersion && previousVersion !== nextVersion) {
+      await load({ silent: true, useCache: false, includeWorkspace: false });
+    }
+  }, [accountId, load]);
+
+  useEffect(() => {
+    emailSyncVersionRef.current = null;
+  }, [accountId]);
+
+  useEffect(() => {
+    if (emailSyncVersionRef.current === null) void confirmEmailSyncState();
+  }, [confirmEmailSyncState]);
+
+  useVisibilityResync({
+    enabled: Boolean(accountId),
+    onResync: confirmEmailSyncState,
+  });
+
   useEffect(() => {
     if (!accountId) return;
     const channelName = `private-account-${accountId}`;
@@ -1533,6 +1716,8 @@ export function EmailClient() {
     if (!selectedMailboxId) {
       setLabels([]);
       setDrafts([]);
+      setSignature(null);
+      setSignatureDraft({ enabled: true, bodyText: '', bodyHtml: '' });
       return;
     }
     let cancelled = false;
@@ -1553,6 +1738,28 @@ export function EmailClient() {
         setLabels(labelsRes.ok ? (labelsPayload.labels ?? []) : []);
         setDrafts(draftsRes.ok ? (draftsPayload.drafts ?? []) : []);
       }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMailboxId]);
+
+  useEffect(() => {
+    if (!selectedMailboxId) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch(`/api/email/signatures?mailbox_id=${encodeURIComponent(selectedMailboxId)}`, {
+        cache: 'no-store',
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (cancelled || !res.ok) return;
+      const nextSignature = (payload.signature ?? null) as EmailSignature | null;
+      setSignature(nextSignature);
+      setSignatureDraft({
+        enabled: nextSignature?.enabled ?? true,
+        bodyText: nextSignature?.body_text ?? '',
+        bodyHtml: nextSignature?.body_html ?? '',
+      });
     })();
     return () => {
       cancelled = true;
@@ -2128,7 +2335,7 @@ export function EmailClient() {
     const folder = folders.find((item) => item.id === folderId);
     setMailboxContextMenu(null);
     setPdfFolderCartIds((current) => new Set([...current, folderId]));
-    toast.success(`${folder?.name ?? 'Carpeta'} acumulada`);
+    toast.success(`${folder ? emailFolderName(folder) : 'Carpeta'} acumulada`);
   }
 
   async function downloadAccumulatedFolderPdfs() {
@@ -2386,9 +2593,91 @@ export function EmailClient() {
     await setMessageLabels(nextLabels);
   }
 
+  async function addInlineComposeImage(file: File) {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecciona una imagen.');
+      return null;
+    }
+    const attachment = await fileToComposeAttachment(file);
+    const contentId = newContentId();
+    const nextTotalBytes = [...composeAttachments, attachment].reduce((total, item) => total + item.size, 0);
+    if (nextTotalBytes > MAX_COMPOSE_ATTACHMENT_BYTES) {
+      toast.error('Los adjuntos superan el limite de 20 MB.');
+      return null;
+    }
+    setComposeAttachments((current) => [
+      ...current,
+      {
+        ...attachment,
+        content_id: contentId,
+        filename: attachment.filename || 'imagen-inline',
+      },
+    ].slice(0, MAX_COMPOSE_ATTACHMENTS));
+    return { src: `cid:${contentId}`, alt: file.name };
+  }
+
+  async function saveSignature() {
+    if (!selectedMailbox) return;
+    const res = await fetch('/api/email/signatures', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mailbox_id: selectedMailbox.id,
+        enabled: signatureDraft.enabled,
+        body_text: signatureDraft.bodyText,
+        body_html: signatureDraft.bodyHtml,
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'No se pudo guardar la firma');
+      return;
+    }
+    const nextSignature = payload.signature as EmailSignature;
+    setSignature(nextSignature);
+    setSignatureDraft({
+      enabled: nextSignature.enabled,
+      bodyText: nextSignature.body_text,
+      bodyHtml: nextSignature.body_html ?? '',
+    });
+    setSignatureDialogOpen(false);
+    toast.success('Firma guardada');
+  }
+
+  async function uploadSignatureImage(file: File | null) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Selecciona una imagen.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('La imagen de firma no debe superar 2 MB.');
+      return;
+    }
+    setUploadingSignatureImage(true);
+    try {
+      const { publicUrl } = await uploadAccountMedia('chat-media', file);
+      const img = `<p><img src="${escapeHtml(publicUrl)}" alt="${escapeHtml(file.name)}" style="max-width:220px;height:auto"></p>`;
+      setSignatureDraft((current) => ({
+        ...current,
+        bodyHtml: `${current.bodyHtml.trim() ? `${current.bodyHtml.trim()}\n` : ''}${img}`,
+      }));
+      toast.success('Imagen añadida a la firma');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo subir la imagen');
+    } finally {
+      setUploadingSignatureImage(false);
+    }
+  }
+
   function openNewMessage() {
     setCurrentDraftId(null);
-    setCompose(emptyCompose);
+    const html = withSignature('<p><br></p>', signature);
+    setCompose({
+      ...emptyCompose,
+      text: withSignatureText('', signature),
+      html,
+    });
     setComposeAttachments([]);
     setEditorKey((current) => current + 1);
     openComposeTab('Nuevo correo');
@@ -2410,8 +2699,8 @@ export function EmailClient() {
       subject: message.subject.toLowerCase().startsWith('re:')
         ? message.subject
         : `Re: ${message.subject}`,
-      text: quote.text,
-      html: quote.html,
+      text: withSignatureText(quote.text, signature),
+      html: withSignatureAtTop(quote.html, signature),
       inReplyToMessageId: message.id,
     });
     setComposeAttachments(inlineAttachments);
@@ -2437,8 +2726,8 @@ export function EmailClient() {
       subject: message.subject.toLowerCase().startsWith('re:')
         ? message.subject
         : `Re: ${message.subject}`,
-      text: quote.text,
-      html: quote.html,
+      text: withSignatureText(quote.text, signature),
+      html: withSignatureAtTop(quote.html, signature),
       inReplyToMessageId: message.id,
     });
     setComposeAttachments(inlineAttachments);
@@ -2458,6 +2747,7 @@ export function EmailClient() {
       }
     }
     setCurrentDraftId(null);
+    const forwardText = `\n\n---------- Mensaje reenviado ----------\nDe: ${message.from_address}\nFecha: ${new Date(message.received_at).toLocaleString('es-ES')}\nAsunto: ${message.subject}\n\n${message.body_text ?? message.snippet ?? ''}`;
     setCompose({
       to: '',
       cc: '',
@@ -2465,8 +2755,8 @@ export function EmailClient() {
       subject: message.subject.toLowerCase().startsWith('fw:')
         ? message.subject
         : `Fw: ${message.subject}`,
-      text: `\n\n---------- Mensaje reenviado ----------\nDe: ${message.from_address}\nFecha: ${new Date(message.received_at).toLocaleString('es-ES')}\nAsunto: ${message.subject}\n\n${message.body_text ?? message.snippet ?? ''}`,
-      html: forwardedHtml(message),
+      text: withSignatureText(forwardText, signature),
+      html: withSignatureAtTop(forwardedHtml(message), signature),
       inReplyToMessageId: null,
     });
     setComposeAttachments(forwardedAttachments);
@@ -2624,6 +2914,27 @@ export function EmailClient() {
     link.remove();
   }
 
+  function printAttachmentPreview() {
+    if (!attachmentPreview) return;
+    const iframe = document.createElement('iframe');
+    iframe.src = attachmentPreview.rawUrl;
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } finally {
+        window.setTimeout(() => iframe.remove(), 60_000);
+      }
+    };
+  }
+
   function blobToBase64(blob: Blob) {
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -2644,12 +2955,22 @@ export function EmailClient() {
     const sourceAttachments = ((listPayload.attachments ?? []) as Attachment[])
       .filter((attachment) => !options.inlineOnly || Boolean(attachment.content_id));
     const totalBytes = sourceAttachments.reduce((total, attachment) => total + (attachment.size ?? 0), 0);
-    if (totalBytes > 8 * 1024 * 1024) {
-      throw new Error('Los adjuntos originales superan el limite de 8 MB.');
+    if (totalBytes > MAX_COMPOSE_ATTACHMENT_BYTES) {
+      throw new Error('Los adjuntos originales superan el limite de 20 MB.');
+    }
+
+    if (!options.inlineOnly) {
+      return sourceAttachments.slice(0, MAX_COMPOSE_ATTACHMENTS).map((attachment) => ({
+        filename: attachment.file_name,
+        content_type: attachment.content_type ?? undefined,
+        size: attachment.size ?? 0,
+        content_id: normalizeContentId(attachment.content_id),
+        source_attachment_id: attachment.id,
+      } satisfies ComposeAttachment));
     }
 
     return Promise.all(
-      sourceAttachments.slice(0, 10).map(async (attachment) => {
+      sourceAttachments.slice(0, MAX_COMPOSE_ATTACHMENTS).map(async (attachment) => {
         const fileRes = await fetch(`/api/email/attachments/${attachment.id}?raw=1`, { cache: 'no-store' });
         if (!fileRes.ok) throw new Error(`No se pudo leer ${attachment.file_name}`);
         const blob = await fileRes.blob();
@@ -2666,13 +2987,13 @@ export function EmailClient() {
 
   async function addComposeFiles(files: FileList | null) {
     if (!files?.length) return;
-    const next = await Promise.all(Array.from(files).slice(0, 10).map(fileToComposeAttachment));
+    const next = await Promise.all(Array.from(files).slice(0, MAX_COMPOSE_ATTACHMENTS).map(fileToComposeAttachment));
     const totalBytes = [...composeAttachments, ...next].reduce((total, item) => total + item.size, 0);
-    if (totalBytes > 8 * 1024 * 1024) {
-      toast.error('Los adjuntos superan el limite de 8 MB.');
+    if (totalBytes > MAX_COMPOSE_ATTACHMENT_BYTES) {
+      toast.error('Los adjuntos superan el limite de 20 MB.');
       return;
     }
-    setComposeAttachments((current) => [...current, ...next].slice(0, 10));
+    setComposeAttachments((current) => [...current, ...next].slice(0, MAX_COMPOSE_ATTACHMENTS));
   }
 
   async function sendCurrentMessage() {
@@ -2792,16 +3113,6 @@ export function EmailClient() {
             <Inbox className="size-4" />
             <span className="truncate">{selectedFolder?.name ?? 'Bandeja'}</span>
           </button>
-          <Button
-            size="icon-sm"
-            className="mb-1"
-            onClick={openNewMessage}
-            disabled={!selectedMailbox?.can_send}
-            title="Nuevo correo"
-            aria-label="Nuevo correo"
-          >
-            <Plus className="size-4" />
-          </Button>
           {tabs.map((tab) => (
             <div
               key={tab.id}
@@ -2836,6 +3147,16 @@ export function EmailClient() {
               </button>
             </div>
           ))}
+          <Button
+            size="icon-sm"
+            className="mb-1"
+            onClick={openNewMessage}
+            disabled={!selectedMailbox?.can_send}
+            title="Nuevo correo"
+            aria-label="Nuevo correo"
+          >
+            <Plus className="size-4" />
+          </Button>
         </div>
         <div className="flex h-9 shrink-0 items-center gap-1 pb-1">
           {pdfFolderCartIds.size > 0 ? (
@@ -2865,6 +3186,16 @@ export function EmailClient() {
           </Button>
           <Button size="icon-sm" variant="outline" onClick={cycleLayout} title={`${layoutLabel}. Cambiar vista`} aria-label={`${layoutLabel}. Cambiar vista`}>
             <LayoutIcon className="size-4" />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="outline"
+            onClick={() => setSignatureDialogOpen(true)}
+            disabled={!selectedMailbox}
+            title="Firma de correo"
+            aria-label="Firma de correo"
+          >
+            <PencilLine className="size-4" />
           </Button>
           <Button
             size="icon-sm"
@@ -2971,8 +3302,8 @@ export function EmailClient() {
                                 selectedFolderId === folder.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                               )}
                             >
-                              {folder.kind === 'inbox' ? <Inbox className="size-4" /> : folder.kind === 'trash' ? <Trash2 className="size-4" /> : <Archive className="size-4" />}
-                              <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                              <EmailFolderIcon folder={folder} />
+                              <span className="min-w-0 flex-1 truncate">{emailFolderName(folder)}</span>
                               {(folder.unread_count ?? 0) > 0 ? <span className="text-xs text-muted-foreground">{folder.unread_count}</span> : null}
                             </button>
                           ))}
@@ -3025,14 +3356,8 @@ export function EmailClient() {
                           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                       )}
                     >
-                      {folder.kind === 'inbox' ? (
-                        <Inbox className="size-4" />
-                      ) : folder.kind === 'trash' ? (
-                        <Trash2 className="size-4" />
-                      ) : (
-                        <Archive className="size-4" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                      <EmailFolderIcon folder={folder} />
+                      <span className="min-w-0 flex-1 truncate">{emailFolderName(folder)}</span>
                       {count > 0 ? <span className="text-xs text-muted-foreground">{count}</span> : null}
                     </button>
                   );
@@ -3689,7 +4014,7 @@ export function EmailClient() {
                 >
                   {ruleTargetFolders.map((folder) => (
                     <option key={folder.id} value={folder.id}>
-                      Mover a {folder.name} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
+                      Mover a {emailFolderName(folder)} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
                     </option>
                   ))}
                 </select> : null}
@@ -3754,6 +4079,71 @@ export function EmailClient() {
             </DialogContent>
           </Dialog>
 
+          <Dialog open={signatureDialogOpen} onOpenChange={setSignatureDialogOpen}>
+            <DialogContent className="sm:max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Firma de correo</DialogTitle>
+                <DialogDescription>
+                  Se aplicará al redactar, responder o reenviar desde {selectedMailbox?.address ?? 'este buzón'}.
+                </DialogDescription>
+              </DialogHeader>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={signatureDraft.enabled}
+                  onChange={(event) => setSignatureDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                />
+                Usar firma al redactar
+              </label>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium" htmlFor="email-signature-text">Texto simple</label>
+                <textarea
+                  id="email-signature-text"
+                  value={signatureDraft.bodyText}
+                  onChange={(event) => setSignatureDraft((current) => ({ ...current, bodyText: event.target.value }))}
+                  className="min-h-24 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/25"
+                  placeholder="Nombre, cargo, teléfono..."
+                />
+              </div>
+              <div className="grid gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-sm font-medium" htmlFor="email-signature-html">HTML opcional</label>
+                  <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted">
+                    {uploadingSignatureImage ? <Loader2 className="size-4 animate-spin" /> : <ImageIcon className="size-4" />}
+                    Subir imagen
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      disabled={uploadingSignatureImage}
+                      onChange={(event) => {
+                        void uploadSignatureImage(event.target.files?.[0] ?? null);
+                        event.currentTarget.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+                <textarea
+                  id="email-signature-html"
+                  value={signatureDraft.bodyHtml}
+                  onChange={(event) => setSignatureDraft((current) => ({ ...current, bodyHtml: event.target.value }))}
+                  className="min-h-40 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-primary/25"
+                  placeholder="<table>...</table>"
+                  spellCheck={false}
+                />
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setSignatureDialogOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button type="button" onClick={() => void saveSignature()}>
+                  <Save className="size-4" />
+                  Guardar firma
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
           <Dialog open={pdfFolderCartOpen} onOpenChange={setPdfFolderCartOpen}>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
@@ -3771,7 +4161,7 @@ export function EmailClient() {
                   {pdfFolderCart.map((folder) => (
                     <div key={folder.id} className="flex min-h-9 items-center gap-2 rounded-md border border-border px-2 text-sm">
                       <Archive className="size-4 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{emailFolderName(folder)}</span>
                       {(folder.unread_count ?? 0) > 0 ? (
                         <span className="rounded-full bg-primary/10 px-1.5 text-xs font-medium text-primary">
                           {folder.unread_count}
@@ -3831,7 +4221,7 @@ export function EmailClient() {
                   <X className="size-4" />
                 </Button>
               </div>
-              <div className="space-y-2 border-b border-border p-3">
+              <div className="shrink-0 space-y-2 border-b border-border p-3">
                 <Input
                   value={compose.to}
                   onChange={(event) => setCompose((current) => ({ ...current, to: event.target.value }))}
@@ -3857,29 +4247,32 @@ export function EmailClient() {
                 key={editorKey}
                 initialHtml={compose.html || compose.text}
                 onChange={(html, text) => setCompose((current) => ({ ...current, html, text }))}
+                onInlineImage={addInlineComposeImage}
               />
               {composeAttachments.length > 0 ? (
-                <div className="flex flex-wrap gap-2 border-t border-border p-3">
-                  {composeAttachments.map((attachment, index) => (
-                    <span
-                      key={`${attachment.filename}-${index}`}
-                      className="flex max-w-[240px] items-center gap-2 rounded-md border border-border px-2 py-1 text-sm"
-                    >
-                      <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
-                      <button
-                        type="button"
-                        onClick={() => setComposeAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                        className="text-muted-foreground hover:text-foreground"
-                        title="Quitar"
+                <div className="max-h-28 shrink-0 overflow-y-auto border-t border-border p-3">
+                  <div className="flex flex-wrap gap-2">
+                    {composeAttachments.map((attachment, index) => (
+                      <span
+                        key={`${attachment.filename}-${index}`}
+                        className="flex max-w-[240px] items-center gap-2 rounded-md border border-border px-2 py-1 text-sm"
                       >
-                        <X className="size-3.5" />
-                      </button>
-                    </span>
-                  ))}
+                        <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">{attachment.filename}</span>
+                        <button
+                          type="button"
+                          onClick={() => setComposeAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          className="text-muted-foreground hover:text-foreground"
+                          title="Quitar"
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ) : null}
-              <div className="flex items-center justify-between border-t border-border p-3">
+              <div className="flex shrink-0 items-center justify-between border-t border-border p-3">
                 <div className="flex items-center gap-2">
                   <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-sm font-medium hover:bg-muted">
                     <Paperclip className="size-4" />
@@ -3963,7 +4356,7 @@ export function EmailClient() {
                 type="button"
                 onClick={() =>
                   setAttachmentPreview((current) =>
-                    current ? { ...current, zoom: Math.min(2, Number((current.zoom + 0.1).toFixed(2))) } : current,
+                    current ? { ...current, zoom: Math.min(2.5, Number((current.zoom + 0.1).toFixed(2))) } : current,
                   )
                 }
                 className="rounded p-1 hover:bg-white/10"
@@ -3981,6 +4374,17 @@ export function EmailClient() {
               >
                 <ArrowRight className="size-4" />
               </button>
+              {attachmentPreview.kind === 'pdf' ? (
+                <button
+                  type="button"
+                  onClick={printAttachmentPreview}
+                  className="rounded p-1 hover:bg-white/10"
+                  title="Imprimir PDF"
+                  aria-label="Imprimir PDF"
+                >
+                  <Printer className="size-4" />
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void downloadAttachment(attachmentPreview.attachment)}
@@ -4021,7 +4425,7 @@ export function EmailClient() {
                   />
                 </div>
               ) : attachmentPreview.kind === 'pdf' ? (
-                <PdfPreview url={attachmentPreview.rawUrl} />
+                <PdfPreview url={attachmentPreview.rawUrl} zoom={attachmentPreview.zoom} />
               ) : attachmentPreview.kind === 'spreadsheet' ? (
                 <div className="min-h-full rounded bg-white p-3 text-black">
                   {attachmentPreview.loading ? (
