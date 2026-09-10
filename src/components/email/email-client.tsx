@@ -19,6 +19,7 @@ import {
   ArrowUp,
   Bold,
   Check,
+  CheckSquare,
   Columns3,
   Download,
   FileIcon,
@@ -47,6 +48,7 @@ import {
   Send,
   Settings,
   SlidersHorizontal,
+  Square,
   Star,
   Tag,
   Trash2,
@@ -313,7 +315,7 @@ const DEFAULT_EMAIL_COLUMN_VISIBILITY: EmailColumnVisibility = {
   size: true,
 };
 const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
-  status: 48,
+  status: 68,
   from: 170,
   subject: 360,
   labels: 140,
@@ -321,7 +323,7 @@ const DEFAULT_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
   size: 84,
 };
 const MIN_EMAIL_COLUMN_WIDTHS: EmailColumnWidths = {
-  status: 44,
+  status: 64,
   from: 120,
   subject: 220,
   labels: 96,
@@ -1016,6 +1018,7 @@ export function EmailClient() {
   const [selectedMailboxId, setSelectedMailboxId] = useState<string | null>(() => initialSearchParam('mailbox_id'));
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(() => initialSearchParam('folder_id'));
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(() => initialSearchParam('message_id'));
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(() => new Set());
   const [readerMessage, setReaderMessage] = useState<Message | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1058,6 +1061,7 @@ export function EmailClient() {
   const attachmentUrlsRef = useRef(new Map<string, string>());
   const hasLoadedRef = useRef(false);
   const readerMessageRef = useRef<Message | null>(null);
+  const selectionAnchorMessageIdRef = useRef<string | null>(null);
   const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const keepReaderMessage = useCallback((message: Message | null) => {
@@ -1066,7 +1070,7 @@ export function EmailClient() {
   }, []);
 
   const selectedMailbox = useMemo(
-    () => mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? mailboxes[0] ?? null,
+    () => selectedMailboxId ? mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? null : null,
     [mailboxes, selectedMailboxId],
   );
 
@@ -1151,6 +1155,7 @@ export function EmailClient() {
     if (activeFilter === 'starred') return messages.filter((message) => message.is_starred);
     return messages;
   }, [activeFilter, messages]);
+  const selectedVisibleMessageCount = filteredMessages.filter((message) => selectedMessageIds.has(message.id)).length;
 
   const params = useMemo(() => {
     const next = new URLSearchParams();
@@ -1263,6 +1268,14 @@ export function EmailClient() {
       if (eventName === 'deleted' || !messageMatchesCurrentView(message)) return withoutCurrent;
       return sortMessagesByCurrentSort([message, ...withoutCurrent]).slice(0, 200);
     });
+    if (eventName === 'deleted' || !messageMatchesCurrentView(message)) {
+      setSelectedMessageIds((current) => {
+        if (!current.has(message.id)) return current;
+        const next = new Set(current);
+        next.delete(message.id);
+        return next;
+      });
+    }
     if (readerMessageRef.current?.id === message.id) {
       if (eventName === 'deleted') keepReaderMessage(null);
       else keepReaderMessage(message);
@@ -1280,13 +1293,17 @@ export function EmailClient() {
       const nextMailboxes = payload.mailboxes ?? [];
       const nextFolders = payload.folders ?? [];
       const nextMessages = payload.messages ?? [];
-      const nextMailboxId =
-        selectedMailboxId && nextMailboxes.some((mailbox) => mailbox.id === selectedMailboxId)
+      const retainedFolder = selectedFolderId
+        ? nextFolders.find((folder) => folder.id === selectedFolderId) ?? null
+        : null;
+      const nextMailboxId = retainedFolder
+        ? retainedFolder.mailbox_id
+        : selectedMailboxId && nextMailboxes.some((mailbox) => mailbox.id === selectedMailboxId)
           ? selectedMailboxId
           : nextMailboxes[0]?.id ?? null;
       const nextFolderId =
-        selectedFolderId && nextFolders.some((folder) => folder.id === selectedFolderId)
-          ? selectedFolderId
+        retainedFolder
+          ? retainedFolder.id
           : nextFolders.find((folder) => folder.mailbox_id === nextMailboxId && folder.kind === 'inbox')?.id ??
             nextFolders.find((folder) => folder.mailbox_id === nextMailboxId)?.id ??
             nextFolders.find((folder) => !folder.mailbox_id)?.id ??
@@ -1295,6 +1312,11 @@ export function EmailClient() {
       setMailboxes(nextMailboxes);
       setFolders(nextFolders);
       setMessages(nextMessages);
+      setSelectedMessageIds((current) => {
+        const nextMessageIds = new Set(nextMessages.map((message) => message.id));
+        const nextSelection = [...current].filter((id) => nextMessageIds.has(id));
+        return nextSelection.length === current.size ? current : new Set(nextSelection);
+      });
       setSelectedMailboxId(nextMailboxId);
       setSelectedFolderId(nextFolderId);
       setSelectedMessageId((current) => {
@@ -1487,12 +1509,87 @@ export function EmailClient() {
   async function selectMessage(message: Message) {
     keepReaderMessage(message);
     setSelectedMessageId(message.id);
+    setSelectedMessageIds(new Set([message.id]));
+    selectionAnchorMessageIdRef.current = message.id;
     setActiveTabId((current) => current || 'folder');
     if (!message.is_read) {
       setMessages((current) =>
         current.map((item) => (item.id === message.id ? { ...item, is_read: true } : item)),
       );
       await patchMessageById(message.id, { is_read: true }, false);
+    }
+  }
+
+  function clearMessageSelection() {
+    setSelectedMessageIds(new Set());
+    selectionAnchorMessageIdRef.current = null;
+  }
+
+  function toggleMessageSelection(message: Message) {
+    selectionAnchorMessageIdRef.current = message.id;
+    setSelectedMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(message.id)) next.delete(message.id);
+      else next.add(message.id);
+      return next;
+    });
+  }
+
+  function selectMessageRange(message: Message) {
+    const anchorId = selectionAnchorMessageIdRef.current ?? selectedMessageId ?? filteredMessages[0]?.id ?? message.id;
+    const anchorIndex = filteredMessages.findIndex((item) => item.id === anchorId);
+    const targetIndex = filteredMessages.findIndex((item) => item.id === message.id);
+    if (anchorIndex === -1 || targetIndex === -1) {
+      setSelectedMessageIds(new Set([message.id]));
+      selectionAnchorMessageIdRef.current = message.id;
+      return;
+    }
+    const [from, to] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+    setSelectedMessageIds(new Set(filteredMessages.slice(from, to + 1).map((item) => item.id)));
+  }
+
+  function handleMessageClick(event: MouseEvent<HTMLDivElement>, message: Message) {
+    if (event.shiftKey) {
+      selectMessageRange(message);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      toggleMessageSelection(message);
+      return;
+    }
+    void selectMessage(message);
+  }
+
+  async function patchSelectedMessages(body: Record<string, unknown>) {
+    const messageIds = filteredMessages
+      .map((message) => message.id)
+      .filter((messageId) => selectedMessageIds.has(messageId));
+    if (messageIds.length === 0) return;
+
+    if (typeof body.is_read === 'boolean') {
+      setMessages((current) =>
+        current.map((message) =>
+          selectedMessageIds.has(message.id) ? { ...message, is_read: body.is_read as boolean } : message,
+        ),
+      );
+      if (readerMessageRef.current && selectedMessageIds.has(readerMessageRef.current.id)) {
+        keepReaderMessage({ ...readerMessageRef.current, is_read: body.is_read as boolean });
+      }
+    }
+
+    try {
+      const res = await fetch('/api/email/messages/batch', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_ids: messageIds, ...body }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'No se pudo actualizar la seleccion');
+      toast.success(`${messageIds.length} correos actualizados`);
+      await load({ silent: true });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo actualizar la seleccion');
+      await load({ silent: true });
     }
   }
 
@@ -1627,8 +1724,21 @@ export function EmailClient() {
 
   function renderMessageCell(message: Message, column: EmailColumnId) {
     if (column === 'status') {
+      const isSelected = selectedMessageIds.has(message.id);
       return (
         <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleMessageSelection(message);
+            }}
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-primary"
+            title={isSelected ? 'Quitar de la seleccion' : 'Seleccionar correo'}
+            aria-label={isSelected ? 'Quitar de la seleccion' : 'Seleccionar correo'}
+          >
+            {isSelected ? <CheckSquare className="size-3.5 text-primary" /> : <Square className="size-3.5" />}
+          </button>
           <span className={cn('size-2 rounded-full', message.is_read ? 'bg-transparent' : 'bg-primary')} />
           {message.is_replied ? (
             <Reply className="size-3.5 shrink-0 text-primary" aria-label="Respondido" />
@@ -2614,6 +2724,8 @@ export function EmailClient() {
                           const inbox = folders.find((folder) => folder.mailbox_id === mailbox.id && folder.kind === 'inbox');
                           setSelectedMailboxId(mailbox.id);
                           setSelectedFolderId(inbox?.id ?? folders.find((folder) => folder.mailbox_id === mailbox.id)?.id ?? null);
+                          setSelectedMessageId(null);
+                          clearMessageSelection();
                           setActiveTabId('folder');
                           setComposeOpen(false);
                         }}
@@ -2648,6 +2760,8 @@ export function EmailClient() {
                               onClick={() => {
                                 setSelectedMailboxId(mailbox.id);
                                 setSelectedFolderId(folder.id);
+                                setSelectedMessageId(null);
+                                clearMessageSelection();
                                 setActiveTabId('folder');
                                 setComposeOpen(false);
                               }}
@@ -2696,8 +2810,10 @@ export function EmailClient() {
                       type="button"
                       onContextMenu={(event) => openFolderContextMenu(event, folder, selectedMailboxId)}
                       onClick={() => {
-                        setSelectedMailboxId(folder.mailbox_id ?? selectedMailboxId);
+                        setSelectedMailboxId(folder.mailbox_id);
                         setSelectedFolderId(folder.id);
+                        setSelectedMessageId(null);
+                        clearMessageSelection();
                         setActiveTabId('folder');
                         setComposeOpen(false);
                       }}
@@ -2943,6 +3059,22 @@ export function EmailClient() {
               <span className="truncate">{selectedFolder?.name ?? 'Carpeta'} · {messages.length} correos</span>
               <span>{unreadCount} no leidos</span>
             </div>
+            {selectedVisibleMessageCount > 0 ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/40 p-1.5 text-xs">
+                <span className="px-1.5 font-medium text-foreground">{selectedVisibleMessageCount} seleccionados</span>
+                <Button size="xs" variant="outline" onClick={() => void patchSelectedMessages({ is_read: true })}>
+                  <MailOpen className="size-3.5" />
+                  Leidos
+                </Button>
+                <Button size="xs" variant="outline" onClick={() => void patchSelectedMessages({ is_read: false })}>
+                  <Mail className="size-3.5" />
+                  No leidos
+                </Button>
+                <Button size="icon-xs" variant="ghost" onClick={clearMessageSelection} title="Limpiar seleccion" aria-label="Limpiar seleccion">
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+            ) : null}
             {activeSearchChips.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {activeSearchChips.map((chip) => (
@@ -3002,15 +3134,26 @@ export function EmailClient() {
                     key={message.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => void selectMessage(message)}
+                    onClick={(event) => handleMessageClick(event, message)}
                     onDoubleClick={() => void openMessageTab(message)}
-                    onContextMenu={(event) => openMessageContextMenu(event, message)}
+                    onContextMenu={(event) => {
+                      if (!selectedMessageIds.has(message.id)) {
+                        setSelectedMessageIds(new Set([message.id]));
+                        selectionAnchorMessageIdRef.current = message.id;
+                      }
+                      openMessageContextMenu(event, message);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') void selectMessage(message);
+                      if (event.key === ' ') {
+                        event.preventDefault();
+                        toggleMessageSelection(message);
+                      }
                     }}
                     className={cn(
                       'grid items-center border-b border-border px-2 text-sm transition-colors hover:bg-muted/60',
                       listTextMode === 'compact' ? 'min-h-8' : listTextMode === 'comfortable' ? 'min-h-12' : 'min-h-10',
+                      selectedMessageIds.has(message.id) && 'bg-primary/5 ring-1 ring-inset ring-primary/20',
                       selectedMessage?.id === message.id && 'bg-primary/10',
                       !message.is_read && 'font-semibold',
                     )}

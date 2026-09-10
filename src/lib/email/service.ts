@@ -1749,7 +1749,7 @@ export async function markEmailMailboxAsRead(args: {
     mailboxIds: [args.mailboxId],
   });
   const accessibleFolderIds = accessibleFolders
-    .filter((folder) => folder.mailboxId === args.mailboxId || folder.mailboxId === null)
+    .filter((folder) => folder.mailboxId === args.mailboxId)
     .map((folder) => folder.id);
 
   const updated = accessibleFolderIds.length === 0
@@ -1762,6 +1762,7 @@ export async function markEmailMailboxAsRead(args: {
             eq(emailMessages.accountId, args.accountId),
             eq(emailMessages.mailboxId, args.mailboxId),
             inArray(emailMessages.folderId, accessibleFolderIds),
+            eq(emailMessages.folderSource, 'imap'),
             eq(emailMessages.isRead, false),
           ),
         )
