@@ -9,11 +9,15 @@ export async function POST(request: Request) {
     const ctx = await requireDbRole('admin');
     const body = await request.json().catch(() => ({}));
     const resetExisting = body?.reset_existing === true;
+    const fullScan = body?.full_scan === true;
+    if (fullScan && typeof body?.email_account_id !== 'string') {
+      return NextResponse.json({ error: 'email_account_id is required for full_scan.' }, { status: 400 });
+    }
     const since = typeof body?.since === 'string' ? new Date(body.since) : null;
     if (since && Number.isNaN(since.getTime())) {
       return NextResponse.json({ error: 'since must be a valid ISO date.' }, { status: 400 });
     }
-    const maxMessages = resetExisting ? null : typeof body?.max_messages === 'number' && body.max_messages > 0 ? Math.min(body.max_messages, 200) : 50;
+    const maxMessages = resetExisting || fullScan ? null : typeof body?.max_messages === 'number' && body.max_messages > 0 ? Math.min(body.max_messages, 200) : 50;
     const result =
       typeof body?.email_account_id === 'string'
         ? await importEmailAccount({
@@ -22,6 +26,7 @@ export async function POST(request: Request) {
             userId: ctx.userId,
             maxMessages,
             resetExisting,
+            fullScan,
             since,
             notify: resetExisting ? false : undefined,
           })
@@ -30,6 +35,7 @@ export async function POST(request: Request) {
             userId: ctx.userId,
             maxMessages,
             resetExisting,
+            fullScan,
             since,
             notify: resetExisting ? false : undefined,
           });

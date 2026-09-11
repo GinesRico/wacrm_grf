@@ -88,6 +88,7 @@ import { uploadAccountMedia } from '@/lib/storage/upload-media';
 
 interface Mailbox {
   id: string;
+  email_account_id: string;
   address: string;
   display_name: string | null;
   kind: 'personal' | 'shared';
@@ -892,6 +893,7 @@ function MailboxContextMenu({
   mailboxName,
   target,
   onMarkAllRead,
+  onFullSync,
   onDownloadUnreadPdfs,
   onAccumulateUnreadPdfs,
 }: {
@@ -900,6 +902,7 @@ function MailboxContextMenu({
   mailboxName: string;
   target: 'mailbox' | 'folder';
   onMarkAllRead: () => void;
+  onFullSync?: () => void;
   onDownloadUnreadPdfs?: () => void;
   onAccumulateUnreadPdfs?: () => void;
 }) {
@@ -920,6 +923,16 @@ function MailboxContextMenu({
         <MailOpen className="size-4" />
         <span className="truncate">{target === 'folder' ? 'Marcar carpeta como leida' : 'Marcar todos como leidos'}</span>
       </button>
+      {target === 'mailbox' && onFullSync ? (
+        <button
+          type="button"
+          onClick={onFullSync}
+          className="flex h-9 w-full items-center gap-2 rounded px-2 text-left hover:bg-muted"
+        >
+          <RefreshCw className="size-4" />
+          <span className="truncate">Sincronizar buzon completo</span>
+        </button>
+      ) : null}
       {target === 'folder' && onDownloadUnreadPdfs ? (
         <button
           type="button"
@@ -2452,17 +2465,36 @@ export function EmailClient() {
     }
   }
 
-  async function sync() {
+  async function sync(options: { fullScan?: boolean; mailbox?: Mailbox | null } = {}) {
+    const fullScanMailbox = options.fullScan ? options.mailbox ?? selectedMailbox : null;
+    if (options.fullScan && !fullScanMailbox) {
+      toast.error('Selecciona un buzon.');
+      return;
+    }
+    if (options.fullScan) {
+      const confirmed = window.confirm(
+        `Se revisara todo el buzon ${fullScanMailbox?.address} desde IMAP sin borrar correos ni duplicar los ya importados. Puede tardar. Continuar?`,
+      );
+      if (!confirmed) return;
+    }
     setSyncing(true);
     try {
       const res = await fetch('/api/email/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_messages: 50 }),
+        body: JSON.stringify(
+          fullScanMailbox
+            ? { email_account_id: fullScanMailbox.email_account_id, full_scan: true }
+            : { max_messages: 50 },
+        ),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudo sincronizar');
-      toast.success(`Sincronizacion completada: ${payload.imported ?? 0} nuevos`);
+      toast.success(
+        options.fullScan
+          ? `Revision completa: ${payload.imported ?? 0} nuevos, ${payload.skipped ?? 0} ya estaban`
+          : `Sincronizacion completada: ${payload.imported ?? 0} nuevos`,
+      );
       await load({ useCache: false, includeWorkspace: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo sincronizar');
@@ -3172,7 +3204,7 @@ export function EmailClient() {
               {pdfFolderCartIds.size}
             </Button>
           ) : null}
-          <Button size="icon-sm" variant="outline" onClick={sync} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
+          <Button size="icon-sm" variant="outline" onClick={() => void sync()} disabled={syncing} title="Sincronizar" aria-label="Sincronizar">
             {syncing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
           </Button>
           <Button
@@ -3718,6 +3750,14 @@ export function EmailClient() {
                 }
                 void markMailboxAsRead(mailboxContextMenu.mailboxId);
               }}
+              onFullSync={
+                mailboxContextMenu.target === 'mailbox'
+                  ? () => {
+                      const mailbox = mailboxes.find((item) => item.id === mailboxContextMenu.mailboxId) ?? null;
+                      void sync({ fullScan: true, mailbox });
+                    }
+                  : undefined
+              }
               onDownloadUnreadPdfs={
                 mailboxContextMenu.folderId
                   ? () => void downloadUnreadFolderPdfs(mailboxContextMenu.folderId as string)

@@ -2309,7 +2309,7 @@ async function notifyNewEmailMessage(row: typeof emailMessages.$inferSelect) {
   );
 }
 
-export async function importEmailAccount(args: { accountId: string; emailAccountId: string; userId?: string | null; maxMessages?: number | null; resetExisting?: boolean; since?: Date | string | null; notify?: boolean }) {
+export async function importEmailAccount(args: { accountId: string; emailAccountId: string; userId?: string | null; maxMessages?: number | null; resetExisting?: boolean; fullScan?: boolean; since?: Date | string | null; notify?: boolean }) {
   const [account] = await db
     .select()
     .from(emailAccounts)
@@ -2326,6 +2326,7 @@ export async function importEmailAccount(args: { accountId: string; emailAccount
 
   const credentials = decryptEmailCredentials(account.encryptedCredentials as Record<string, unknown>);
   const resetExisting = args.resetExisting === true;
+  const fullScan = args.fullScan === true;
   const since = asDate(args.since) ?? null;
 
   if (resetExisting) {
@@ -2366,7 +2367,7 @@ export async function importEmailAccount(args: { accountId: string; emailAccount
     void deletedRows;
   }
 
-  const cursor = resetExisting ? {} : ((account.syncCursor as EmailSyncCursor | null) ?? {});
+  const cursor = resetExisting || fullScan ? {} : ((account.syncCursor as EmailSyncCursor | null) ?? {});
   const folderCursors = cursor.folders ?? {
     [account.syncMailbox]: {
       last_uid: cursor.last_uid,
@@ -2406,7 +2407,7 @@ export async function importEmailAccount(args: { accountId: string; emailAccount
         });
         const uidValidity = String(info.uidValidity ?? '0');
         const previous = folderCursors[remoteFolder.path];
-        const fromUid = previous?.uid_validity === uidValidity ? (previous.last_uid ?? 0) + 1 : 1;
+        const fromUid = fullScan ? 1 : previous?.uid_validity === uidValidity ? (previous.last_uid ?? 0) + 1 : 1;
         const allUidsResult = await client.search({ all: true }, { uid: true });
         const allUids = Array.isArray(allUidsResult) ? allUidsResult : [];
         for (const uid of allUids) seen.add(`${remoteFolder.path}:${uidValidity}:${uid}`);
@@ -2658,7 +2659,7 @@ export async function importEmailAccount(args: { accountId: string; emailAccount
   return { imported, skipped, moved, missing };
 }
 
-export async function importAllEmailAccounts(args: { accountId?: string; userId?: string | null; maxMessages?: number | null; resetExisting?: boolean; since?: Date | string | null; notify?: boolean }) {
+export async function importAllEmailAccounts(args: { accountId?: string; userId?: string | null; maxMessages?: number | null; resetExisting?: boolean; fullScan?: boolean; since?: Date | string | null; notify?: boolean }) {
   const rows = await db
     .select()
     .from(emailAccounts)
@@ -2674,6 +2675,7 @@ export async function importAllEmailAccounts(args: { accountId?: string; userId?
       userId: args.userId ?? null,
       maxMessages: args.maxMessages,
       resetExisting: args.resetExisting,
+      fullScan: args.fullScan,
       since: args.since,
       notify: args.notify,
     });
