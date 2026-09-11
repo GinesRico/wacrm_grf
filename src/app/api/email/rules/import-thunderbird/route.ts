@@ -14,12 +14,17 @@ export async function POST(request: Request) {
     }
     const source = typeof body?.source === 'string' ? body.source : '';
     const parsed = parseThunderbirdRules(source);
-    const rules = await importThunderbirdRules({
+    const result = await importThunderbirdRules({
       accountId: ctx.accountId,
       mailboxId: body.mailbox_id,
       rules: parsed,
     });
-    return NextResponse.json({ imported: rules.length, rules });
+    return NextResponse.json({
+      imported: result.created.length,
+      skipped_duplicates: result.skippedDuplicates,
+      removed_duplicates: result.removedDuplicates,
+      rules: result.created,
+    });
   } catch (err) {
     if (err instanceof Error) {
       return NextResponse.json({ error: err.message }, { status: 400 });

@@ -2,29 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
-import {
-  Archive,
-  Building2,
-  Copy,
-  Edit2,
-  Flame,
-  Folder,
-  FolderPlus,
-  Grid2X2,
-  Inbox,
-  Loader2,
-  Mail,
-  Plus,
-  RefreshCw,
-  Save,
-  Send,
-  ShieldCheck,
-  Trash2,
-  User,
-  Upload,
-  Users,
-  X,
-} from 'lucide-react';
+import { Archive, Building2, Copy, Edit2, Flame, Folder, FolderPlus, Grid2X2, Inbox, Loader2, Mail, Plus, RefreshCw, Save, Send, ShieldCheck, Trash2, User, Upload, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -83,10 +61,10 @@ function emailFolderName(folder: Pick<FolderRow, 'name' | 'slug'>) {
 }
 
 function FolderRowIcon({ folder }: { folder: FolderRow }) {
-  if (isSpamFolder(folder)) return <Flame className="size-4 text-muted-foreground" />;
-  if (folder.kind === 'inbox') return <Inbox className="size-4 text-primary" />;
-  if (folder.kind === 'sent') return <Send className="size-4 text-muted-foreground" />;
-  return <Folder className="size-4 text-muted-foreground" />;
+  if (isSpamFolder(folder)) return <Flame className="text-muted-foreground size-4" />;
+  if (folder.kind === 'inbox') return <Inbox className="text-primary size-4" />;
+  if (folder.kind === 'sent') return <Send className="text-muted-foreground size-4" />;
+  return <Folder className="text-muted-foreground size-4" />;
 }
 
 interface PermissionRow {
@@ -205,27 +183,52 @@ const permissionPresets: PermissionPreset[] = [
   {
     id: 'read',
     label: 'Solo lectura',
-    permissions: { can_read: true, can_move: false, can_classify: false, can_send: false },
+    permissions: {
+      can_read: true,
+      can_move: false,
+      can_classify: false,
+      can_send: false,
+    },
   },
   {
     id: 'work',
     label: 'Trabajo completo',
-    permissions: { can_read: true, can_move: true, can_classify: true, can_send: true },
+    permissions: {
+      can_read: true,
+      can_move: true,
+      can_classify: true,
+      can_send: true,
+    },
   },
   {
     id: 'move',
     label: 'Lectura + mover',
-    permissions: { can_read: true, can_move: true, can_classify: false, can_send: false },
+    permissions: {
+      can_read: true,
+      can_move: true,
+      can_classify: false,
+      can_send: false,
+    },
   },
   {
     id: 'send',
     label: 'Enviar permitido',
-    permissions: { can_read: true, can_move: false, can_classify: false, can_send: true },
+    permissions: {
+      can_read: true,
+      can_move: false,
+      can_classify: false,
+      can_send: true,
+    },
   },
   {
     id: 'none',
     label: 'Sin acceso',
-    permissions: { can_read: false, can_move: false, can_classify: false, can_send: false },
+    permissions: {
+      can_read: false,
+      can_move: false,
+      can_classify: false,
+      can_send: false,
+    },
   },
 ];
 
@@ -251,16 +254,21 @@ export function EmailAdminSettings() {
   const [editingRuleId, setEditingRuleId] = useState('');
   const [savingRuleId, setSavingRuleId] = useState('');
   const [ruleMailboxFilter, setRuleMailboxFilter] = useState('');
-  const [ruleEdits, setRuleEdits] = useState<Record<string, {
-    name: string;
-    field: string;
-    operator: string;
-    value: string;
-    target_folder_id: string | null;
-    enabled: boolean;
-    action: string;
-    action_value: string | null;
-  }>>({});
+  const [ruleEdits, setRuleEdits] = useState<
+    Record<
+      string,
+      {
+        name: string;
+        field: string;
+        operator: string;
+        value: string;
+        target_folder_id: string | null;
+        enabled: boolean;
+        action: string;
+        action_value: string | null;
+      }
+    >
+  >({});
 
   const selectedAccount = state.accounts.find((account) => account.id === selectedAccountId) ?? null;
   const selectedMailbox = state.mailboxes.find((mailbox) => mailbox.id === selectedMailboxId) ?? state.mailboxes[0] ?? null;
@@ -290,29 +298,41 @@ export function EmailAdminSettings() {
         folderId: folder.id,
       })),
     ],
-    [publicFolders, state.mailboxes],
+    [publicFolders, state.mailboxes]
   );
 
-  const mailboxName = useCallback((mailboxId: string | null) => {
-    if (!mailboxId) return 'Carpetas publicas';
-    const mailbox = state.mailboxes.find((item) => item.id === mailboxId);
-    return mailbox?.display_name || mailbox?.address || 'Buzon';
-  }, [state.mailboxes]);
+  const mailboxName = useCallback(
+    (mailboxId: string | null) => {
+      if (!mailboxId) return 'Carpetas publicas';
+      const mailbox = state.mailboxes.find((item) => item.id === mailboxId);
+      return mailbox?.display_name || mailbox?.address || 'Buzon';
+    },
+    [state.mailboxes]
+  );
 
-  const folderName = useCallback((folderId: string | null) => {
-    if (!folderId) return 'Todo el buzon';
-    const folder = state.folders.find((item) => item.id === folderId);
-    return folder ? emailFolderName(folder) : 'Carpeta';
-  }, [state.folders]);
+  const folderName = useCallback(
+    (folderId: string | null) => {
+      if (!folderId) return 'Todo el buzon';
+      const folder = state.folders.find((item) => item.id === folderId);
+      return folder ? emailFolderName(folder) : 'Carpeta';
+    },
+    [state.folders]
+  );
 
-  const userName = useCallback((userId: string | undefined) => {
-    const user = state.users.find((item) => item.user_id === userId);
-    return user?.full_name || user?.email || userId || 'Usuario';
-  }, [state.users]);
+  const userName = useCallback(
+    (userId: string | undefined) => {
+      const user = state.users.find((item) => item.user_id === userId);
+      return user?.full_name || user?.email || userId || 'Usuario';
+    },
+    [state.users]
+  );
 
-  const departmentName = useCallback((departmentId: string | undefined) => {
-    return state.departments.find((item) => item.id === departmentId)?.name || departmentId || 'Grupo';
-  }, [state.departments]);
+  const departmentName = useCallback(
+    (departmentId: string | undefined) => {
+      return state.departments.find((item) => item.id === departmentId)?.name || departmentId || 'Grupo';
+    },
+    [state.departments]
+  );
 
   const ruleDraft = (rule: RuleRow) =>
     ruleEdits[rule.id] ?? {
@@ -334,11 +354,7 @@ export function EmailAdminSettings() {
       if (!res.ok) throw new Error(payload.error || 'No se pudo cargar Email');
       const nextState: AdminState = { ...emptyState, ...payload };
       setState(nextState);
-      setSelectedMailboxId((current) =>
-        current && nextState.mailboxes.some((mailbox) => mailbox.id === current)
-          ? current
-          : nextState.mailboxes[0]?.id ?? '',
-      );
+      setSelectedMailboxId((current) => (current && nextState.mailboxes.some((mailbox) => mailbox.id === current) ? current : (nextState.mailboxes[0]?.id ?? '')));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudo cargar Email');
     } finally {
@@ -406,7 +422,15 @@ export function EmailAdminSettings() {
       owner_user_id: mailboxForm.mailbox_kind === 'personal' ? mailboxForm.owner_user_id || null : null,
     };
     if (selectedAccount) {
-      await post({ action: 'update_account', email_account_id: selectedAccount.id, enabled: selectedAccount.enabled, ...body }, 'Buzon actualizado');
+      await post(
+        {
+          action: 'update_account',
+          email_account_id: selectedAccount.id,
+          enabled: selectedAccount.enabled,
+          ...body,
+        },
+        'Buzon actualizado'
+      );
     } else {
       await post({ action: 'create_account', ...body }, 'Buzon creado');
     }
@@ -420,7 +444,14 @@ export function EmailAdminSettings() {
 
   async function createInternalFolder() {
     if (!selectedMailbox || !newInternalFolder.trim()) return;
-    await post({ action: 'create_folder', mailbox_id: selectedMailbox.id, name: newInternalFolder.trim() }, 'Carpeta interna creada');
+    await post(
+      {
+        action: 'create_folder',
+        mailbox_id: selectedMailbox.id,
+        name: newInternalFolder.trim(),
+      },
+      'Carpeta interna creada'
+    );
     setNewInternalFolder('');
   }
 
@@ -454,7 +485,7 @@ export function EmailAdminSettings() {
           id: department.id,
           label: department.name,
           description: 'Grupo/departamento',
-      }));
+        }));
   }
 
   function permissionScopeForView(): PermissionScope {
@@ -464,38 +495,28 @@ export function EmailAdminSettings() {
   }
 
   function findPermission(scope: PermissionScope, subjectId: string, target: PermissionTarget) {
-    return rowsForScope(scope).find((row) => {
-      const ownerMatches = scope === 'user' ? row.user_id === subjectId : row.department_id === subjectId;
-      return ownerMatches && row.mailbox_id === target.mailboxId && row.folder_id === target.folderId;
-    }) ?? null;
+    return (
+      rowsForScope(scope).find((row) => {
+        const ownerMatches = scope === 'user' ? row.user_id === subjectId : row.department_id === subjectId;
+        return ownerMatches && row.mailbox_id === target.mailboxId && row.folder_id === target.folderId;
+      }) ?? null
+    );
   }
 
   function permissionSummary(permission: PermissionRow | null) {
     if (!permission) return 'Sin acceso';
-    const parts = [
-      permission.can_read ? 'L' : '',
-      permission.can_move ? 'M' : '',
-      permission.can_classify ? 'C' : '',
-      permission.can_send ? 'E' : '',
-    ].filter(Boolean);
+    const parts = [permission.can_read ? 'L' : '', permission.can_move ? 'M' : '', permission.can_classify ? 'C' : '', permission.can_send ? 'E' : ''].filter(Boolean);
     return parts.length ? parts.join(' ') : 'Sin acceso';
   }
 
   function targetHasAnyPermission(target: PermissionTarget) {
-    return [...state.permissions, ...state.user_permissions].some(
-      (row) => row.mailbox_id === target.mailboxId && row.folder_id === target.folderId,
-    );
+    return [...state.permissions, ...state.user_permissions].some((row) => row.mailbox_id === target.mailboxId && row.folder_id === target.folderId);
   }
 
   const filteredPermissionTargets = permissionTargets.filter((target) => {
     const search = permissionSearch.trim().toLowerCase();
     const matchesSearch = !search || `${target.label} ${target.description}`.toLowerCase().includes(search);
-    const matchesFilter =
-      permissionTargetFilter === 'all' ||
-      (permissionTargetFilter === 'mailboxes' && target.type === 'mailbox') ||
-      (permissionTargetFilter === 'public' && target.type === 'folder') ||
-      (permissionTargetFilter === 'with' && targetHasAnyPermission(target)) ||
-      (permissionTargetFilter === 'without' && !targetHasAnyPermission(target));
+    const matchesFilter = permissionTargetFilter === 'all' || (permissionTargetFilter === 'mailboxes' && target.type === 'mailbox') || (permissionTargetFilter === 'public' && target.type === 'folder') || (permissionTargetFilter === 'with' && targetHasAnyPermission(target)) || (permissionTargetFilter === 'without' && !targetHasAnyPermission(target));
     return matchesSearch && matchesFilter;
   });
 
@@ -527,7 +548,7 @@ export function EmailAdminSettings() {
         can_classify: preset.permissions.can_classify,
         can_send: preset.permissions.can_send,
       },
-      preset.id === 'none' ? 'Permisos revocados' : 'Permisos aplicados',
+      preset.id === 'none' ? 'Permisos revocados' : 'Permisos aplicados'
     );
   }
 
@@ -593,11 +614,51 @@ export function EmailAdminSettings() {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'No se pudieron importar reglas');
-      toast.success(`${payload.imported ?? 0} reglas importadas`);
+      toast.success(`${payload.imported ?? 0} reglas importadas, ${payload.removed_duplicates ?? 0} duplicadas borradas`);
       setRulesSource('');
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'No se pudieron importar reglas');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function importRulesAndReseedLastYear() {
+    const mailboxId = ruleMailboxFilter || selectedMailboxId;
+    const mailbox = state.mailboxes.find((item) => item.id === mailboxId);
+    if (!mailbox || !rulesSource.trim()) return;
+    const confirmed = window.confirm('Esto borrara los correos almacenados de este buzon y cargara de nuevo el ultimo ano desde IMAP. Continuar?');
+    if (!confirmed) return;
+    const since = new Date();
+    since.setFullYear(since.getFullYear() - 1);
+    setSaving(true);
+    try {
+      const rulesRes = await fetch('/api/email/rules/import-thunderbird', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mailbox_id: mailbox.id, source: rulesSource }),
+      });
+      const rulesPayload = await rulesRes.json().catch(() => ({}));
+      if (!rulesRes.ok) throw new Error(rulesPayload.error || 'No se pudieron importar reglas');
+
+      const syncRes = await fetch('/api/email/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email_account_id: mailbox.email_account_id,
+          reset_existing: true,
+          since: since.toISOString(),
+        }),
+      });
+      const syncPayload = await syncRes.json().catch(() => ({}));
+      if (!syncRes.ok) throw new Error(syncPayload.error || 'No se pudo reimportar el correo');
+
+      toast.success(`${syncPayload.imported ?? 0} correos cargados; ${rulesPayload.imported ?? 0} reglas nuevas; ${rulesPayload.removed_duplicates ?? 0} duplicadas borradas`);
+      setRulesSource('');
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'No se pudo completar la importacion Thunderbird');
     } finally {
       setSaving(false);
     }
@@ -623,7 +684,10 @@ export function EmailAdminSettings() {
   function updateRuleDraft(ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) {
     const rule = state.rules.find((item) => item.id === ruleId);
     if (!rule) return;
-    setRuleEdits((current) => ({ ...current, [ruleId]: { ...ruleDraft(rule), ...patch } }));
+    setRuleEdits((current) => ({
+      ...current,
+      [ruleId]: { ...ruleDraft(rule), ...patch },
+    }));
   }
 
   async function saveRule(rule: RuleRow) {
@@ -685,21 +749,18 @@ export function EmailAdminSettings() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <Loader2 className="size-6 animate-spin text-primary" />
+        <Loader2 className="text-primary size-6 animate-spin" />
       </div>
     );
   }
 
   return (
     <section className="animate-in fade-in-50 space-y-4 duration-200">
-      <SettingsPanelHead
-        title="Email compartido"
-        description="Administra buzones, carpetas publicas, permisos, reglas e historial del webmail."
-      />
+      <SettingsPanelHead title="Email compartido" description="Administra buzones, carpetas publicas, permisos, reglas e historial del webmail." />
 
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="border-border flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge variant="outline">{state.mailboxes.length} buzones</Badge>
               <Badge variant="outline">{publicFolders.length} carpetas publicas</Badge>
@@ -713,17 +774,7 @@ export function EmailAdminSettings() {
           </div>
           <nav className="flex gap-1 overflow-x-auto px-2 pt-2" aria-label="Secciones de Email">
             {sections.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                onClick={() => setActiveSection(section.id)}
-                className={cn(
-                  'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                  activeSection === section.id
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
-              >
+              <button key={section.id} type="button" onClick={() => setActiveSection(section.id)} className={cn('border-b-2 px-3 py-2 text-sm font-medium transition-colors', activeSection === section.id ? 'border-primary text-primary' : 'text-muted-foreground hover:text-foreground border-transparent')}>
                 {section.label}
               </button>
             ))}
@@ -747,17 +798,19 @@ export function EmailAdminSettings() {
               state.mailboxes.map((mailbox) => {
                 const account = accountsById.get(mailbox.email_account_id);
                 return (
-                  <div key={mailbox.id} className="grid gap-3 rounded-md border border-border p-3 text-sm lg:grid-cols-[minmax(220px,1fr)_minmax(180px,260px)_auto] lg:items-center">
+                  <div key={mailbox.id} className="border-border grid gap-3 rounded-md border p-3 text-sm lg:grid-cols-[minmax(220px,1fr)_minmax(180px,260px)_auto] lg:items-center">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <Mail className="size-4 text-primary" />
+                        <Mail className="text-primary size-4" />
                         <span className="truncate font-medium">{mailbox.display_name || mailbox.address}</span>
                         <Badge variant={mailbox.kind === 'personal' ? 'secondary' : 'outline'}>{mailbox.kind === 'personal' ? 'Personal' : 'Compartido'}</Badge>
                       </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">{mailbox.address}</p>
+                      <p className="text-muted-foreground mt-1 truncate text-xs">{mailbox.address}</p>
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      <div>{account?.imap_host}:{account?.imap_port} · {account?.status}</div>
+                    <div className="text-muted-foreground text-xs">
+                      <div>
+                        {account?.imap_host}:{account?.imap_port} · {account?.status}
+                      </div>
                       <div>{account?.last_synced_at ? new Date(account.last_synced_at).toLocaleString() : 'Sin sincronizar'}</div>
                       {account?.last_error ? <div className="text-destructive">{account.last_error}</div> : null}
                     </div>
@@ -790,7 +843,9 @@ export function EmailAdminSettings() {
             <CardContent className="space-y-3">
               <SelectLabel label="Buzon" value={selectedMailboxId} onChange={setSelectedMailboxId}>
                 {state.mailboxes.map((mailbox) => (
-                  <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
+                  <option key={mailbox.id} value={mailbox.id}>
+                    {mailbox.display_name || mailbox.address}
+                  </option>
                 ))}
               </SelectLabel>
               <div className="flex gap-2">
@@ -801,7 +856,7 @@ export function EmailAdminSettings() {
                 </Button>
               </div>
               <FolderList folders={internalFolders} onDelete={deleteFolder} />
-              <p className="text-xs text-muted-foreground">{systemFolderCount} carpetas de sistema protegidas.</p>
+              <p className="text-muted-foreground text-xs">{systemFolderCount} carpetas de sistema protegidas.</p>
             </CardContent>
           </Card>
 
@@ -829,7 +884,7 @@ export function EmailAdminSettings() {
             <CardTitle className="text-base">Permisos de acceso en masa</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border p-3">
+            <div className="border-border flex flex-wrap items-center justify-between gap-3 rounded-md border p-3">
               <div className="flex flex-wrap gap-1">
                 {[
                   { id: 'group', label: 'Por grupo', icon: Building2 },
@@ -856,17 +911,8 @@ export function EmailAdminSettings() {
                 })}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  value={permissionSearch}
-                  onChange={(event) => setPermissionSearch(event.target.value)}
-                  placeholder="Buscar buzón o carpeta"
-                  className="h-9 w-56"
-                />
-                <select
-                  value={permissionTargetFilter}
-                  onChange={(event) => setPermissionTargetFilter(event.target.value as typeof permissionTargetFilter)}
-                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-                >
+                <Input value={permissionSearch} onChange={(event) => setPermissionSearch(event.target.value)} placeholder="Buscar buzón o carpeta" className="h-9 w-56" />
+                <select value={permissionTargetFilter} onChange={(event) => setPermissionTargetFilter(event.target.value as typeof permissionTargetFilter)} className="border-border bg-background h-9 rounded-md border px-2 text-sm">
                   <option value="all">Todos</option>
                   <option value="mailboxes">Buzones</option>
                   <option value="public">Carpetas publicas</option>
@@ -876,8 +922,8 @@ export function EmailAdminSettings() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-border p-3">
-              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Presets</span>
+            <div className="border-border flex flex-wrap items-center gap-2 rounded-md border p-3">
+              <span className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Presets</span>
               {permissionPresets.map((preset) => (
                 <Button key={preset.id} type="button" size="sm" variant="outline" onClick={() => applyPresetToSelection(preset)} disabled={saving}>
                   {preset.label}
@@ -892,20 +938,18 @@ export function EmailAdminSettings() {
                       setSelectedPermissionSubjects([]);
                       setCopyFromSubjectId('');
                     }}
-                    className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                    className="border-border bg-background h-9 rounded-md border px-2 text-sm"
                   >
                     <option value="department">Grupos</option>
                     <option value="user">Usuarios</option>
                   </select>
                 ) : null}
-                <select
-                  value={copyFromSubjectId}
-                  onChange={(event) => setCopyFromSubjectId(event.target.value)}
-                  className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-                >
+                <select value={copyFromSubjectId} onChange={(event) => setCopyFromSubjectId(event.target.value)} className="border-border bg-background h-9 rounded-md border px-2 text-sm">
                   <option value="">Copiar permisos de...</option>
                   {permissionSubjectOptions(permissionScopeForView()).map((subject) => (
-                    <option key={subject.id} value={subject.id}>{subject.label}</option>
+                    <option key={subject.id} value={subject.id}>
+                      {subject.label}
+                    </option>
                   ))}
                 </select>
                 <Button type="button" size="sm" variant="outline" onClick={copyPermissionsFromSubject} disabled={saving || !copyFromSubjectId}>
@@ -915,22 +959,7 @@ export function EmailAdminSettings() {
               </div>
             </div>
 
-            <PermissionMatrix
-              view={permissionView}
-              scope={permissionScopeForView()}
-              subjects={permissionSubjectOptions(permissionScopeForView())}
-              targets={filteredPermissionTargets}
-              selectedSubjects={selectedPermissionSubjects}
-              selectedTargets={selectedPermissionTargets}
-              onToggleSubject={(id) => setSelectedPermissionSubjects((current) => toggleSelection(current, id))}
-              onToggleTarget={(key) => setSelectedPermissionTargets((current) => toggleSelection(current, key))}
-              onToggleAllSubjects={(ids) => setSelectedPermissionSubjects((current) => current.length === ids.length ? [] : ids)}
-              onToggleAllTargets={(keys) => setSelectedPermissionTargets((current) => current.length === keys.length ? [] : keys)}
-              getPermission={findPermission}
-              permissionSummary={permissionSummary}
-              applyCellPreset={(scope, subjectId, target, preset) => applyPermissionPreset(scope, [subjectId], [target], preset)}
-              saving={saving}
-            />
+            <PermissionMatrix view={permissionView} scope={permissionScopeForView()} subjects={permissionSubjectOptions(permissionScopeForView())} targets={filteredPermissionTargets} selectedSubjects={selectedPermissionSubjects} selectedTargets={selectedPermissionTargets} onToggleSubject={(id) => setSelectedPermissionSubjects((current) => toggleSelection(current, id))} onToggleTarget={(key) => setSelectedPermissionTargets((current) => toggleSelection(current, key))} onToggleAllSubjects={(ids) => setSelectedPermissionSubjects((current) => (current.length === ids.length ? [] : ids))} onToggleAllTargets={(keys) => setSelectedPermissionTargets((current) => (current.length === keys.length ? [] : keys))} getPermission={findPermission} permissionSummary={permissionSummary} applyCellPreset={(scope, subjectId, target, preset) => applyPermissionPreset(scope, [subjectId], [target], preset)} saving={saving} />
 
             <div className="grid gap-4 lg:grid-cols-2">
               <PermissionList title="Usuarios" rows={state.user_permissions} owner={(row) => userName(row.user_id)} mailboxName={mailboxName} folderName={folderName} onDelete={(row) => deletePermission(row, 'user')} />
@@ -949,7 +978,9 @@ export function EmailAdminSettings() {
             <SelectLabel label="Buzon" value={ruleMailboxFilter} onChange={setRuleMailboxFilter}>
               <option value="">Todos los buzones</option>
               {state.mailboxes.map((mailbox) => (
-                <option key={mailbox.id} value={mailbox.id}>{mailbox.display_name || mailbox.address}</option>
+                <option key={mailbox.id} value={mailbox.id}>
+                  {mailbox.display_name || mailbox.address}
+                </option>
               ))}
             </SelectLabel>
             <Textarea value={rulesSource} onChange={(event) => setRulesSource(event.target.value)} className="min-h-32 font-mono text-xs" placeholder="Pega aqui el contenido de msgFilterRules.dat" />
@@ -957,6 +988,10 @@ export function EmailAdminSettings() {
               <Button variant="outline" onClick={importRules} disabled={!(ruleMailboxFilter || selectedMailboxId) || !rulesSource.trim() || saving}>
                 <Upload className="size-4" />
                 Importar reglas
+              </Button>
+              <Button className="ml-2" onClick={importRulesAndReseedLastYear} disabled={!(ruleMailboxFilter || selectedMailboxId) || !rulesSource.trim() || saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                Reimportar ultimo ano
               </Button>
             </div>
             <RulesTable
@@ -994,10 +1029,12 @@ export function EmailAdminSettings() {
               <EmptyLine icon={Archive} text="Aun no hay eventos de auditoria." />
             ) : (
               state.audit_events.map((event) => (
-                <div key={event.id} className="grid gap-2 rounded-md border border-border p-3 text-sm lg:grid-cols-[180px_1fr_180px]">
+                <div key={event.id} className="border-border grid gap-2 rounded-md border p-3 text-sm lg:grid-cols-[180px_1fr_180px]">
                   <span className="font-medium">{event.event_type}</span>
-                  <span className="truncate text-muted-foreground">{mailboxName(event.mailbox_id)} · {folderName(event.folder_id)}</span>
-                  <span className="text-xs text-muted-foreground lg:text-right">{new Date(event.created_at).toLocaleString()}</span>
+                  <span className="text-muted-foreground truncate">
+                    {mailboxName(event.mailbox_id)} · {folderName(event.folder_id)}
+                  </span>
+                  <span className="text-muted-foreground text-xs lg:text-right">{new Date(event.created_at).toLocaleString()}</span>
                 </div>
               ))
             )}
@@ -1036,12 +1073,16 @@ export function EmailAdminSettings() {
               <SelectLabel label="Propietario" value={mailboxForm.owner_user_id} onChange={(value) => setMailboxForm({ ...mailboxForm, owner_user_id: value })}>
                 <option value="">Usuario actual</option>
                 {state.users.map((user) => (
-                  <option key={user.user_id} value={user.user_id}>{user.full_name || user.email || user.user_id}</option>
+                  <option key={user.user_id} value={user.user_id}>
+                    {user.full_name || user.email || user.user_id}
+                  </option>
                 ))}
               </SelectLabel>
             ) : null}
             <div className="flex justify-end gap-2 lg:col-span-2">
-              <Button variant="outline" onClick={() => setEditorOpen(false)}>Cancelar</Button>
+              <Button variant="outline" onClick={() => setEditorOpen(false)}>
+                Cancelar
+              </Button>
               <Button onClick={saveMailbox} disabled={saving}>
                 {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                 {selectedAccount ? 'Actualizar' : 'Guardar'}
@@ -1054,17 +1095,7 @@ export function EmailAdminSettings() {
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  type = 'text',
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-}) {
+function Field({ label, value, onChange, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
@@ -1073,21 +1104,11 @@ function Field({
   );
 }
 
-function SelectLabel({
-  label,
-  value,
-  onChange,
-  children,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  children: React.ReactNode;
-}) {
+function SelectLabel({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <Label>{label}</Label>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm">
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="border-border bg-background h-9 w-full rounded-md border px-2 text-sm">
         {children}
       </select>
     </div>
@@ -1099,7 +1120,7 @@ function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (fo
   return (
     <div className="space-y-1">
       {folders.map((folder) => (
-        <div key={folder.id} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+        <div key={folder.id} className="border-border flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm">
           <div className="flex min-w-0 items-center gap-2">
             <FolderRowIcon folder={folder} />
             <span className="truncate">{emailFolderName(folder)}</span>
@@ -1116,37 +1137,7 @@ function FolderList({ folders, onDelete }: { folders: FolderRow[]; onDelete: (fo
   );
 }
 
-function PermissionMatrix({
-  view,
-  scope,
-  subjects,
-  targets,
-  selectedSubjects,
-  selectedTargets,
-  onToggleSubject,
-  onToggleTarget,
-  onToggleAllSubjects,
-  onToggleAllTargets,
-  getPermission,
-  permissionSummary,
-  applyCellPreset,
-  saving,
-}: {
-  view: PermissionMatrixView;
-  scope: PermissionScope;
-  subjects: Array<{ id: string; label: string; description: string }>;
-  targets: PermissionTarget[];
-  selectedSubjects: string[];
-  selectedTargets: string[];
-  onToggleSubject: (id: string) => void;
-  onToggleTarget: (key: string) => void;
-  onToggleAllSubjects: (ids: string[]) => void;
-  onToggleAllTargets: (keys: string[]) => void;
-  getPermission: (scope: PermissionScope, subjectId: string, target: PermissionTarget) => PermissionRow | null;
-  permissionSummary: (permission: PermissionRow | null) => string;
-  applyCellPreset: (scope: PermissionScope, subjectId: string, target: PermissionTarget, preset: PermissionPreset) => void;
-  saving: boolean;
-}) {
+function PermissionMatrix({ view, scope, subjects, targets, selectedSubjects, selectedTargets, onToggleSubject, onToggleTarget, onToggleAllSubjects, onToggleAllTargets, getPermission, permissionSummary, applyCellPreset, saving }: { view: PermissionMatrixView; scope: PermissionScope; subjects: Array<{ id: string; label: string; description: string }>; targets: PermissionTarget[]; selectedSubjects: string[]; selectedTargets: string[]; onToggleSubject: (id: string) => void; onToggleTarget: (key: string) => void; onToggleAllSubjects: (ids: string[]) => void; onToggleAllTargets: (keys: string[]) => void; getPermission: (scope: PermissionScope, subjectId: string, target: PermissionTarget) => PermissionRow | null; permissionSummary: (permission: PermissionRow | null) => string; applyCellPreset: (scope: PermissionScope, subjectId: string, target: PermissionTarget, preset: PermissionPreset) => void; saving: boolean }) {
   if (subjects.length === 0 || targets.length === 0) {
     return <EmptyLine icon={ShieldCheck} text="No hay suficientes usuarios/grupos o destinos para pintar la matriz." />;
   }
@@ -1156,26 +1147,20 @@ function PermissionMatrix({
 
   if (view === 'resource') {
     return (
-      <div className="overflow-auto rounded-md border border-border">
+      <div className="border-border overflow-auto rounded-md border">
         <table className="w-full min-w-[760px] border-collapse text-sm">
-          <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+          <thead className="bg-muted/80 sticky top-0 backdrop-blur">
             <tr>
-              <th className="w-56 border-b border-r border-border px-3 py-2 text-left">
+              <th className="border-border w-56 border-r border-b px-3 py-2 text-left">
                 <label className="flex items-center gap-2">
-                  <Checkbox
-                    checked={selectedTargets.length === allTargetKeys.length && allTargetKeys.length > 0}
-                    onCheckedChange={() => onToggleAllTargets(allTargetKeys)}
-                  />
+                  <Checkbox checked={selectedTargets.length === allTargetKeys.length && allTargetKeys.length > 0} onCheckedChange={() => onToggleAllTargets(allTargetKeys)} />
                   Recurso
                 </label>
               </th>
               {subjects.map((subject) => (
-                <th key={subject.id} className="min-w-32 border-b border-r border-border px-2 py-2 text-left">
+                <th key={subject.id} className="border-border min-w-32 border-r border-b px-2 py-2 text-left">
                   <label className="flex items-center gap-2">
-                    <Checkbox
-                      checked={selectedSubjects.includes(subject.id)}
-                      onCheckedChange={() => onToggleSubject(subject.id)}
-                    />
+                    <Checkbox checked={selectedSubjects.includes(subject.id)} onCheckedChange={() => onToggleSubject(subject.id)} />
                     <span className="truncate">{subject.label}</span>
                   </label>
                 </th>
@@ -1185,26 +1170,18 @@ function PermissionMatrix({
           <tbody>
             {targets.map((target) => (
               <tr key={target.key} className="hover:bg-muted/40">
-                <td className="border-r border-border px-3 py-2">
+                <td className="border-border border-r px-3 py-2">
                   <label className="flex items-start gap-2">
-                    <Checkbox
-                      checked={selectedTargets.includes(target.key)}
-                      onCheckedChange={() => onToggleTarget(target.key)}
-                    />
+                    <Checkbox checked={selectedTargets.includes(target.key)} onCheckedChange={() => onToggleTarget(target.key)} />
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{target.label}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{target.description}</span>
+                      <span className="text-muted-foreground block truncate text-xs">{target.description}</span>
                     </span>
                   </label>
                 </td>
                 {subjects.map((subject) => (
-                  <td key={`${target.key}-${subject.id}`} className="border-r border-t border-border px-2 py-1.5">
-                    <PermissionCell
-                      permission={getPermission(scope, subject.id, target)}
-                      summary={permissionSummary(getPermission(scope, subject.id, target))}
-                      onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)}
-                      saving={saving}
-                    />
+                  <td key={`${target.key}-${subject.id}`} className="border-border border-t border-r px-2 py-1.5">
+                    <PermissionCell permission={getPermission(scope, subject.id, target)} summary={permissionSummary(getPermission(scope, subject.id, target))} onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)} saving={saving} />
                   </td>
                 ))}
               </tr>
@@ -1216,29 +1193,23 @@ function PermissionMatrix({
   }
 
   return (
-    <div className="overflow-auto rounded-md border border-border">
+    <div className="border-border overflow-auto rounded-md border">
       <table className="w-full min-w-[820px] border-collapse text-sm">
-        <thead className="sticky top-0 bg-muted/80 backdrop-blur">
+        <thead className="bg-muted/80 sticky top-0 backdrop-blur">
           <tr>
-            <th className="w-56 border-b border-r border-border px-3 py-2 text-left">
+            <th className="border-border w-56 border-r border-b px-3 py-2 text-left">
               <label className="flex items-center gap-2">
-                <Checkbox
-                  checked={selectedSubjects.length === allSubjectIds.length && allSubjectIds.length > 0}
-                  onCheckedChange={() => onToggleAllSubjects(allSubjectIds)}
-                />
+                <Checkbox checked={selectedSubjects.length === allSubjectIds.length && allSubjectIds.length > 0} onCheckedChange={() => onToggleAllSubjects(allSubjectIds)} />
                 {scope === 'user' ? 'Usuario' : 'Grupo'}
               </label>
             </th>
             {targets.map((target) => (
-              <th key={target.key} className="min-w-36 border-b border-r border-border px-2 py-2 text-left">
+              <th key={target.key} className="border-border min-w-36 border-r border-b px-2 py-2 text-left">
                 <label className="flex items-start gap-2">
-                  <Checkbox
-                    checked={selectedTargets.includes(target.key)}
-                    onCheckedChange={() => onToggleTarget(target.key)}
-                  />
+                  <Checkbox checked={selectedTargets.includes(target.key)} onCheckedChange={() => onToggleTarget(target.key)} />
                   <span className="min-w-0">
                     <span className="block truncate">{target.label}</span>
-                    <span className="block truncate text-[11px] font-normal text-muted-foreground">{target.type === 'mailbox' ? 'Buzon' : 'Publica'}</span>
+                    <span className="text-muted-foreground block truncate text-[11px] font-normal">{target.type === 'mailbox' ? 'Buzon' : 'Publica'}</span>
                   </span>
                 </label>
               </th>
@@ -1248,28 +1219,20 @@ function PermissionMatrix({
         <tbody>
           {subjects.map((subject) => (
             <tr key={subject.id} className="hover:bg-muted/40">
-              <td className="border-r border-border px-3 py-2">
+              <td className="border-border border-r px-3 py-2">
                 <label className="flex items-start gap-2">
-                  <Checkbox
-                    checked={selectedSubjects.includes(subject.id)}
-                    onCheckedChange={() => onToggleSubject(subject.id)}
-                  />
+                  <Checkbox checked={selectedSubjects.includes(subject.id)} onCheckedChange={() => onToggleSubject(subject.id)} />
                   <span className="min-w-0">
                     <span className="block truncate font-medium">{subject.label}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{subject.description}</span>
+                    <span className="text-muted-foreground block truncate text-xs">{subject.description}</span>
                   </span>
                 </label>
               </td>
               {targets.map((target) => {
                 const permission = getPermission(scope, subject.id, target);
                 return (
-                  <td key={`${subject.id}-${target.key}`} className="border-r border-t border-border px-2 py-1.5">
-                    <PermissionCell
-                      permission={permission}
-                      summary={permissionSummary(permission)}
-                      onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)}
-                      saving={saving}
-                    />
+                  <td key={`${subject.id}-${target.key}`} className="border-border border-t border-r px-2 py-1.5">
+                    <PermissionCell permission={permission} summary={permissionSummary(permission)} onApply={(preset) => applyCellPreset(scope, subject.id, target, preset)} saving={saving} />
                   </td>
                 );
               })}
@@ -1281,32 +1244,15 @@ function PermissionMatrix({
   );
 }
 
-function PermissionCell({
-  permission,
-  summary,
-  onApply,
-  saving,
-}: {
-  permission: PermissionRow | null;
-  summary: string;
-  onApply: (preset: PermissionPreset) => void;
-  saving: boolean;
-}) {
+function PermissionCell({ permission, summary, onApply, saving }: { permission: PermissionRow | null; summary: string; onApply: (preset: PermissionPreset) => void; saving: boolean }) {
   return (
     <Popover>
-      <PopoverTrigger
-        className={cn(
-          'flex min-h-8 w-full items-center justify-center rounded-md border px-2 text-xs font-medium transition-colors hover:bg-muted',
-          permission ? 'border-primary/30 bg-primary/10 text-primary' : 'border-dashed border-border text-muted-foreground',
-        )}
-      >
-        {summary}
-      </PopoverTrigger>
+      <PopoverTrigger className={cn('hover:bg-muted flex min-h-8 w-full items-center justify-center rounded-md border px-2 text-xs font-medium transition-colors', permission ? 'border-primary/30 bg-primary/10 text-primary' : 'border-border text-muted-foreground border-dashed')}>{summary}</PopoverTrigger>
       <PopoverContent align="start" className="w-64">
         <div className="space-y-2">
           <div>
             <p className="text-sm font-medium">Aplicar permiso</p>
-            <p className="text-xs text-muted-foreground">El preset reemplaza el permiso actual de esta celda.</p>
+            <p className="text-muted-foreground text-xs">El preset reemplaza el permiso actual de esta celda.</p>
           </div>
           <div className="grid gap-1">
             {permissionPresets.map((preset) => (
@@ -1316,7 +1262,7 @@ function PermissionCell({
             ))}
           </div>
           {permission ? (
-            <div className="grid grid-cols-2 gap-1 border-t border-border pt-2 text-xs text-muted-foreground">
+            <div className="border-border text-muted-foreground grid grid-cols-2 gap-1 border-t pt-2 text-xs">
               <span>Leer: {permission.can_read ? 'si' : 'no'}</span>
               <span>Mover: {permission.can_move ? 'si' : 'no'}</span>
               <span>Clasificar: {permission.can_classify ? 'si' : 'no'}</span>
@@ -1329,21 +1275,7 @@ function PermissionCell({
   );
 }
 
-function PermissionList({
-  title,
-  rows,
-  owner,
-  mailboxName,
-  folderName,
-  onDelete,
-}: {
-  title: string;
-  rows: PermissionRow[];
-  owner: (row: PermissionRow) => string;
-  mailboxName: (mailboxId: string | null) => string;
-  folderName: (folderId: string | null) => string;
-  onDelete: (row: PermissionRow) => void;
-}) {
+function PermissionList({ title, rows, owner, mailboxName, folderName, onDelete }: { title: string; rows: PermissionRow[]; owner: (row: PermissionRow) => string; mailboxName: (mailboxId: string | null) => string; folderName: (folderId: string | null) => string; onDelete: (row: PermissionRow) => void }) {
   return (
     <div className="space-y-2">
       <h3 className="flex items-center gap-2 text-sm font-semibold">
@@ -1354,11 +1286,13 @@ function PermissionList({
         <EmptyLine icon={ShieldCheck} text="Sin permisos configurados." />
       ) : (
         rows.map((row) => (
-          <div key={row.id} className="rounded-md border border-border p-3 text-sm">
+          <div key={row.id} className="border-border rounded-md border p-3 text-sm">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="truncate font-medium">{owner(row)}</p>
-                <p className="truncate text-xs text-muted-foreground">{mailboxName(row.mailbox_id)} · {folderName(row.folder_id)}</p>
+                <p className="text-muted-foreground truncate text-xs">
+                  {mailboxName(row.mailbox_id)} · {folderName(row.folder_id)}
+                </p>
                 <div className="mt-2 flex flex-wrap gap-1">
                   {row.can_read ? <Badge variant="outline">Leer</Badge> : null}
                   {row.can_move ? <Badge variant="outline">Mover</Badge> : null}
@@ -1397,7 +1331,16 @@ function RulesTable({
   folderName: (folderId: string | null) => string;
   editingRuleId: string;
   savingRuleId: string;
-  ruleDraft: (rule: RuleRow) => { name: string; field: string; operator: string; value: string; target_folder_id: string | null; enabled: boolean; action: string; action_value: string | null };
+  ruleDraft: (rule: RuleRow) => {
+    name: string;
+    field: string;
+    operator: string;
+    value: string;
+    target_folder_id: string | null;
+    enabled: boolean;
+    action: string;
+    action_value: string | null;
+  };
   updateRuleDraft: (ruleId: string, patch: Partial<ReturnType<typeof ruleDraft>>) => void;
   startEditRule: (rule: RuleRow) => void;
   saveRule: (rule: RuleRow) => void;
@@ -1406,9 +1349,9 @@ function RulesTable({
 }) {
   if (rules.length === 0) return <EmptyLine icon={RefreshCw} text="No hay reglas para mostrar." />;
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div className="border-border overflow-x-auto rounded-md border">
       <div className="min-w-[920px]">
-        <div className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center border-b border-border bg-muted/60 px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
+        <div className="border-border bg-muted/60 text-muted-foreground grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center border-b px-3 py-2 text-xs font-medium uppercase">
           <span>Buzon</span>
           <span>Nombre</span>
           <span>Campo</span>
@@ -1421,16 +1364,14 @@ function RulesTable({
         {rules.map((rule) => {
           const editing = editingRuleId === rule.id;
           const draft = ruleDraft(rule);
-          const folderOptions = folders.filter(
-            (folder) => folder.mailbox_id === rule.mailbox_id || folder.kind === 'public' || folder.mailbox_id === null,
-          );
+          const folderOptions = folders.filter((folder) => folder.mailbox_id === rule.mailbox_id || folder.kind === 'public' || folder.mailbox_id === null);
           return (
-            <div key={rule.id} className="grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center gap-2 border-b border-border px-3 py-2 text-sm last:border-b-0">
-              <span className="truncate text-muted-foreground">{mailboxName(rule.mailbox_id)}</span>
+            <div key={rule.id} className="border-border grid grid-cols-[150px_minmax(180px,1fr)_120px_120px_minmax(160px,1fr)_160px_88px_112px] items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0">
+              <span className="text-muted-foreground truncate">{mailboxName(rule.mailbox_id)}</span>
               {editing ? (
                 <>
                   <Input value={draft.name} onChange={(event) => updateRuleDraft(rule.id, { name: event.target.value })} className="h-8" />
-                  <select value={draft.field} onChange={(event) => updateRuleDraft(rule.id, { field: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                  <select value={draft.field} onChange={(event) => updateRuleDraft(rule.id, { field: event.target.value })} className="border-border bg-card h-8 rounded-md border px-2">
                     <option value="from">De</option>
                     <option value="from_domain">Dominio</option>
                     <option value="to">Para</option>
@@ -1443,7 +1384,7 @@ function RulesTable({
                     <option value="size_kb">Tamano</option>
                     <option value="has_attachment">Adjunto</option>
                   </select>
-                  <select value={draft.operator} onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                  <select value={draft.operator} onChange={(event) => updateRuleDraft(rule.id, { operator: event.target.value })} className="border-border bg-card h-8 rounded-md border px-2">
                     <option value="contains">Contiene</option>
                     <option value="equals">Igual</option>
                     <option value="starts_with">Empieza por</option>
@@ -1456,7 +1397,7 @@ function RulesTable({
                     <option value="less_than">Menor que</option>
                   </select>
                   <Input value={draft.value} onChange={(event) => updateRuleDraft(rule.id, { value: event.target.value })} className="h-8" />
-                  <select value={draft.action} onChange={(event) => updateRuleDraft(rule.id, { action: event.target.value })} className="h-8 rounded-md border border-border bg-card px-2">
+                  <select value={draft.action} onChange={(event) => updateRuleDraft(rule.id, { action: event.target.value })} className="border-border bg-card h-8 rounded-md border px-2">
                     <option value="move_to">Mover a</option>
                     <option value="copy_to">Copiar a</option>
                     <option value="mark_read">Marcar leído</option>
@@ -1464,15 +1405,31 @@ function RulesTable({
                     <option value="star">Añadir estrella</option>
                     <option value="label">Etiquetar</option>
                   </select>
-                  <select value={draft.target_folder_id ?? ''} onChange={(event) => updateRuleDraft(rule.id, { target_folder_id: event.target.value || null })} className="h-8 rounded-md border border-border bg-card px-2">
+                  <select
+                    value={draft.target_folder_id ?? ''}
+                    onChange={(event) =>
+                      updateRuleDraft(rule.id, {
+                        target_folder_id: event.target.value || null,
+                      })
+                    }
+                    className="border-border bg-card h-8 rounded-md border px-2"
+                  >
                     {folderOptions.map((folder) => (
                       <option key={folder.id} value={folder.id}>
                         {emailFolderName(folder)} · {folder.mailbox_id ? 'Buzon' : 'Publica'}
                       </option>
                     ))}
                   </select>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <input type="checkbox" checked={draft.enabled} onChange={(event) => updateRuleDraft(rule.id, { enabled: event.target.checked })} />
+                  <label className="text-muted-foreground flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={draft.enabled}
+                      onChange={(event) =>
+                        updateRuleDraft(rule.id, {
+                          enabled: event.target.checked,
+                        })
+                      }
+                    />
                     Si
                   </label>
                   <div className="flex justify-end gap-1">
@@ -1487,10 +1444,12 @@ function RulesTable({
               ) : (
                 <>
                   <span className="truncate font-medium">{rule.name}</span>
-                  <span className="truncate text-muted-foreground">{rule.field}</span>
-                  <span className="truncate text-muted-foreground">{rule.operator}</span>
+                  <span className="text-muted-foreground truncate">{rule.field}</span>
+                  <span className="text-muted-foreground truncate">{rule.operator}</span>
                   <span className="truncate">{rule.value}</span>
-                  <span className="truncate text-muted-foreground">{rule.action || 'move_to'} · {folderName(rule.target_folder_id)}</span>
+                  <span className="text-muted-foreground truncate">
+                    {rule.action || 'move_to'} · {folderName(rule.target_folder_id)}
+                  </span>
                   <span className={rule.enabled ? 'text-emerald-600' : 'text-muted-foreground'}>{rule.enabled ? 'Si' : 'No'}</span>
                   <div className="flex justify-end gap-1">
                     <Button size="icon-sm" variant="ghost" onClick={() => startEditRule(rule)} title="Editar regla">
@@ -1512,7 +1471,7 @@ function RulesTable({
 
 function EmptyLine({ icon: Icon, text }: { icon: ComponentType<{ className?: string }>; text: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+    <div className="border-border text-muted-foreground flex items-center gap-2 rounded-md border border-dashed p-3 text-sm">
       <Icon className="size-4" />
       {text}
     </div>

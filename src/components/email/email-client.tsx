@@ -20,6 +20,7 @@ import {
   ArrowUp,
   Bold,
   Check,
+  ChevronDown,
   Columns3,
   Download,
   FileIcon,
@@ -3764,22 +3765,48 @@ export function EmailClient() {
                       {new Date(selectedMessage.received_at).toLocaleString('es-ES')}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Button size="sm" className="h-8 px-2.5" onClick={() => void openReply()} disabled={!selectedMailbox?.can_send}>
-                      <Reply className="size-4" />
-                      Responder
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => void openReplyAll()} disabled={!selectedMailbox?.can_send}>
-                      <Reply className="size-4" />
-                      Todos
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={() => void openForward()} disabled={!selectedMailbox?.can_send}>
-                      <Send className="size-4" />
-                      Reenviar
-                    </Button>
-                    <Button variant="outline" size="icon-sm" className="size-8" onClick={() => copyMessageLink(selectedMessage)} title="Copiar enlace" aria-label="Copiar enlace">
-                      <LinkIcon className="size-4" />
-                    </Button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <div className="inline-flex overflow-hidden rounded-lg shadow-sm">
+                      <Button
+                        size="sm"
+                        className="h-8 rounded-r-none px-2.5"
+                        onClick={() => void openReply()}
+                        disabled={!selectedMailbox?.can_send}
+                      >
+                        <Reply className="size-4" />
+                        Responder
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              size="icon-sm"
+                              className="size-8 rounded-l-none border-l border-primary-foreground/20 px-0"
+                              disabled={!selectedMailbox?.can_send}
+                              title="Mas acciones de respuesta"
+                              aria-label="Mas acciones de respuesta"
+                            />
+                          }
+                        >
+                          <ChevronDown className="size-4" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem onClick={() => void openReplyAll()}>
+                            <Reply className="size-4" />
+                            Responder a todos
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void openForward()}>
+                            <Send className="size-4" />
+                            Reenviar
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => copyMessageLink(selectedMessage)}>
+                            <LinkIcon className="size-4" />
+                            Copiar enlace
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                     <Button variant="outline" size="icon-sm" className="size-8" onClick={() => printMessage(selectedMessage)} title="Imprimir" aria-label="Imprimir">
                       <Printer className="size-4" />
                     </Button>
@@ -3851,14 +3878,18 @@ export function EmailClient() {
                 ) : null}
 
                 {selectedMessageHasExternalContent ? (
-                  <div className="mt-3 flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    <span>Contenido externo bloqueado</span>
+                  <div className="mt-2 inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
+                    <Info className="size-3.5 shrink-0" />
+                    <span className="truncate">
+                      {allowExternalContent ? 'Contenido externo visible' : 'Externo bloqueado'}
+                    </span>
                     <Button
                       size="xs"
-                      variant="outline"
+                      variant="ghost"
+                      className="h-6 shrink-0 px-2"
                       onClick={() => setAllowExternalContent((current) => !current)}
                     >
-                      {allowExternalContent ? 'Ocultar externo' : 'Mostrar externo'}
+                      {allowExternalContent ? 'Ocultar' : 'Mostrar'}
                     </Button>
                   </div>
                 ) : null}
